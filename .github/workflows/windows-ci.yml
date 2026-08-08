@@ -74,42 +74,6 @@ jobs:
           Write-Host "Running tests with Qt platform plugin path: $env:QT_QPA_PLATFORM_PLUGIN_PATH"
           ctest --test-dir build --output-on-failure -VV
 
-      - name: Print direct test diagnostics after CTest failure
-        if: ${{ failure() }}
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
-          $env:Path = "$qtBin;$env:Path"
-          $env:QT_QPA_PLATFORM = 'offscreen'
-          $env:QT_QPA_PLATFORM_PLUGIN_PATH = Join-Path $env:QT_ROOT_DIR 'plugins\platforms'
-          $testExecutable = Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_tests.exe'
-          $testFunctions = @(
-            'projectSerializationRoundTrip',
-            'projectV1TrackingMigrates',
-            'presetSerializationRoundTrip',
-            'unicodePresetStorageIsCollisionSafe',
-            'deterministicJitter',
-            'effectOrderingIsDeterministic',
-            'textReplacementPreservesEffects',
-            'presetApplicationClonesEffects',
-            'svgExportContainsPaths',
-            'cyrillicTextProducesGeometry',
-            'glyphFallbackIsReportedWhenAvailable',
-            'missingFontStatesAreDistinguished',
-            'trackingScalesWithFontSize',
-            'controllerUndoRedoAndMerge',
-            'controllerEffectCommandsAreGranular',
-            'controllerCleanStateFollowsUndoStack'
-          )
-          foreach ($testFunction in $testFunctions) {
-            Write-Host "--- Running $testFunction ---"
-            $output = & $testExecutable $testFunction -txt 2>&1
-            $exitCode = $LASTEXITCODE
-            $output | ForEach-Object { Write-Host $_ }
-            Write-Host "Exit code: $exitCode"
-          }
-
       - name: Package runnable Windows build
         shell: pwsh
         run: |
