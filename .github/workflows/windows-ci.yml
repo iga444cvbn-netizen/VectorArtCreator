@@ -62,8 +62,16 @@ jobs:
       - name: Run CTest
         shell: pwsh
         run: |
-          $env:Path = (Join-Path $env:QT_ROOT_DIR 'bin') + ";$env:Path"
+          $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
+          $qtPlatforms = Join-Path $env:QT_ROOT_DIR 'plugins\platforms'
+          if (-not (Test-Path -LiteralPath (Join-Path $qtPlatforms 'qoffscreen.dll'))) {
+            throw "Qt offscreen platform plugin was not found at $qtPlatforms"
+          }
+          $env:Path = "$qtBin;$env:Path"
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $env:QT_QPA_PLATFORM_PLUGIN_PATH = $qtPlatforms
           Write-Host "Running tests with Qt runtime PATH: $env:Path"
+          Write-Host "Running tests with Qt platform plugin path: $env:QT_QPA_PLATFORM_PLUGIN_PATH"
           ctest --test-dir build --output-on-failure -VV
 
       - name: Print direct test diagnostics after CTest failure
@@ -71,7 +79,10 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          $env:Path = (Join-Path $env:QT_ROOT_DIR 'bin') + ";$env:Path"
+          $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
+          $env:Path = "$qtBin;$env:Path"
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $env:QT_QPA_PLATFORM_PLUGIN_PATH = Join-Path $env:QT_ROOT_DIR 'plugins\platforms'
           & (Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_tests.exe') -txt
 
       - name: Package runnable Windows build
