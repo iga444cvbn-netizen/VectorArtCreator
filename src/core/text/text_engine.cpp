@@ -19,16 +19,10 @@ bool samePhysicalFont(const QRawFont& left, const QRawFont& right)
     if (!left.isValid() || !right.isValid()) {
         return false;
     }
-    if (left == right) {
-        return true;
-    }
-
-    // QRawFont equality includes the physical instance. The identity fields
-    // below avoid treating an equivalent face at a different shaping size as
-    // fallback while still distinguishing family/style/weight changes.
-    return left.familyName().compare(right.familyName(), Qt::CaseInsensitive) == 0
-        && left.styleName().compare(right.styleName(), Qt::CaseInsensitive) == 0
-        && left.weight() == right.weight();
+    // QRawFont equality identifies the physical font instance without asking
+    // the Windows font backend to materialize its name table. That name-table
+    // accessor is not reliable for every DirectWrite glyph run on Qt 6.8.
+    return left == right;
 }
 
 void recordFallbackFont(ShapedText* result, const QRawFont& rawFont, int glyphCount)
@@ -38,13 +32,15 @@ void recordFallbackFont(ShapedText* result, const QRawFont& rawFont, int glyphCo
     }
     result->fallbackGlyphCount += glyphCount;
     for (FallbackFontUsage& usage : result->fallbackFonts) {
-        if (usage.family.compare(rawFont.familyName(), Qt::CaseInsensitive) == 0
-            && usage.styleName.compare(rawFont.styleName(), Qt::CaseInsensitive) == 0) {
+        if (usage.rawFont == rawFont) {
             usage.glyphCount += glyphCount;
             return;
         }
     }
-    result->fallbackFonts.push_back({rawFont.familyName(), rawFont.styleName(), glyphCount});
+    // Keep the actual physical font on the diagnostic record. The UI can
+    // resolve/display its name in a context where the platform backend allows
+    // that query; shaping itself must remain safe on Windows CI.
+    result->fallbackFonts.push_back({rawFont, QStringLiteral("Qt fallback font"), {}, glyphCount});
 }
 
 QString fallbackWarning(const ShapedText& result)
@@ -106,9 +102,9 @@ ShapedText TextEngine::shape(const TextObject& object)
     }
 
     const QFont font = object.font.toQFont(object.typography.fontSize);
+    const QRawFont requestedRawFont = QRawFont::fromFont(font);
     QFont shapedFont = font;
     shapedFont.setLetterSpacing(QFont::PercentageSpacing, 100.0 + object.typography.trackingEm * 100.0);
-    const QRawFont requestedRawFont = QRawFont::fromFont(shapedFont);
 
     QTextLayout layout(object.sourceText, shapedFont);
     QTextOption option;
@@ -132,7 +128,9 @@ ShapedText TextEngine::shape(const TextObject& object)
         if (!rawFont.isValid()) {
             continue;
         }
+        const bool canDetectGlyphFallback = requestedRawFont.isValid();
         const bool usesFallback = result.fontResolutionStatus == FontResolutionStatus::RequestedFont
+            && canDetectGlyphFallback
             && !samePhysicalFont(rawFont, requestedRawFont);
         if (usesFallback) {
             recordFallbackFont(&result, rawFont, glyphIndexes.size());

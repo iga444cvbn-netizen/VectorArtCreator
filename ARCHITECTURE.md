@@ -90,9 +90,11 @@ licensing decisions. No embedding or private font loading is implemented in this
 milestone.
 
 For diagnostics, `TextEngine` compares each shaped run's physical `QRawFont` with the
-raw font selected for the requested query, using `QRawFont` identity plus family,
-style, and weight identity fields. It records fallback faces and glyph counts in
-`ShapedText` and exposes a warning without disabling Qt fallback rendering.
+raw font selected for the requested query using `QRawFont` physical identity. It
+records the actual fallback raw-font handles and glyph counts in `ShapedText`, and
+exposes a warning without disabling Qt fallback rendering. This avoids an unstable
+Windows font-name-table accessor in the shaping hot path while retaining the data
+needed for a later UI-facing face-name resolver.
 
 ## Effect API and future stages
 

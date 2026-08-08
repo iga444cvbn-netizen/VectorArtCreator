@@ -30,6 +30,7 @@ enum class FontResolutionStatus {
 };
 
 struct FallbackFontUsage {
+    QRawFont rawFont;
     QString family;
     QString styleName;
     int glyphCount = 0;
