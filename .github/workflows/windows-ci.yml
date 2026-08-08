@@ -35,6 +35,18 @@ jobs:
           cache: true
           setup-python: false
 
+      - name: Add Qt runtime to PATH
+        shell: pwsh
+        run: |
+          $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
+          $qtCore = Join-Path $qtBin 'Qt6Core.dll'
+          if (-not (Test-Path -LiteralPath $qtCore)) {
+            throw "Qt runtime was not found at $qtCore"
+          }
+          $qtBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          'QT_QPA_PLATFORM=offscreen' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Qt runtime added to PATH: $qtBin"
+
       - name: Configure
         shell: pwsh
         run: >-
