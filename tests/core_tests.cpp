@@ -297,6 +297,18 @@ void CoreTests::effectOrderingIsDeterministic()
     stack.append(std::make_unique<WaveEffect>());
     stack.append(std::make_unique<GlyphJitterEffect>());
     stack.append(std::make_unique<StretchEffect>());
+    auto* wave = dynamic_cast<WaveEffect*>(stack.at(0));
+    auto* jitter = dynamic_cast<GlyphJitterEffect*>(stack.at(1));
+    auto* stretch = dynamic_cast<StretchEffect*>(stack.at(2));
+    QVERIFY(wave);
+    QVERIFY(jitter);
+    QVERIFY(stretch);
+    wave->amplitude = 0.24;
+    wave->frequency = 2.5;
+    jitter->amount = 0.08;
+    jitter->seed = 42;
+    stretch->horizontal = 1.6;
+    stretch->vertical = 0.75;
 
     VectorGeometry first = baseGeometry(object);
     VectorGeometry second = baseGeometry(object);
