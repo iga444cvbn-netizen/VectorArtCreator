@@ -11,6 +11,7 @@ QJsonDocument Preset::toJson() const
     QJsonObject root;
     root.insert(QStringLiteral("format"), QStringLiteral("vectorTypographyPreset"));
     root.insert(QStringLiteral("formatVersion"), CurrentFormatVersion);
+    root.insert(QStringLiteral("id"), id);
     root.insert(QStringLiteral("name"), name);
     root.insert(QStringLiteral("effects"), effects.toJson());
     return QJsonDocument(root);
@@ -48,7 +49,8 @@ bool Preset::fromJson(const QJsonDocument& json, Preset* preset, QString* error)
     }
 
     Preset result;
-    result.formatVersion = version;
+    result.formatVersion = CurrentFormatVersion;
+    result.id = root.value(QStringLiteral("id")).toString();
     result.name = root.value(QStringLiteral("name")).toString();
     QString effectError;
     result.effects = EffectStack::fromJson(effectsValue.toArray(), &effectError);

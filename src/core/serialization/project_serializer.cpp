@@ -24,7 +24,10 @@ QJsonObject textObjectToJson(const TextObject& textObject)
     return object;
 }
 
-bool textObjectFromJson(const QJsonObject& object, TextObject* textObject, QString* error)
+bool textObjectFromJson(const QJsonObject& object,
+                        TextObject* textObject,
+                        int formatVersion,
+                        QString* error)
 {
     if (object.value(QStringLiteral("type")).toString() != QStringLiteral("text")) {
         if (error) {
@@ -38,7 +41,7 @@ bool textObjectFromJson(const QJsonObject& object, TextObject* textObject, QStri
     result.sourceText = object.value(QStringLiteral("sourceText")).toString();
     result.font = FontDescriptor::fromJson(object.value(QStringLiteral("font")).toObject());
     result.typography = TypographyProperties::fromJson(
-        object.value(QStringLiteral("typography")).toObject(), &result.fill);
+        object.value(QStringLiteral("typography")).toObject(), &result.fill, formatVersion);
     result.futureData = object.value(QStringLiteral("futureData")).toObject();
 
     const QJsonValue effectValue = object.value(QStringLiteral("effects"));
@@ -120,7 +123,9 @@ bool ProjectSerializer::fromJson(const QJsonDocument& json, Document* document, 
     }
 
     Document result;
-    result.formatVersion = version;
+    // Loading an older project migrates it into the current in-memory schema;
+    // the next save writes the current format version.
+    result.formatVersion = Document::CurrentFormatVersion;
     result.objects.clear();
     const QJsonObject metadata = root.value(QStringLiteral("metadata")).toObject();
     result.metadata = metadata;
@@ -146,7 +151,7 @@ bool ProjectSerializer::fromJson(const QJsonDocument& json, Document* document, 
             return false;
         }
         auto object = std::make_unique<TextObject>();
-        if (!textObjectFromJson(objects.at(index).toObject(), object.get(), error)) {
+        if (!textObjectFromJson(objects.at(index).toObject(), object.get(), version, error)) {
             return false;
         }
         result.objects.push_back(std::move(object));

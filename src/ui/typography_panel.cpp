@@ -53,11 +53,11 @@ TypographyPanel::TypographyPanel(QWidget* parent)
     layout->addRow(QStringLiteral("Size"), m_fontSizeSpin);
 
     m_trackingSpin = new QDoubleSpinBox(group);
-    m_trackingSpin->setRange(-500.0, 500.0);
-    m_trackingSpin->setDecimals(2);
-    m_trackingSpin->setSingleStep(0.5);
-    m_trackingSpin->setSuffix(QStringLiteral(" pt"));
-    layout->addRow(QStringLiteral("Tracking"), m_trackingSpin);
+    m_trackingSpin->setRange(-1.0, 1.0);
+    m_trackingSpin->setDecimals(3);
+    m_trackingSpin->setSingleStep(0.01);
+    m_trackingSpin->setSuffix(QStringLiteral(" em"));
+    layout->addRow(QStringLiteral("Tracking (em)"), m_trackingSpin);
 
     m_fillButton = new QPushButton(group);
     m_fillButton->setText(QStringLiteral("Choose color…"));
@@ -151,7 +151,7 @@ void TypographyPanel::refresh(const TextObject& object)
     }
     {
         const QSignalBlocker blocker(m_trackingSpin);
-        m_trackingSpin->setValue(object.typography.tracking);
+        m_trackingSpin->setValue(object.typography.trackingEm);
     }
 
     m_fill = object.fill;

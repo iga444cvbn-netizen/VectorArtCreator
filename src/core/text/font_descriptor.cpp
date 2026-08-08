@@ -55,16 +55,28 @@ QJsonObject TypographyProperties::toJson(const QColor& fill) const
 {
     QJsonObject object;
     object.insert(QStringLiteral("fontSize"), fontSize);
-    object.insert(QStringLiteral("tracking"), tracking);
+    object.insert(QStringLiteral("trackingEm"), trackingEm);
+    object.insert(QStringLiteral("trackingUnit"), QStringLiteral("em"));
     object.insert(QStringLiteral("fill"), fill.name(QColor::HexArgb));
     return object;
 }
 
-TypographyProperties TypographyProperties::fromJson(const QJsonObject& object, QColor* fill)
+TypographyProperties TypographyProperties::fromJson(const QJsonObject& object,
+                                                     QColor* fill,
+                                                     int formatVersion)
 {
     TypographyProperties properties;
     properties.fontSize = object.value(QStringLiteral("fontSize")).toDouble(properties.fontSize);
-    properties.tracking = object.value(QStringLiteral("tracking")).toDouble(properties.tracking);
+    if (object.contains(QStringLiteral("trackingEm"))) {
+        properties.trackingEm = object.value(QStringLiteral("trackingEm")).toDouble(properties.trackingEm);
+    } else if (object.contains(QStringLiteral("tracking"))) {
+        // Version 1 stored absolute point spacing. Convert it once at load time
+        // so the in-memory representation is portable and font-size-relative.
+        const qreal absoluteSpacing = object.value(QStringLiteral("tracking")).toDouble();
+        if (formatVersion <= 1 && !qFuzzyIsNull(properties.fontSize)) {
+            properties.trackingEm = absoluteSpacing / properties.fontSize;
+        }
+    }
 
     if (fill) {
         const QColor parsed(object.value(QStringLiteral("fill")).toString());

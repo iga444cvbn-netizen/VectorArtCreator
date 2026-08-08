@@ -57,6 +57,14 @@ void EffectStack::append(std::unique_ptr<Effect> effect)
     }
 }
 
+void EffectStack::insert(int index, std::unique_ptr<Effect> effect)
+{
+    if (!effect || index < 0 || index > size()) {
+        return;
+    }
+    m_effects.insert(m_effects.begin() + index, std::move(effect));
+}
+
 std::unique_ptr<Effect> EffectStack::takeAt(int index)
 {
     if (index < 0 || index >= size()) {

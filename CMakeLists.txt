@@ -30,6 +30,7 @@ set(CORE_SOURCES
     src/core/presets/preset.cpp
     src/core/presets/preset_manager.cpp
     src/core/export/svg_exporter.cpp
+    src/core/undo/document_commands.cpp
 )
 
 add_library(vector_typography_core STATIC ${CORE_SOURCES})
