@@ -61,13 +61,17 @@ jobs:
 
       - name: Run CTest
         shell: pwsh
-        run: ctest --test-dir build --output-on-failure -VV
+        run: |
+          $env:Path = (Join-Path $env:QT_ROOT_DIR 'bin') + ";$env:Path"
+          Write-Host "Running tests with Qt runtime PATH: $env:Path"
+          ctest --test-dir build --output-on-failure -VV
 
       - name: Print direct test diagnostics after CTest failure
         if: ${{ failure() }}
         continue-on-error: true
         shell: pwsh
         run: |
+          $env:Path = (Join-Path $env:QT_ROOT_DIR 'bin') + ";$env:Path"
           & (Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_tests.exe') -txt
 
       - name: Package runnable Windows build
