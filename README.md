@@ -54,12 +54,12 @@ pass `-DQt6_DIR=<Qt-prefix>/lib/cmake/Qt6`.
 `.github/workflows/windows-ci.yml` is the authoritative hosted validation workflow.
 It runs on `windows-latest`, enables the x64 MSVC developer environment, installs
 Qt 6.8.3 through `jurplel/install-qt-action@v4` (the standard desktop/base package
-contains Core, Gui, Widgets, and Test), then runs:
+contains Core, Gui, Widgets, and Test), enables x64 MSVC, and then runs:
 
 ```text
-cmake configure (Visual Studio 17 2022, x64)
-cmake --build ... --config Release
-ctest ... -C Release --output-on-failure
+cmake configure (Ninja, Release, x64 MSVC)
+cmake --build ...
+ctest ... --output-on-failure
 ```
 
 The workflow runs for pushes to `main`, pull requests targeting `main`, and manual

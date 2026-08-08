@@ -156,8 +156,8 @@ maintained.
 
 `.github/workflows/windows-ci.yml` runs on the GitHub-hosted `windows-latest` image.
 It enables MSVC, installs Qt 6.8.3 `win64_msvc2022_64` through
-`jurplel/install-qt-action@v4`, configures with the Visual Studio 2022 x64 generator,
-builds Release, and runs CTest with failures visible. After tests pass it runs
+`jurplel/install-qt-action@v4`, enables the x64 MSVC developer environment, configures
+with the Ninja generator, builds Release, and runs CTest with failures visible. After tests pass it runs
 `windeployqt` and uploads `VectorTypographyEditor-windows-x64.zip`, which contains a
 runnable deployed test build rather than an installer.
 
