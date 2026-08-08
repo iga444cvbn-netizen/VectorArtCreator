@@ -1,0 +1,11 @@
+/build/
+/build-*/
+/.vs/
+*.user
+*.suo
+*.vcxproj*
+*.vcxproj.filters
+*.pdb
+*.obj
+*.ilk
+*.exe
