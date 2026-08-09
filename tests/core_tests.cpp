@@ -413,9 +413,11 @@ void CoreTests::textReplacementPreservesEffects()
     Document document;
     document.primaryTextObject().effects.append(std::make_unique<WaveEffect>());
     document.primaryTextObject().effects.append(std::make_unique<GlyphJitterEffect>());
+    document.primaryTextObject().deformation.strokes.push_back(pushStroke());
     const QJsonArray before = document.primaryTextObject().effects.toJson();
     document.primaryTextObject().sourceText = QStringLiteral("Другой текст");
     QCOMPARE(document.primaryTextObject().effects.toJson(), before);
+    QCOMPARE(document.primaryTextObject().deformation.strokes.size(), 1);
 }
 
 void CoreTests::presetApplicationClonesEffects()
@@ -440,6 +442,9 @@ void CoreTests::svgExportContainsPaths()
     Document document;
     document.primaryTextObject() = object;
     VectorGeometry geometry = baseGeometry(object);
+    ManualDeformation deformation;
+    deformation.strokes.push_back(pushStroke());
+    deformation.apply(geometry);
     SvgExporter exporter;
 
     QTemporaryDir directory;

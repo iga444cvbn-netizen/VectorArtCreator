@@ -37,10 +37,12 @@ void recordFallbackFont(ShapedText* result, const QRawFont& rawFont, int glyphCo
             return;
         }
     }
-    // Keep the actual physical font on the diagnostic record. The UI can
-    // resolve/display its name in a context where the platform backend allows
-    // that query; shaping itself must remain safe on Windows CI.
-    result->fallbackFonts.push_back({rawFont, QStringLiteral("Qt fallback font"), {}, glyphCount});
+    const QString family = rawFont.familyName();
+    const QString styleName = rawFont.styleName();
+    result->fallbackFonts.push_back({rawFont,
+                                     family.isEmpty() ? QStringLiteral("Qt fallback font") : family,
+                                     styleName,
+                                     glyphCount});
 }
 
 QString fallbackWarning(const ShapedText& result)

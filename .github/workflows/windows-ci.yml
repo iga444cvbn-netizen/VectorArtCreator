@@ -74,37 +74,6 @@ jobs:
           Write-Host "Running tests with Qt platform plugin path: $env:QT_QPA_PLATFORM_PLUGIN_PATH"
           ctest --test-dir build --output-on-failure -VV
 
-      - name: Diagnose individual tests after CTest failure
-        if: ${{ failure() }}
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
-          $env:Path = "$qtBin;$env:Path"
-          $env:QT_QPA_PLATFORM = 'offscreen'
-          $env:QT_QPA_PLATFORM_PLUGIN_PATH = Join-Path $env:QT_ROOT_DIR 'plugins\platforms'
-          $testExecutable = Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_tests.exe'
-          $testFunctions = @(
-            'projectV2DeformationDefaults',
-            'deformationSerializationRoundTrip',
-            'deformationResamplingIsBoundedAndDeterministic',
-            'pushStrokeIsDeterministic',
-            'glyphPushMovesRigidUnits',
-            'shapePushBendsContours',
-            'inflateMovesPointsOutward',
-            'pinchMovesPointsInward',
-            'pullMovesPointsTowardCenter',
-            'smoothBrushReducesLocalIrregularity',
-            'deformationStrengthAndToggleAreNondestructive',
-            'deformationPreservesMultipleContours',
-            'cyrillicShapeDeformationProducesGeometry'
-          )
-          foreach ($testFunction in $testFunctions) {
-            Write-Host "--- Running $testFunction ---"
-            & $testExecutable $testFunction -txt
-            Write-Host "Exit code: $LASTEXITCODE"
-          }
-
       - name: Package runnable Windows build
         shell: pwsh
         run: |
