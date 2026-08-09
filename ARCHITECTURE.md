@@ -97,8 +97,11 @@ fingerprint/resource/licensing fields. The requested family/style checks produce
 the MissingFamily and MissingStyle states. For a present requested face, each
 `QGlyphRun::rawFont()` is compared with `QRawFont::fromFont()` using physical
 `QRawFont` identity. A different physical raw font marks the affected glyphs as
-fallback, records the physical fallback family/style where Qt exposes them, and
-produces a warning. Qt fallback remains enabled for a useful preview.
+fallback, records the physical raw-font handle and glyph count, and produces a
+warning. The current Windows/DirectWrite-safe label is `Qt fallback font`: asking
+some glyph-run raw fonts for their family name crashes in Qt 6.8, so name-table
+resolution is intentionally kept out of the shaping hot path. Qt fallback remains
+enabled for a useful preview.
 
 ## Serialization and migration
 

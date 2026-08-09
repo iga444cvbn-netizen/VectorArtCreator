@@ -37,11 +37,15 @@ void recordFallbackFont(ShapedText* result, const QRawFont& rawFont, int glyphCo
             return;
         }
     }
-    const QString family = rawFont.familyName();
-    const QString styleName = rawFont.styleName();
+    // Keep the actual physical raw-font handle and glyph count. Some Qt 6
+    // DirectWrite builds crash while asking a glyph-run raw font for its name,
+    // so the UI-facing label is deliberately conservative here. A later
+    // diagnostic layer can resolve the handle through a safe font database
+    // query without making the shaping path depend on a platform name-table
+    // accessor.
     result->fallbackFonts.push_back({rawFont,
-                                     family.isEmpty() ? QStringLiteral("Qt fallback font") : family,
-                                     styleName,
+                                     QStringLiteral("Qt fallback font"),
+                                     {},
                                      glyphCount});
 }
 
