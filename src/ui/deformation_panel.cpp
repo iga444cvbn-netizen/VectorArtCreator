@@ -109,21 +109,39 @@ DeformationPanel::DeformationPanel(QWidget* parent)
 
     connect(m_targetCombo, qOverload<int>(&QComboBox::currentIndexChanged), this,
             [this](int) { emitBrushSettings(); });
-    connect(m_radiusSlider, &SliderSpinBox::valueChanged, this, [this](double) { emitBrushSettings(); });
-    connect(m_strengthSlider, &SliderSpinBox::valueChanged, this, [this](double) { emitBrushSettings(); });
-    connect(m_hardnessSlider, &SliderSpinBox::valueChanged, this, [this](double) { emitBrushSettings(); });
+    const auto emitActiveSettings = [this](double) {
+        if (m_tool == EditorTool::EffectMask) {
+            emitMaskBrushSettings();
+        } else {
+            emitBrushSettings();
+        }
+    };
+    connect(m_radiusSlider, &SliderSpinBox::valueChanged, this, emitActiveSettings);
+    connect(m_strengthSlider, &SliderSpinBox::valueChanged, this, emitActiveSettings);
+    connect(m_hardnessSlider, &SliderSpinBox::valueChanged, this, emitActiveSettings);
     connect(m_enabledCheck, &QCheckBox::toggled, this, &DeformationPanel::enabledChanged);
     connect(m_overallStrengthSlider, &SliderSpinBox::valueChanged,
             this, &DeformationPanel::overallStrengthChanged);
     connect(m_maskModeCombo, qOverload<int>(&QComboBox::currentIndexChanged), this,
-            [this](int index) { emit maskSettingsChanged(m_maskModeCombo->itemData(index).toBool()); });
+            [this](int index) {
+                const bool restore = m_maskModeCombo->itemData(index).toBool();
+                emit maskSettingsChanged(restore);
+                emitMaskBrushSettings();
+            });
     connect(clearButton, &QPushButton::clicked, this, &DeformationPanel::clearRequested);
     setTool(EditorTool::Select);
 }
 
 void DeformationPanel::setTool(EditorTool tool)
 {
+    saveCurrentSettings();
+    const bool leavingSmooth = m_tool == EditorTool::Smooth && tool != EditorTool::Smooth;
+    if (m_tool != EditorTool::Smooth && tool == EditorTool::Smooth) {
+        m_targetBeforeSmooth = m_targetCombo->currentIndex() == 0
+            ? BrushTarget::Glyphs : BrushTarget::Shape;
+    }
     m_tool = tool;
+    loadSettingsForCurrentTool();
     m_toolLabel->setText(toolName(tool));
     const bool brush = brushModeFor(tool).has_value();
     const bool mask = tool == EditorTool::EffectMask;
@@ -133,10 +151,52 @@ void DeformationPanel::setTool(EditorTool tool)
     if (tool == EditorTool::Smooth) {
         const QSignalBlocker blocker(m_targetCombo);
         m_targetCombo->setCurrentIndex(1);
+    } else if (leavingSmooth) {
+        const QSignalBlocker blocker(m_targetCombo);
+        m_targetCombo->setCurrentIndex(m_targetBeforeSmooth == BrushTarget::Glyphs ? 0 : 1);
     }
     updateTargetUi();
     emit toolChanged(tool);
-    emitBrushSettings();
+    if (m_tool == EditorTool::EffectMask) {
+        emitMaskBrushSettings();
+    } else {
+        emitBrushSettings();
+    }
+}
+
+void DeformationPanel::setNormalBrushSettings(BrushTarget target,
+                                              qreal radius,
+                                              qreal strength,
+                                              qreal hardness)
+{
+    m_normalRadius = radius;
+    m_normalStrength = strength;
+    m_normalHardness = hardness;
+    m_targetBeforeSmooth = target;
+    if (m_tool != EditorTool::EffectMask) {
+        loadSettingsForCurrentTool();
+        if (m_tool != EditorTool::Smooth) {
+            const QSignalBlocker blocker(m_targetCombo);
+            m_targetCombo->setCurrentIndex(target == BrushTarget::Glyphs ? 0 : 1);
+        }
+    }
+}
+
+void DeformationPanel::setMaskBrushSettings(qreal radius,
+                                            qreal opacity,
+                                            qreal hardness,
+                                            bool restore)
+{
+    m_maskRadius = radius;
+    m_maskOpacity = opacity;
+    m_maskHardness = hardness;
+    {
+        const QSignalBlocker blocker(m_maskModeCombo);
+        m_maskModeCombo->setCurrentIndex(restore ? 1 : 0);
+    }
+    if (m_tool == EditorTool::EffectMask) {
+        loadSettingsForCurrentTool();
+    }
 }
 
 void DeformationPanel::refresh(const ManualDeformation* deformation)
@@ -165,13 +225,6 @@ void DeformationPanel::emitBrushSettings()
 {
     const std::optional<BrushMode> mode = brushModeFor(m_tool);
     if (!mode.has_value()) {
-        if (m_tool == EditorTool::EffectMask) {
-            emit brushSettingsChanged(BrushMode::Push,
-                                      BrushTarget::Shape,
-                                      m_radiusSlider->value(),
-                                      m_strengthSlider->value(),
-                                      m_hardnessSlider->value());
-        }
         return;
     }
     emit brushSettingsChanged(*mode,
@@ -179,6 +232,46 @@ void DeformationPanel::emitBrushSettings()
                               m_radiusSlider->value(),
                               m_strengthSlider->value(),
                               m_hardnessSlider->value());
+}
+
+void DeformationPanel::emitMaskBrushSettings()
+{
+    if (m_tool != EditorTool::EffectMask) {
+        return;
+    }
+    emit maskBrushSettingsChanged(m_radiusSlider->value(),
+                                  qBound<qreal>(0.0, m_strengthSlider->value() / 4.0, 1.0),
+                                  m_hardnessSlider->value(),
+                                  m_maskModeCombo->currentData().toBool());
+}
+
+void DeformationPanel::saveCurrentSettings()
+{
+    if (m_tool == EditorTool::EffectMask) {
+        m_maskRadius = m_radiusSlider->value();
+        m_maskOpacity = qBound<qreal>(0.0, m_strengthSlider->value() / 4.0, 1.0);
+        m_maskHardness = m_hardnessSlider->value();
+    } else {
+        m_normalRadius = m_radiusSlider->value();
+        m_normalStrength = m_strengthSlider->value();
+        m_normalHardness = m_hardnessSlider->value();
+    }
+}
+
+void DeformationPanel::loadSettingsForCurrentTool()
+{
+    const QSignalBlocker radiusBlocker(m_radiusSlider);
+    const QSignalBlocker strengthBlocker(m_strengthSlider);
+    const QSignalBlocker hardnessBlocker(m_hardnessSlider);
+    if (m_tool == EditorTool::EffectMask) {
+        m_radiusSlider->setValue(m_maskRadius);
+        m_strengthSlider->setValue(m_maskOpacity * 4.0);
+        m_hardnessSlider->setValue(m_maskHardness);
+    } else {
+        m_radiusSlider->setValue(m_normalRadius);
+        m_strengthSlider->setValue(m_normalStrength);
+        m_hardnessSlider->setValue(m_normalHardness);
+    }
 }
 
 } // namespace vt

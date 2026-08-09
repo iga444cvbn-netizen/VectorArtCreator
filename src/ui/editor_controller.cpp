@@ -301,7 +301,6 @@ void EditorController::setTool(EditorTool tool)
                                   m_brushStrength,
                                   m_brushHardness);
     }
-    emit maskSettingsChanged(m_brushRadius, m_brushStrength, m_brushHardness, m_maskRestore);
 }
 
 void EditorController::setBrushSettings(BrushTarget target,
@@ -320,13 +319,24 @@ void EditorController::setBrushSettings(BrushTarget target,
                                   m_brushStrength,
                                   m_brushHardness);
     }
-    emit maskSettingsChanged(m_brushRadius, m_brushStrength, m_brushHardness, m_maskRestore);
+}
+
+void EditorController::setMaskBrushSettings(qreal radius,
+                                            qreal opacity,
+                                            qreal hardness,
+                                            bool restore)
+{
+    m_maskRadius = qBound<qreal>(1.0, radius, 100000.0);
+    m_maskOpacity = qBound<qreal>(0.0, opacity, 1.0);
+    m_maskHardness = qBound<qreal>(0.0, hardness, 1.0);
+    m_maskRestore = restore;
+    emit maskSettingsChanged(m_maskRadius, m_maskOpacity, m_maskHardness, m_maskRestore);
 }
 
 void EditorController::setMaskRestoreMode(bool restore)
 {
     m_maskRestore = restore;
-    emit maskSettingsChanged(m_brushRadius, m_brushStrength, m_brushHardness, m_maskRestore);
+    emit maskSettingsChanged(m_maskRadius, m_maskOpacity, m_maskHardness, m_maskRestore);
 }
 
 void EditorController::setSelectedEffectId(const QString& effectId)

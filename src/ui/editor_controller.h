@@ -55,6 +55,7 @@ public:
     void newDocument();
     void setTool(EditorTool tool);
     void setBrushSettings(BrushTarget target, qreal radius, qreal strength, qreal hardness);
+    void setMaskBrushSettings(qreal radius, qreal opacity, qreal hardness, bool restore);
     void setMaskRestoreMode(bool restore);
     void setSelectedEffectId(const QString& effectId);
     void setText(const QString& text);
@@ -168,6 +169,9 @@ private:
     qreal m_brushRadius = 40.0;
     qreal m_brushStrength = 0.7;
     qreal m_brushHardness = 0.5;
+    qreal m_maskRadius = 40.0;
+    qreal m_maskOpacity = 0.7 / 4.0;
+    qreal m_maskHardness = 0.5;
     bool m_maskRestore = false;
     QString m_selectedEffectId;
     quint64 m_evaluationGeneration = 0;

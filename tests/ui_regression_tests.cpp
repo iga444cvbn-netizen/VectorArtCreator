@@ -1,5 +1,8 @@
 #include "core/effects/wave_effect.h"
+#include "ui/editor_canvas.h"
+#include "ui/editor_controller.h"
 #include "ui/effects_panel.h"
+#include "ui/main_window.h"
 
 #include <QCheckBox>
 #include <QDoubleSpinBox>
@@ -13,6 +16,7 @@ class EffectsPanelUiTests final : public QObject {
 
 private slots:
     void valueRefreshKeepsEmittingControlsAlive();
+    void deformationAndMaskStateDoNotOverwriteEachOther();
 };
 
 void EffectsPanelUiTests::valueRefreshKeepsEmittingControlsAlive()
@@ -63,6 +67,35 @@ void EffectsPanelUiTests::valueRefreshKeepsEmittingControlsAlive()
     QCOMPARE(retainedEnabled.data(), enabled);
     QCOMPARE(object.effects.byInstanceId(effectId)->masterStrength, 0.4);
     QVERIFY(!object.effects.byInstanceId(effectId)->enabled);
+}
+
+void EffectsPanelUiTests::deformationAndMaskStateDoNotOverwriteEachOther()
+{
+    MainWindow window;
+    auto* controller = window.findChild<EditorController*>();
+    auto* canvas = window.findChild<EditorCanvas*>();
+    QVERIFY(controller);
+    QVERIFY(canvas);
+
+    const QVector<QPair<EditorTool, BrushMode>> tools = {
+        {EditorTool::Push, BrushMode::Push}, {EditorTool::Pull, BrushMode::Pull},
+        {EditorTool::Inflate, BrushMode::Inflate}, {EditorTool::Pinch, BrushMode::Pinch},
+        {EditorTool::Smooth, BrushMode::Smooth},
+    };
+    for (const auto& [tool, mode] : tools) {
+        controller->setTool(tool);
+        QCOMPARE(static_cast<int>(canvas->brushMode()), static_cast<int>(mode));
+    }
+
+    controller->setTool(EditorTool::Pull);
+    controller->setBrushSettings(BrushTarget::Glyphs, 91.0, 1.1, 0.25);
+    QCOMPARE(static_cast<int>(canvas->brushMode()), static_cast<int>(BrushMode::Pull));
+    QCOMPARE(static_cast<int>(canvas->brushTarget()), static_cast<int>(BrushTarget::Glyphs));
+
+    controller->setMaskBrushSettings(15.0, 0.35, 0.8, true);
+    controller->setMaskRestoreMode(false);
+    QCOMPARE(static_cast<int>(canvas->brushMode()), static_cast<int>(BrushMode::Pull));
+    QCOMPARE(static_cast<int>(canvas->brushTarget()), static_cast<int>(BrushTarget::Glyphs));
 }
 
 QTEST_MAIN(EffectsPanelUiTests)

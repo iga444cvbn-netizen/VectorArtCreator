@@ -130,6 +130,15 @@ void EditorCanvas::setMaskRestoreMode(bool restore)
     m_maskRestore = restore;
 }
 
+void EditorCanvas::setMaskBrushSettings(qreal radius, qreal opacity, qreal hardness, bool restore)
+{
+    m_maskRadius = qBound<qreal>(1.0, radius, 100000.0);
+    m_maskOpacity = qBound<qreal>(0.0, opacity, 1.0);
+    m_maskHardness = qBound<qreal>(0.0, hardness, 1.0);
+    m_maskRestore = restore;
+    update();
+}
+
 void EditorCanvas::setMaskTarget(const QString& objectId)
 {
     m_maskTargetId = objectId;
@@ -365,7 +374,9 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
             localCircle.addEllipse(localCenter, localRadius, localRadius);
             painter.drawPath(viewTransform().map(target->frame.localToPage.map(localCircle)));
         } else {
-            const qreal screenRadius = qMax<qreal>(3.0, m_brushRadius * m_zoom);
+            const qreal screenRadius = qMax<qreal>(3.0,
+                                                    (m_tool == EditorTool::EffectMask ? m_maskRadius : m_brushRadius)
+                                                        * m_zoom);
             painter.drawEllipse(QPointF(m_cursorPosition), screenRadius, screenRadius);
         }
         painter.drawLine(QPointF(m_cursorPosition.x() - 3, m_cursorPosition.y()),
@@ -771,9 +782,9 @@ EffectMaskStroke EditorCanvas::currentMaskStroke() const
 {
     EffectMaskStroke stroke;
     stroke.points = m_brushPositions;
-    stroke.radius = m_brushRadius;
-    stroke.opacity = qBound<qreal>(0.0, m_brushStrength / 4.0, 1.0);
-    stroke.hardness = m_brushHardness;
+    stroke.radius = m_maskRadius;
+    stroke.opacity = m_maskOpacity;
+    stroke.hardness = m_maskHardness;
     stroke.restore = m_maskRestore;
     return stroke;
 }

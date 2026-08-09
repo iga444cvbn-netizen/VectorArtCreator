@@ -158,15 +158,14 @@ MainWindow::MainWindow(QWidget* parent)
         m_deformationPanel->setTool(tool);
     });
     connect(m_controller, &EditorController::brushSettingsChanged,
-            m_canvas, &EditorCanvas::setBrushSettings);
+            this, [this](BrushMode mode, BrushTarget target, qreal radius, qreal strength, qreal hardness) {
+                m_canvas->setBrushSettings(mode, target, radius, strength, hardness);
+                m_deformationPanel->setNormalBrushSettings(target, radius, strength, hardness);
+            });
     connect(m_controller, &EditorController::maskSettingsChanged,
             this, [this](qreal radius, qreal strength, qreal hardness, bool restore) {
-                m_canvas->setMaskRestoreMode(restore);
-                m_canvas->setBrushSettings(BrushMode::Push,
-                                           BrushTarget::Shape,
-                                           radius,
-                                           strength,
-                                           hardness);
+                m_canvas->setMaskBrushSettings(radius, strength, hardness, restore);
+                m_deformationPanel->setMaskBrushSettings(radius, strength, hardness, restore);
             });
     connect(m_controller, &EditorController::sceneChanged, this, [this] {
         m_canvas->setScene(m_controller->sceneGeometry(),
@@ -358,6 +357,8 @@ MainWindow::MainWindow(QWidget* parent)
             });
     connect(m_deformationPanel, &DeformationPanel::maskSettingsChanged,
             m_controller, &EditorController::setMaskRestoreMode);
+    connect(m_deformationPanel, &DeformationPanel::maskBrushSettingsChanged,
+            m_controller, &EditorController::setMaskBrushSettings);
     connect(m_deformationPanel, &DeformationPanel::enabledChanged,
             m_controller, &EditorController::setDeformationEnabled);
     connect(m_deformationPanel, &DeformationPanel::overallStrengthChanged,

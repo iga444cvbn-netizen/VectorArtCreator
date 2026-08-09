@@ -36,6 +36,7 @@ public:
                           qreal strength,
                           qreal hardness);
     void setMaskRestoreMode(bool restore);
+    void setMaskBrushSettings(qreal radius, qreal opacity, qreal hardness, bool restore);
     void setMaskTarget(const QString& objectId);
     void setMaskEnabled(bool enabled);
     void setNavigationSettings(const QString& mode, bool invertZoom);
@@ -46,6 +47,8 @@ public:
     void finishTextEditing();
     [[nodiscard]] bool isTextEditing() const { return m_textEditor != nullptr && m_textEditor->isVisible(); }
     [[nodiscard]] qreal zoom() const;
+    [[nodiscard]] BrushMode brushMode() const { return m_brushMode; }
+    [[nodiscard]] BrushTarget brushTarget() const { return m_brushTarget; }
 
 public slots:
     void fitContent();
@@ -114,6 +117,9 @@ private:
     qreal m_brushRadius = 40.0;
     qreal m_brushStrength = 0.7;
     qreal m_brushHardness = 0.5;
+    qreal m_maskRadius = 40.0;
+    qreal m_maskOpacity = 0.7 / 4.0;
+    qreal m_maskHardness = 0.5;
     bool m_maskRestore = false;
     bool m_panning = false;
     bool m_brushing = false;

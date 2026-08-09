@@ -122,12 +122,7 @@ add_test(NAME vector_typography_core_tests COMMAND vector_typography_tests)
 
 add_executable(vector_typography_ui_tests
     tests/ui_regression_tests.cpp
-    src/ui/slider_spin_box.h
-    src/ui/slider_spin_box.cpp
-    src/ui/collapsible_section.h
-    src/ui/collapsible_section.cpp
-    src/ui/effects_panel.h
-    src/ui/effects_panel.cpp
+    ${UI_SOURCES}
 )
 target_include_directories(vector_typography_ui_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vector_typography_ui_tests PRIVATE

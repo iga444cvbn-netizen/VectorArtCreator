@@ -213,6 +213,7 @@ private slots:
     void shortcutManagerDetectsConflictsAndPersists();
     void asyncEvaluationPublishesLatestGeneration();
     void objectFrameRoundTripsPointsAndVectors();
+    void deformationBrushModesProduceDistinctGeometry();
 };
 
 void CoreTests::projectSerializationRoundTrip()
@@ -1589,6 +1590,28 @@ void CoreTests::objectFrameRoundTripsPointsAndVectors()
     QVERIFY(QLineF(frame.pageVectorToLocal(frame.localPointToPage(localVector)), localVector).length() > 1.0);
     QCOMPARE(frame.orientedPageQuad().size(), 4);
     QVERIFY(frame.pageAabb().contains(pagePoint));
+}
+
+void CoreTests::deformationBrushModesProduceDistinctGeometry()
+{
+    QSet<QByteArray> signatures;
+    for (const BrushMode mode : {BrushMode::Push, BrushMode::Pull, BrushMode::Inflate,
+                                 BrushMode::Pinch, BrushMode::Smooth}) {
+        VectorGeometry geometry = rectangleGeometry();
+        DeformationStroke stroke;
+        stroke.mode = mode;
+        stroke.target = BrushTarget::Shape;
+        stroke.radius = 120.0;
+        stroke.strength = 1.0;
+        stroke.hardness = 0.5;
+        stroke.samples = {{QPointF(30.0, 10.0), QPointF(), 1.0},
+                          {QPointF(40.0, 10.0), QPointF(10.0, 0.0), 1.0}};
+        ManualDeformation deformation;
+        deformation.strokes.push_back(stroke);
+        deformation.apply(geometry);
+        signatures.insert(geometrySignature(geometry));
+    }
+    QCOMPARE(signatures.size(), 5);
 }
 
 int main(int argc, char* argv[])
