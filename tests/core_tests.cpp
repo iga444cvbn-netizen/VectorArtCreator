@@ -168,7 +168,9 @@ private slots:
     void pushStrokeIsDeterministic();
     void glyphPushMovesRigidUnits();
     void shapePushBendsContours();
-    void radialBrushModesMoveInExpectedDirections();
+    void inflateMovesPointsOutward();
+    void pinchMovesPointsInward();
+    void pullMovesPointsTowardCenter();
     void smoothBrushReducesLocalIrregularity();
     void deformationStrengthAndToggleAreNondestructive();
     void deformationPreservesMultipleContours();
@@ -674,30 +676,40 @@ void CoreTests::shapePushBendsContours()
     QVERIFY(firstDelta != secondDelta);
 }
 
-void CoreTests::radialBrushModesMoveInExpectedDirections()
+void CoreTests::inflateMovesPointsOutward()
 {
     DeformationStroke stroke = pushStroke();
     stroke.samples = {{QPointF(10.0, 10.0), QPointF(), 1.0}};
     stroke.radius = 30.0;
-
-    ManualDeformation inflate;
     stroke.mode = BrushMode::Inflate;
+    ManualDeformation inflate;
     inflate.strokes.push_back(stroke);
     VectorGeometry inflated = rectangleGeometry();
     const QRectF originalBounds = inflated.pieces.first().path.boundingRect();
     inflate.apply(inflated);
     QVERIFY(inflated.pieces.first().path.boundingRect().width() > originalBounds.width());
+}
 
+void CoreTests::pinchMovesPointsInward()
+{
+    DeformationStroke stroke = pushStroke();
+    stroke.samples = {{QPointF(10.0, 10.0), QPointF(), 1.0}};
+    stroke.radius = 30.0;
     ManualDeformation pinch;
     stroke.mode = BrushMode::Pinch;
     pinch.strokes.push_back(stroke);
     VectorGeometry pinched = rectangleGeometry();
+    const QRectF originalBounds = pinched.pieces.first().path.boundingRect();
     pinch.apply(pinched);
     QVERIFY(pinched.pieces.first().path.boundingRect().width() < originalBounds.width());
+}
 
-    ManualDeformation pull;
+void CoreTests::pullMovesPointsTowardCenter()
+{
+    DeformationStroke stroke = pushStroke();
     stroke.mode = BrushMode::Pull;
     stroke.samples = {{QPointF(30.0, 10.0), QPointF(), 1.0}};
+    ManualDeformation pull;
     pull.strokes.push_back(stroke);
     VectorGeometry pulled = rectangleGeometry();
     pull.apply(pulled);
