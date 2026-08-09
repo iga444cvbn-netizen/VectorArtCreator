@@ -18,6 +18,9 @@ find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Test)
 
 set(CORE_SOURCES
     src/core/document/document.cpp
+    src/core/deformation/manual_deformation.cpp
+    src/core/deformation/contour_sampler.cpp
+    src/core/deformation/deformation_evaluator.cpp
     src/core/text/font_descriptor.cpp
     src/core/text/text_engine.cpp
     src/core/geometry/vector_geometry.cpp

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/effects/effect_stack.h"
+#include "core/deformation/manual_deformation.h"
 #include "core/text/font_descriptor.h"
 
 #include <QColor>
@@ -20,6 +21,7 @@ struct TextObject {
     TypographyProperties typography;
     QColor fill = QColor(24, 24, 28);
     EffectStack effects;
+    ManualDeformation deformation;
 
     // Reserved for forward-compatible object data such as masks or brush strokes.
     QJsonObject futureData;
@@ -33,7 +35,7 @@ struct TextObject {
 
 class Document {
 public:
-    static constexpr int CurrentFormatVersion = 2;
+    static constexpr int CurrentFormatVersion = 3;
 
     int formatVersion = CurrentFormatVersion;
     QString title = QStringLiteral("Untitled Vector Typography Project");

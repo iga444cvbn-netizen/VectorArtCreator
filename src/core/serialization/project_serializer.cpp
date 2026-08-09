@@ -20,6 +20,7 @@ QJsonObject textObjectToJson(const TextObject& textObject)
     object.insert(QStringLiteral("font"), textObject.font.toJson());
     object.insert(QStringLiteral("typography"), textObject.typography.toJson(textObject.fill));
     object.insert(QStringLiteral("effects"), textObject.effects.toJson());
+    object.insert(QStringLiteral("deformation"), textObject.deformation.toJson());
     object.insert(QStringLiteral("futureData"), textObject.futureData);
     return object;
 }
@@ -58,6 +59,24 @@ bool textObjectFromJson(const QJsonObject& object,
             *error = effectError;
         }
         return false;
+    }
+
+    const QJsonValue deformationValue = object.value(QStringLiteral("deformation"));
+    if (!deformationValue.isUndefined()) {
+        if (!deformationValue.isObject()) {
+            if (error) {
+                *error = QStringLiteral("Text object deformation data is not an object.");
+            }
+            return false;
+        }
+        QString deformationError;
+        if (!ManualDeformation::fromJson(
+                deformationValue.toObject(), &result.deformation, &deformationError)) {
+            if (error) {
+                *error = deformationError;
+            }
+            return false;
+        }
     }
 
     *textObject = std::move(result);
