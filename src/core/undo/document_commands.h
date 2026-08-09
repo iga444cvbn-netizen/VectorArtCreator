@@ -221,6 +221,42 @@ private:
     double m_newValue = 0.0;
 };
 
+class SetEffectMasterStrengthCommand final : public DocumentCommand {
+public:
+    SetEffectMasterStrengthCommand(Document& document,
+                                   int index,
+                                   double oldValue,
+                                   double newValue,
+                                   DocumentChangeCallback onChanged);
+
+    void undo() override;
+    void redo() override;
+    [[nodiscard]] int id() const override;
+    bool mergeWith(const QUndoCommand* other) override;
+
+private:
+    int m_index = -1;
+    double m_oldValue = 1.0;
+    double m_newValue = 1.0;
+};
+
+class SetEffectScopeCommand final : public DocumentCommand {
+public:
+    SetEffectScopeCommand(Document& document,
+                          int index,
+                          EffectScope oldScope,
+                          EffectScope newScope,
+                          DocumentChangeCallback onChanged);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    int m_index = -1;
+    EffectScope m_oldScope;
+    EffectScope m_newScope;
+};
+
 class ApplyPresetCommand final : public DocumentCommand {
 public:
     ApplyPresetCommand(Document& document,

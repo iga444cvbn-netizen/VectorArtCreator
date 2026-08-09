@@ -19,9 +19,9 @@ EffectsPanel::EffectsPanel(QWidget* parent)
 
     auto* addRow = new QHBoxLayout();
     m_addEffectCombo = new QComboBox(effectsGroup);
-    m_addEffectCombo->addItem(QStringLiteral("Wave"), QStringLiteral("wave"));
-    m_addEffectCombo->addItem(QStringLiteral("Glyph Jitter"), QStringLiteral("glyphJitter"));
-    m_addEffectCombo->addItem(QStringLiteral("Global Stretch"), QStringLiteral("stretch"));
+    for (const auto& [typeId, displayName] : availableEffectTypes()) {
+        m_addEffectCombo->addItem(displayName, typeId);
+    }
     m_addEffectButton = new QPushButton(QStringLiteral("Add"), effectsGroup);
     addRow->addWidget(m_addEffectCombo, 1);
     addRow->addWidget(m_addEffectButton);
@@ -160,6 +160,20 @@ void EffectsPanel::rebuildParameterEditor()
     m_parameterIndex = index;
     m_parameterType = effect->typeId();
 
+    auto* masterRow = new QWidget(m_parameterHost);
+    auto* masterLayout = new QHBoxLayout(masterRow);
+    masterLayout->setContentsMargins(0, 0, 0, 0);
+    masterLayout->addWidget(new QLabel(QStringLiteral("Master strength"), masterRow));
+    m_masterStrengthSpin = new QDoubleSpinBox(masterRow);
+    m_masterStrengthSpin->setRange(0.0, 1.0);
+    m_masterStrengthSpin->setSingleStep(0.01);
+    m_masterStrengthSpin->setDecimals(3);
+    m_masterStrengthSpin->setValue(effect->masterStrength);
+    masterLayout->addWidget(m_masterStrengthSpin, 1);
+    m_parameterHostLayout->addWidget(masterRow);
+    connect(m_masterStrengthSpin, &QDoubleSpinBox::valueChanged, this,
+            [this, index](double value) { emit effectMasterStrengthChanged(index, value); });
+
     for (const EffectParameter& parameter : effect->parameterDefinitions()) {
         auto* row = new QWidget(m_parameterHost);
         auto* rowLayout = new QHBoxLayout(row);
@@ -209,6 +223,10 @@ void EffectsPanel::updateParameterEditorValues()
         const QSignalBlocker blocker(m_parameterSpins[index]);
         m_parameterSpins[index]->setValue(parameters[index].value);
     }
+    if (m_masterStrengthSpin) {
+        const QSignalBlocker blocker(m_masterStrengthSpin);
+        m_masterStrengthSpin->setValue(effect->masterStrength);
+    }
 }
 
 void EffectsPanel::requestMoveUp()
@@ -238,6 +256,7 @@ void EffectsPanel::requestRemove()
 void EffectsPanel::clearParameterEditor()
 {
     m_parameterSpins.clear();
+    m_masterStrengthSpin = nullptr;
     m_parameterIndex = -1;
     m_parameterType.clear();
     while (QLayoutItem* item = m_parameterHostLayout->takeAt(0)) {

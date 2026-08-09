@@ -11,6 +11,9 @@ namespace vt {
 struct GeometryPiece {
     QPainterPath path;
     int sourceGlyphIndex = -1;
+    int sourceClusterStart = -1;
+    int sourceClusterLength = 1;
+    int sourceLineIndex = 0;
     QPointF anchor;
     QPointF originalAnchor;
 };

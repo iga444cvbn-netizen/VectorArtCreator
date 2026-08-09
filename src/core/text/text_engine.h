@@ -19,6 +19,9 @@ struct ShapedGlyph {
     QRawFont rawFont;
     QPointF position;
     int ordinal = -1;
+    int clusterStart = -1;
+    int clusterLength = 1;
+    int lineIndex = 0;
     bool usesFallback = false;
 };
 
@@ -43,6 +46,8 @@ struct ShapedText {
     // QTextLayout/QGlyphRun positions. It is exposed for diagnostics and
     // deterministic tests of relative tracking.
     qreal resolvedEmSize = 0.0;
+    int lineCount = 0;
+    QVector<QRectF> lineBounds;
     bool requestedFontAvailable = true;
     FontResolutionStatus fontResolutionStatus = FontResolutionStatus::RequestedFont;
     QVector<FallbackFontUsage> fallbackFonts;

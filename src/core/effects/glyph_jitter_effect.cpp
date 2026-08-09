@@ -97,11 +97,11 @@ void GlyphJitterEffect::apply(VectorGeometry& geometry, const EffectContext& con
     for (int index = 0; index < geometry.pieces.size(); ++index) {
         GeometryPiece& piece = geometry.pieces[index];
         const qreal xOffset = (unitValue(seed, piece.sourceGlyphIndex, 0x1234ULL) * 2.0 - 1.0)
-            * amount * context.referenceHeight;
+            * amount * masterStrength * context.referenceHeight;
         const qreal yOffset = (unitValue(seed, piece.sourceGlyphIndex, 0x5678ULL) * 2.0 - 1.0)
-            * amount * context.referenceHeight;
+            * amount * masterStrength * context.referenceHeight;
         const qreal angle = (unitValue(seed, piece.sourceGlyphIndex, 0x9abcULL) * 2.0 - 1.0)
-            * rotationRangeDegrees;
+            * rotationRangeDegrees * masterStrength;
 
         const QPointF center = piece.path.isEmpty()
             ? piece.anchor

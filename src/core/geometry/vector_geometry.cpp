@@ -54,8 +54,13 @@ void VectorGeometry::transformAll(const QTransform& transform)
     for (GeometryPiece& piece : pieces) {
         piece.path = transform.map(piece.path);
         piece.anchor = transform.map(piece.anchor);
+        piece.originalAnchor = transform.map(piece.originalAnchor);
+    }
+    if (!referenceBounds.isEmpty()) {
+        referenceBounds = transform.map(referenceBounds).boundingRect();
     }
     recomputeBounds();
+    referenceHeight = qMax<qreal>(1.0, referenceBounds.height());
 }
 
 QPainterPath VectorGeometry::combinedPath() const

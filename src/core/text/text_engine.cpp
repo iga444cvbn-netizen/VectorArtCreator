@@ -124,7 +124,9 @@ QString TextEngine::cacheKey(const TextObject& object) const
         + QChar(0x1f)
         + QString::number(object.typography.fontSize, 'g', 16)
         + QChar(0x1f)
-        + QString::number(object.typography.trackingEm, 'g', 16);
+        + QString::number(object.typography.trackingEm, 'g', 16)
+        + QChar(0x1f)
+        + QString::number(object.typography.lineSpacing, 'g', 16);
 }
 
 ShapedText TextEngine::shape(const TextObject& object)
@@ -165,16 +167,40 @@ ShapedText TextEngine::shape(const TextObject& object)
     option.setWrapMode(QTextOption::NoWrap);
     layout.setTextOption(option);
     layout.beginLayout();
-    QTextLine line = layout.createLine();
-    if (line.isValid()) {
+    qreal lineTop = 0.0;
+    while (true) {
+        QTextLine line = layout.createLine();
+        if (!line.isValid()) {
+            break;
+        }
         line.setLineWidth(1.0e9);
-        line.setPosition(QPointF(0.0, 0.0));
+        line.setPosition(QPointF(0.0, lineTop));
+        result.lineBounds.push_back(QRectF(0.0,
+                                           lineTop,
+                                           line.naturalTextWidth(),
+                                           line.height()));
+        lineTop += line.height() * qMax<qreal>(0.1, object.typography.lineSpacing);
     }
     layout.endLayout();
 
+    result.lineCount = result.lineBounds.size();
     result.logicalBounds = layout.boundingRect();
+    if (!result.lineBounds.isEmpty()) {
+        QRectF multilineBounds;
+        bool hasLineBounds = false;
+        for (const QRectF& lineBounds : result.lineBounds) {
+            if (!hasLineBounds) {
+                multilineBounds = lineBounds;
+                hasLineBounds = true;
+            } else {
+                multilineBounds = multilineBounds.united(lineBounds);
+            }
+        }
+        result.logicalBounds = result.logicalBounds.united(multilineBounds);
+    }
     int ordinal = 0;
     int shapedGlyphCount = 0;
+    QVector<int> lineGlyphCounts(result.lineCount, 0);
     const QList<QGlyphRun> runs = layout.glyphRuns();
     result.resolvedEmSize = resolvedRawFontPixelSize(requestedRawFont, font);
     if (result.resolvedEmSize <= 0.0) {
@@ -190,6 +216,7 @@ ShapedText TextEngine::shape(const TextObject& object)
     for (const QGlyphRun& run : runs) {
         const QList<quint32> glyphIndexes = run.glyphIndexes();
         const QList<QPointF> positions = run.positions();
+        const QList<qsizetype> stringIndexes = run.stringIndexes();
         const QRawFont rawFont = run.rawFont();
         if (!rawFont.isValid()) {
             continue;
@@ -202,22 +229,54 @@ ShapedText TextEngine::shape(const TextObject& object)
             recordFallbackFont(&result, rawFont, glyphIndexes.size());
         }
         for (int i = 0; i < glyphIndexes.size(); ++i) {
+            const QPointF rawPosition = positions.value(i, QPointF());
+            int lineIndex = 0;
+            for (int candidate = 0; candidate < result.lineBounds.size(); ++candidate) {
+                if (rawPosition.y() >= result.lineBounds[candidate].top() - 0.5
+                    && rawPosition.y() <= result.lineBounds[candidate].bottom() + 0.5) {
+                    lineIndex = candidate;
+                    break;
+                }
+            }
+            if (lineIndex >= lineGlyphCounts.size()) {
+                lineGlyphCounts.resize(lineIndex + 1);
+            }
+            const int lineOrdinal = lineGlyphCounts[lineIndex]++;
+            const int clusterStart = stringIndexes.size() == glyphIndexes.size()
+                ? qBound<qsizetype>(0, stringIndexes.at(i), object.sourceText.size())
+                : -1;
+            int clusterLength = 1;
+            if (clusterStart >= 0 && i + 1 < stringIndexes.size()) {
+                const qsizetype nextStart = stringIndexes.at(i + 1);
+                if (nextStart > clusterStart) {
+                    clusterLength = qMax(1, static_cast<int>(nextStart - clusterStart));
+                }
+            } else if (clusterStart >= 0) {
+                clusterLength = qMax(1, object.sourceText.size() - clusterStart);
+            }
             ShapedGlyph glyph;
             glyph.glyphIndex = glyphIndexes[i];
             glyph.rawFont = rawFont;
             const qreal direction = run.isRightToLeft() ? -1.0 : 1.0;
-            glyph.position = positions.value(i, QPointF())
-                + QPointF(direction * trackingDistance * shapedGlyphCount, 0.0);
+            glyph.position = rawPosition
+                + QPointF(direction * trackingDistance * lineOrdinal, 0.0);
             glyph.ordinal = ordinal++;
+            glyph.clusterStart = clusterStart;
+            glyph.clusterLength = clusterLength;
+            glyph.lineIndex = lineIndex;
             glyph.usesFallback = usesFallback;
             result.glyphs.push_back(glyph);
             ++shapedGlyphCount;
         }
     }
 
-    if (shapedGlyphCount > 1 && !qFuzzyIsNull(trackingDistance)) {
+    int trackingPairs = 0;
+    for (const int lineGlyphCount : lineGlyphCounts) {
+        trackingPairs += qMax(0, lineGlyphCount - 1);
+    }
+    if (trackingPairs > 0 && !qFuzzyIsNull(trackingDistance)) {
         const qreal adjustedWidth = result.logicalBounds.width()
-            + trackingDistance * (shapedGlyphCount - 1);
+            + trackingDistance * trackingPairs;
         result.logicalBounds.setWidth(qMax<qreal>(0.0, adjustedWidth));
     }
 
@@ -251,6 +310,9 @@ VectorGeometry GlyphGeometryBuilder::build(const ShapedText& shaped, qreal fallb
     for (const ShapedGlyph& glyph : shaped.glyphs) {
         GeometryPiece piece;
         piece.sourceGlyphIndex = glyph.ordinal;
+        piece.sourceClusterStart = glyph.clusterStart;
+        piece.sourceClusterLength = glyph.clusterLength;
+        piece.sourceLineIndex = glyph.lineIndex;
         piece.anchor = glyph.position;
         piece.originalAnchor = glyph.position;
 

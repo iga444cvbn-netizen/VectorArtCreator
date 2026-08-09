@@ -34,6 +34,8 @@ DeformationPanel::DeformationPanel(QWidget* parent)
 
     m_modeCombo = new QComboBox(group);
     m_modeCombo->addItem(QStringLiteral("Select"), static_cast<int>(EditorTool::Select));
+    m_modeCombo->addItem(QStringLiteral("Move"), static_cast<int>(EditorTool::Move));
+    m_modeCombo->addItem(QStringLiteral("Text"), static_cast<int>(EditorTool::Text));
     m_modeCombo->addItem(QStringLiteral("Push"), static_cast<int>(EditorTool::Push));
     m_modeCombo->addItem(QStringLiteral("Pull"), static_cast<int>(EditorTool::Pull));
     m_modeCombo->addItem(QStringLiteral("Inflate"), static_cast<int>(EditorTool::Inflate));

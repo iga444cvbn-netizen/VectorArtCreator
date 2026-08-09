@@ -11,6 +11,7 @@ constexpr int FontSizeCommandId = 101;
 constexpr int TrackingCommandId = 102;
 constexpr int EffectParameterCommandId = 103;
 constexpr int DeformationStrengthCommandId = 104;
+constexpr int EffectMasterStrengthCommandId = 105;
 
 } // namespace
 
@@ -374,6 +375,77 @@ bool SetEffectParameterCommand::mergeWith(const QUndoCommand* other)
     }
     m_newValue = command->m_newValue;
     return true;
+}
+
+SetEffectMasterStrengthCommand::SetEffectMasterStrengthCommand(Document& document,
+                                                               int index,
+                                                               double oldValue,
+                                                               double newValue,
+                                                               DocumentChangeCallback onChanged)
+    : DocumentCommand(document, std::move(onChanged), QStringLiteral("Change effect strength"))
+    , m_index(index)
+    , m_oldValue(oldValue)
+    , m_newValue(newValue)
+{
+}
+
+void SetEffectMasterStrengthCommand::undo()
+{
+    if (Effect* effect = m_document.primaryTextObject().effects.at(m_index)) {
+        effect->masterStrength = m_oldValue;
+        notifyChanged();
+    }
+}
+
+void SetEffectMasterStrengthCommand::redo()
+{
+    if (Effect* effect = m_document.primaryTextObject().effects.at(m_index)) {
+        effect->masterStrength = m_newValue;
+        notifyChanged();
+    }
+}
+
+int SetEffectMasterStrengthCommand::id() const
+{
+    return EffectMasterStrengthCommandId;
+}
+
+bool SetEffectMasterStrengthCommand::mergeWith(const QUndoCommand* other)
+{
+    const auto* command = dynamic_cast<const SetEffectMasterStrengthCommand*>(other);
+    if (!command || command->m_index != m_index) {
+        return false;
+    }
+    m_newValue = command->m_newValue;
+    return true;
+}
+
+SetEffectScopeCommand::SetEffectScopeCommand(Document& document,
+                                             int index,
+                                             EffectScope oldScope,
+                                             EffectScope newScope,
+                                             DocumentChangeCallback onChanged)
+    : DocumentCommand(document, std::move(onChanged), QStringLiteral("Change effect scope"))
+    , m_index(index)
+    , m_oldScope(std::move(oldScope))
+    , m_newScope(std::move(newScope))
+{
+}
+
+void SetEffectScopeCommand::undo()
+{
+    if (Effect* effect = m_document.primaryTextObject().effects.at(m_index)) {
+        effect->scope = m_oldScope;
+        notifyChanged();
+    }
+}
+
+void SetEffectScopeCommand::redo()
+{
+    if (Effect* effect = m_document.primaryTextObject().effects.at(m_index)) {
+        effect->scope = m_newScope;
+        notifyChanged();
+    }
 }
 
 ApplyPresetCommand::ApplyPresetCommand(Document& document,

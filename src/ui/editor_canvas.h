@@ -2,6 +2,7 @@
 
 #include "core/deformation/manual_deformation.h"
 #include "core/geometry/vector_geometry.h"
+#include "core/scene/scene_geometry.h"
 #include "ui/deformation_tool_state.h"
 
 #include <QColor>
@@ -9,6 +10,7 @@
 #include <QPoint>
 #include <QTransform>
 #include <QWidget>
+#include <QStringList>
 
 namespace vt {
 
@@ -19,6 +21,8 @@ public:
     explicit EditorCanvas(QWidget* parent = nullptr);
 
     void setScene(const VectorGeometry& geometry, const QColor& fill);
+    void setScene(const SceneGeometry& scene, const QStringList& selectedObjectIds = {});
+    void setSelection(const QStringList& selectedObjectIds);
     void setTool(EditorTool tool);
     void setBrushSettings(BrushMode mode,
                           BrushTarget target,
@@ -35,6 +39,14 @@ signals:
     void deformationPreviewChanged(const DeformationStroke& stroke);
     void deformationPreviewCleared();
     void deformationStrokeReady(const DeformationStroke& stroke);
+    void objectClicked(const QString& objectId, bool additive);
+    void marqueeSelectionRequested(const QRectF& rect, bool additive);
+    void moveCommitted(const QStringList& objectIds, const QPointF& delta);
+    void textCreateRequested(const QPointF& position);
+    void textEditRequested(const QString& objectId);
+    void nudgeRequested(const QPointF& delta);
+    void deleteRequested();
+    void duplicateRequested();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -53,11 +65,15 @@ private:
     [[nodiscard]] QTransform viewTransform() const;
     [[nodiscard]] QPointF documentPosition(const QPointF& widgetPosition) const;
     [[nodiscard]] DeformationStroke currentStroke() const;
+    [[nodiscard]] QString hitTestObject(const QPointF& documentPoint) const;
+    [[nodiscard]] QRectF selectionRectInDocument() const;
     void updateBrushPreview();
     void cancelBrushStroke();
     void updateCursorShape();
 
     VectorGeometry m_geometry;
+    SceneGeometry m_sceneGeometry;
+    QStringList m_selectedObjectIds;
     QColor m_fill = QColor(24, 24, 28);
     qreal m_zoom = 1.0;
     QPointF m_panOffset;
@@ -77,6 +93,13 @@ private:
     bool m_hasCursorPosition = false;
     bool m_hasViewCenter = false;
     bool m_hasInitialFit = false;
+    bool m_marqueeSelecting = false;
+    bool m_movingObjects = false;
+    QPointF m_moveStartDocument;
+    QPointF m_lastMoveDocument;
+    QRectF m_marqueeRect;
+    QStringList m_moveObjectIds;
+    SceneGeometry m_sceneBeforeMove;
 };
 
 } // namespace vt

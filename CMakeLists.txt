@@ -14,10 +14,12 @@ if (MSVC)
     add_compile_options(/utf-8)
 endif()
 
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Test)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Test Concurrent)
 
 set(CORE_SOURCES
     src/core/document/document.cpp
+    src/core/scene/scene_geometry.cpp
+    src/core/scene/scene_evaluator.cpp
     src/core/deformation/manual_deformation.cpp
     src/core/deformation/contour_sampler.cpp
     src/core/deformation/deformation_evaluator.cpp
@@ -29,16 +31,18 @@ set(CORE_SOURCES
     src/core/effects/wave_effect.cpp
     src/core/effects/glyph_jitter_effect.cpp
     src/core/effects/stretch_effect.cpp
+    src/core/effects/procedural_effect.cpp
     src/core/serialization/project_serializer.cpp
     src/core/presets/preset.cpp
     src/core/presets/preset_manager.cpp
     src/core/export/svg_exporter.cpp
     src/core/undo/document_commands.cpp
+    src/core/undo/scene_commands.cpp
 )
 
 add_library(vector_typography_core STATIC ${CORE_SOURCES})
 target_include_directories(vector_typography_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(vector_typography_core PUBLIC Qt6::Core Qt6::Gui)
+target_link_libraries(vector_typography_core PUBLIC Qt6::Core Qt6::Gui Qt6::Concurrent)
 
 if (WIN32)
     target_compile_definitions(vector_typography_core PUBLIC VT_PLATFORM_WINDOWS=1)
@@ -47,9 +51,19 @@ endif()
 set(UI_SOURCES
     src/ui/editor_controller.h
     src/ui/editor_controller.cpp
+    src/ui/selection_model.h
+    src/ui/selection_model.cpp
     src/ui/deformation_tool_state.h
     src/ui/editor_canvas.h
     src/ui/editor_canvas.cpp
+    src/ui/tool_palette.h
+    src/ui/tool_palette.cpp
+    src/ui/layers_panel.h
+    src/ui/layers_panel.cpp
+    src/ui/shortcut_manager.h
+    src/ui/shortcut_manager.cpp
+    src/ui/preferences_dialog.h
+    src/ui/preferences_dialog.cpp
     src/ui/typography_panel.h
     src/ui/typography_panel.cpp
     src/ui/effects_panel.h
@@ -70,6 +84,7 @@ target_link_libraries(vector_typography_editor PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    Qt6::Concurrent
 )
 
 if (WIN32)
@@ -82,6 +97,8 @@ add_executable(vector_typography_tests
     tests/core_tests.cpp
     src/ui/editor_controller.h
     src/ui/editor_controller.cpp
+    src/ui/selection_model.h
+    src/ui/selection_model.cpp
 )
 target_include_directories(vector_typography_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vector_typography_tests PRIVATE
@@ -89,6 +106,7 @@ target_link_libraries(vector_typography_tests PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Test
+    Qt6::Concurrent
 )
 
 add_test(NAME vector_typography_core_tests COMMAND vector_typography_tests)

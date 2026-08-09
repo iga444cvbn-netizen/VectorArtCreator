@@ -4,11 +4,16 @@
 #include "ui/editor_controller.h"
 #include "ui/deformation_panel.h"
 #include "ui/effects_panel.h"
+#include "ui/layers_panel.h"
+#include "ui/preferences_dialog.h"
+#include "ui/shortcut_manager.h"
+#include "ui/tool_palette.h"
 #include "ui/typography_panel.h"
 
 #include <QAction>
 #include <QCloseEvent>
 #include <QMainWindow>
+#include <QTabBar>
 
 namespace vt {
 
@@ -30,6 +35,8 @@ private slots:
     void saveProject();
     void saveProjectAs();
     void exportSvg();
+    void showPreferences();
+    void pageTabChanged(int index);
 
 private:
     void createActions();
@@ -42,6 +49,10 @@ private:
     TypographyPanel* m_typographyPanel = nullptr;
     EffectsPanel* m_effectsPanel = nullptr;
     DeformationPanel* m_deformationPanel = nullptr;
+    ToolPalette* m_toolPalette = nullptr;
+    LayersPanel* m_layersPanel = nullptr;
+    QTabBar* m_pageTabs = nullptr;
+    ShortcutManager* m_shortcutManager = nullptr;
     QStringList m_presetNames;
     QString m_projectPath;
     QAction* m_saveAction = nullptr;

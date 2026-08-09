@@ -630,7 +630,7 @@ void CoreTests::deformationSerializationRoundTrip()
                                        .at(0)
                                        .toObject();
     QVERIFY(textObject.value(QStringLiteral("deformation")).isObject());
-    QCOMPARE(ProjectSerializer::toJson(original).object().value(QStringLiteral("formatVersion")).toInt(), 3);
+    QCOMPARE(ProjectSerializer::toJson(original).object().value(QStringLiteral("formatVersion")).toInt(), 4);
 
     Document restored;
     QString error;

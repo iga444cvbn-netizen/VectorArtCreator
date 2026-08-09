@@ -56,6 +56,7 @@ QJsonObject TypographyProperties::toJson(const QColor& fill) const
     QJsonObject object;
     object.insert(QStringLiteral("fontSize"), fontSize);
     object.insert(QStringLiteral("trackingEm"), trackingEm);
+    object.insert(QStringLiteral("lineSpacing"), lineSpacing);
     object.insert(QStringLiteral("trackingUnit"), QStringLiteral("em"));
     object.insert(QStringLiteral("fill"), fill.name(QColor::HexArgb));
     return object;
@@ -77,6 +78,10 @@ TypographyProperties TypographyProperties::fromJson(const QJsonObject& object,
             properties.trackingEm = absoluteSpacing / properties.fontSize;
         }
     }
+    properties.lineSpacing = qBound<qreal>(0.1,
+                                           object.value(QStringLiteral("lineSpacing"))
+                                               .toDouble(properties.lineSpacing),
+                                           8.0);
 
     if (fill) {
         const QColor parsed(object.value(QStringLiteral("fill")).toString());

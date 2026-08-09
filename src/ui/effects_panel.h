@@ -27,6 +27,7 @@ signals:
     void moveEffectRequested(int from, int to);
     void effectEnabledChanged(int index, bool enabled);
     void effectParameterChanged(int index, const QString& parameterId, double value);
+    void effectMasterStrengthChanged(int index, double value);
     void savePresetRequested(const QString& name);
     void applyPresetRequested(const QString& name);
     void deletePresetRequested(const QString& name);
@@ -58,6 +59,7 @@ private:
 
     const TextObject* m_currentObject = nullptr;
     QVector<QDoubleSpinBox*> m_parameterSpins;
+    QDoubleSpinBox* m_masterStrengthSpin = nullptr;
     int m_parameterIndex = -1;
     QString m_parameterType;
 };
