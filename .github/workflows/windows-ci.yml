@@ -76,7 +76,23 @@ jobs:
           $ctestExit = $LASTEXITCODE
           if ($ctestExit -ne 0) {
             Write-Host "CTest failed; replaying the Qt Test executable with verbose output."
-            & (Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_tests.exe') -vs
+            $testExecutable = Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_tests.exe'
+            & $testExecutable -vs
+            Write-Host "Full Qt Test replay exit code: $LASTEXITCODE"
+            $diagnosticCases = @(
+              'documentHierarchyHasStableIds',
+              'legacyFlatProjectMigratesToPageAndLayer',
+              'multilineShapingPreservesLinesAndClusters',
+              'scopedEffectsOnlyTouchSelectedClusters',
+              'proceduralEffectsAreDeterministicAndAvailable',
+              'selectionModelSupportsSingleAndRangeSelection',
+              'controllerSceneCommandsMoveDuplicateAndDeleteObjects',
+              'controllerPageAndLayerCommandsAreUndoable'
+            )
+            foreach ($diagnosticCase in $diagnosticCases) {
+              & $testExecutable $diagnosticCase
+              Write-Host "Diagnostic case $diagnosticCase exit code: $LASTEXITCODE"
+            }
             exit $ctestExit
           }
 
