@@ -204,6 +204,11 @@ private slots:
     void controllerSceneCommandsMoveDuplicateAndDeleteObjects();
     void controllerUndoTargetsStableObject();
     void controllerPageAndLayerCommandsAreUndoable();
+    void controllerMoveObjectBetweenLayersIsUndoable();
+    void controllerLockedLayerObjectsAreNotEditable();
+    void controllerMaskUsesObjectLocalScale();
+    void pageReorderIsUndoableAndSerializable();
+    void shapingCacheKeyIgnoresFillButTracksLayoutInputs();
     void shortcutManagerDetectsConflictsAndPersists();
     void asyncEvaluationPublishesLatestGeneration();
 };
@@ -1352,6 +1357,163 @@ void CoreTests::controllerPageAndLayerCommandsAreUndoable()
     QCOMPARE(controller.document().currentPageId, addedPageId);
     controller.undoStack()->redo();
     QCOMPARE(controller.document().pages.size(), size_t(1));
+}
+
+void CoreTests::controllerMoveObjectBetweenLayersIsUndoable()
+{
+    EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(40.0, 50.0), QStringLiteral("Move me"));
+    QVERIFY(!objectId.isEmpty());
+    const QString sourceLayerId = controller.document().activeLayerId;
+    TextObject* original = controller.document().objectById(objectId);
+    QVERIFY(original);
+    original->transform.rotation = 12.0;
+    original->transform.scale = QPointF(1.4, 0.8);
+    auto wave = std::make_unique<WaveEffect>();
+    EffectMaskStroke mask;
+    mask.points = {QPointF(10.0, 10.0)};
+    mask.restore = true;
+    wave->maskStrokes.push_back(mask);
+    original->effects.append(std::move(wave));
+    original->deformation.strokes.push_back(pushStroke());
+    const QJsonObject fontBefore = original->font.toJson();
+    const QJsonObject typographyBefore = original->typography.toJson(original->fill);
+    const QColor fillBefore = original->fill;
+    const QJsonObject transformBefore = original->transform.toJson();
+    const QJsonArray effectsBefore = original->effects.toJson();
+    const QJsonObject deformationBefore = original->deformation.toJson();
+
+    controller.addLayer();
+    const QString destinationLayerId = controller.document().activeLayerId;
+    QVERIFY(sourceLayerId != destinationLayerId);
+    controller.moveObjectToLayer(objectId, destinationLayerId);
+
+    const Layer* source = controller.document().layerById(sourceLayerId);
+    const Layer* destination = controller.document().layerById(destinationLayerId);
+    QVERIFY(source);
+    QVERIFY(destination);
+    QVERIFY(!source->objectById(objectId));
+    const TextObject* moved = destination->objectById(objectId);
+    QVERIFY(moved);
+    QCOMPARE(moved->id, objectId);
+    QCOMPARE(moved->sourceText, QStringLiteral("Move me"));
+    QCOMPARE(moved->font.toJson(), fontBefore);
+    QCOMPARE(moved->typography.toJson(moved->fill), typographyBefore);
+    QCOMPARE(moved->fill, fillBefore);
+    QCOMPARE(moved->transform.toJson(), transformBefore);
+    QCOMPARE(moved->effects.toJson(), effectsBefore);
+    QCOMPARE(moved->deformation.toJson(), deformationBefore);
+
+    controller.undoStack()->undo();
+    QVERIFY(controller.document().layerById(sourceLayerId)->objectById(objectId));
+    QVERIFY(!controller.document().layerById(destinationLayerId)->objectById(objectId));
+    QCOMPARE(controller.document().activeLayerId, sourceLayerId);
+    controller.undoStack()->redo();
+    QVERIFY(controller.document().layerById(destinationLayerId)->objectById(objectId));
+    QCOMPARE(controller.document().activeLayerId, destinationLayerId);
+}
+
+void CoreTests::controllerLockedLayerObjectsAreNotEditable()
+{
+    EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(), QStringLiteral("Locked"));
+    QVERIFY(!objectId.isEmpty());
+    TextObject* object = controller.document().objectById(objectId);
+    QVERIFY(object);
+    object->effects.append(std::make_unique<WaveEffect>());
+    const QString effectId = object->effects.at(0)->instanceId;
+    const QPointF oldPosition = object->transform.position;
+    const QString oldText = object->sourceText;
+    controller.setActiveLayerLocked(true);
+    controller.setText(QStringLiteral("Should stay locked"));
+    controller.moveSelectedObjects(QPointF(20.0, 20.0));
+    controller.addDeformationStroke(pushStroke());
+    EffectMaskStroke mask;
+    mask.points = {QPointF(0.0, 0.0)};
+    controller.addEffectMaskStroke(objectId, effectId, mask);
+
+    QCOMPARE(controller.document().objectById(objectId)->sourceText, oldText);
+    QCOMPARE(controller.document().objectById(objectId)->transform.position, oldPosition);
+    QVERIFY(controller.document().objectById(objectId)->deformation.strokes.isEmpty());
+    QVERIFY(controller.document().objectById(objectId)->effects.at(0)->maskStrokes.isEmpty());
+    QVERIFY(!controller.activeObject());
+}
+
+void CoreTests::controllerMaskUsesObjectLocalScale()
+{
+    EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(), QStringLiteral("Masked"));
+    QVERIFY(!objectId.isEmpty());
+    TextObject* object = controller.document().objectById(objectId);
+    QVERIFY(object);
+    object->transform.position = QPointF(160.0, 120.0);
+    object->transform.scale = QPointF(2.0, 2.0);
+    object->effects.append(std::make_unique<WaveEffect>());
+    const QString effectId = object->effects.at(0)->instanceId;
+
+    EffectMaskStroke stroke;
+    stroke.points = {QPointF(180.0, 140.0)};
+    stroke.radius = 20.0;
+    controller.addEffectMaskStroke(objectId, effectId, stroke);
+    QCOMPARE(object->effects.at(0)->maskStrokes.size(), 1);
+    QCOMPARE(object->effects.at(0)->maskStrokes.front().radius, 10.0);
+
+    Document restored;
+    QString error;
+    QVERIFY2(ProjectSerializer::fromJson(ProjectSerializer::toJson(controller.document()),
+                                         &restored,
+                                         &error),
+             qPrintable(error));
+    QCOMPARE(restored.objectById(objectId)->effects.at(0)->maskStrokes.front().radius, 10.0);
+}
+
+void CoreTests::pageReorderIsUndoableAndSerializable()
+{
+    EditorController controller;
+    controller.addPage();
+    controller.addPage();
+    QVERIFY(controller.document().pages.size() == 3);
+    QStringList originalOrder;
+    for (const auto& page : controller.document().pages) {
+        originalOrder.push_back(page->id);
+    }
+    controller.movePage(2, 0);
+    QCOMPARE(controller.document().pages.at(0)->id, originalOrder.at(2));
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().pages.at(0)->id, originalOrder.at(0));
+    controller.undoStack()->redo();
+    QCOMPARE(controller.document().pages.at(0)->id, originalOrder.at(2));
+
+    Document restored;
+    QString error;
+    QVERIFY2(ProjectSerializer::fromJson(ProjectSerializer::toJson(controller.document()),
+                                         &restored,
+                                         &error),
+             qPrintable(error));
+    QCOMPARE(restored.pages.size(), controller.document().pages.size());
+    for (int index = 0; index < static_cast<int>(restored.pages.size()); ++index) {
+        QCOMPARE(restored.pages.at(static_cast<size_t>(index))->id,
+                 controller.document().pages.at(static_cast<size_t>(index))->id);
+    }
+}
+
+void CoreTests::shapingCacheKeyIgnoresFillButTracksLayoutInputs()
+{
+    TextObject object = configuredText(QStringLiteral("Cache key"));
+    const QByteArray original = SceneEvaluator::shapingCacheKey(object);
+    object.fill = QColor(Qt::red);
+    QCOMPARE(SceneEvaluator::shapingCacheKey(object), original);
+    object.sourceText += QStringLiteral(" changed");
+    QVERIFY(SceneEvaluator::shapingCacheKey(object) != original);
+    object.sourceText = QStringLiteral("Cache key");
+    object.typography.trackingEm += 0.01;
+    QVERIFY(SceneEvaluator::shapingCacheKey(object) != original);
+    object.typography.trackingEm = 0.025;
+    object.typography.lineSpacing += 0.1;
+    QVERIFY(SceneEvaluator::shapingCacheKey(object) != original);
+    object.typography.lineSpacing = 1.0;
+    object.font.weight += 100;
+    QVERIFY(SceneEvaluator::shapingCacheKey(object) != original);
 }
 
 void CoreTests::shortcutManagerDetectsConflictsAndPersists()

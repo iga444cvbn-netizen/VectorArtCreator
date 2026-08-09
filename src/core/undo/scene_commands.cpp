@@ -88,6 +88,83 @@ void RemoveTextObjectCommand::redo()
     }
 }
 
+MoveObjectToLayerCommand::MoveObjectToLayerCommand(Document& document,
+                                                   QString objectId,
+                                                   QString sourceLayerId,
+                                                   QString destinationLayerId,
+                                                   int sourceIndex,
+                                                   int destinationIndex,
+                                                   QString oldActiveLayerId,
+                                                   QString newActiveLayerId,
+                                                   TextObject object,
+                                                   DocumentChangeCallback onChanged,
+                                                   QString description)
+    : DocumentCommand(document, std::move(onChanged), description)
+    , m_objectId(std::move(objectId))
+    , m_sourceLayerId(std::move(sourceLayerId))
+    , m_destinationLayerId(std::move(destinationLayerId))
+    , m_sourceIndex(sourceIndex)
+    , m_destinationIndex(destinationIndex)
+    , m_oldActiveLayerId(std::move(oldActiveLayerId))
+    , m_newActiveLayerId(std::move(newActiveLayerId))
+    , m_object(std::move(object))
+{
+}
+
+bool MoveObjectToLayerCommand::removeFromLayer(const QString& layerId)
+{
+    Layer* layer = m_document.layerById(layerId);
+    if (!layer) {
+        return false;
+    }
+    for (auto iterator = layer->objects.begin(); iterator != layer->objects.end(); ++iterator) {
+        if (*iterator && (*iterator)->id == m_objectId) {
+            layer->objects.erase(iterator);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool MoveObjectToLayerCommand::insertIntoLayer(const QString& layerId, int index)
+{
+    Layer* layer = m_document.layerById(layerId);
+    if (!layer || layer->objectById(m_objectId)) {
+        return false;
+    }
+    insertObject(layer, m_object, index);
+    return true;
+}
+
+void MoveObjectToLayerCommand::apply(bool forward)
+{
+    const QString& sourceLayerId = forward ? m_sourceLayerId : m_destinationLayerId;
+    const QString& destinationLayerId = forward ? m_destinationLayerId : m_sourceLayerId;
+    const int destinationIndex = forward ? m_destinationIndex : m_sourceIndex;
+    if (!removeFromLayer(sourceLayerId)) {
+        return;
+    }
+    if (!insertIntoLayer(destinationLayerId, destinationIndex)) {
+        // Keep the command lossless even if the document was changed by an
+        // external caller between undo/redo operations.
+        insertIntoLayer(sourceLayerId, forward ? m_sourceIndex : m_destinationIndex);
+        return;
+    }
+    m_document.activeLayerId = forward ? m_newActiveLayerId : m_oldActiveLayerId;
+    m_document.activeObjectId = m_objectId;
+    notifyChanged();
+}
+
+void MoveObjectToLayerCommand::undo()
+{
+    apply(false);
+}
+
+void MoveObjectToLayerCommand::redo()
+{
+    apply(true);
+}
+
 MoveObjectsCommand::MoveObjectsCommand(Document& document,
                                        QStringList objectIds,
                                        QPointF delta,
@@ -317,6 +394,39 @@ void ReorderLayerCommand::undo()
 }
 
 void ReorderLayerCommand::redo()
+{
+    apply(m_from, m_to);
+}
+
+ReorderPageCommand::ReorderPageCommand(Document& document,
+                                       int from,
+                                       int to,
+                                       DocumentChangeCallback onChanged,
+                                       QString description)
+    : DocumentCommand(document, std::move(onChanged), description)
+    , m_from(from)
+    , m_to(to)
+{
+}
+
+void ReorderPageCommand::apply(int from, int to)
+{
+    if (from < 0 || from >= static_cast<int>(m_document.pages.size())
+        || to < 0 || to >= static_cast<int>(m_document.pages.size()) || from == to) {
+        return;
+    }
+    auto page = std::move(m_document.pages[static_cast<size_t>(from)]);
+    m_document.pages.erase(m_document.pages.begin() + from);
+    m_document.pages.insert(m_document.pages.begin() + to, std::move(page));
+    notifyChanged();
+}
+
+void ReorderPageCommand::undo()
+{
+    apply(m_to, m_from);
+}
+
+void ReorderPageCommand::redo()
 {
     apply(m_from, m_to);
 }

@@ -73,6 +73,8 @@ public:
     void clearSelection();
     void selectObjectsInRect(const QRectF& rect, bool additive = false);
     [[nodiscard]] QString createTextObject(const QPointF& position, const QString& text = {});
+    void cancelNewTextObject(const QString& objectId);
+    void deleteObject(const QString& objectId);
     void deleteSelectedObjects();
     void duplicateSelectedObjects();
     void moveSelectedObjects(const QPointF& delta);
@@ -87,6 +89,10 @@ public:
     void removeActiveLayer();
     void renameActiveLayer(const QString& name);
     void moveLayer(int from, int to);
+    void moveActiveLayerUp();
+    void moveActiveLayerDown();
+    void movePage(int from, int to);
+    void moveObjectToLayer(const QString& objectId, const QString& destinationLayerId);
     void setActiveLayerVisible(bool visible);
     void setActiveLayerLocked(bool locked);
     void switchLayer(const QString& layerId);

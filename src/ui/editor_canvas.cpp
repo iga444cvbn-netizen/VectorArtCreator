@@ -277,6 +277,9 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
         if (!object.visible || !object.geometry.hasVisibleGeometry()) {
             continue;
         }
+        if (object.objectId == m_editingObjectId && isTextEditing()) {
+            continue;
+        }
         painter.setPen(Qt::NoPen);
         painter.setBrush(object.fill.isValid() ? object.fill : m_fill);
         painter.drawPath(object.geometry.combinedPath());
@@ -675,6 +678,13 @@ bool EditorCanvas::eventFilter(QObject* watched, QEvent* event)
         auto* keyEvent = static_cast<QKeyEvent*>(event);
         if (keyEvent->key() == Qt::Key_Escape && !keyEvent->isAutoRepeat()) {
             finishTextEditing();
+            return true;
+        }
+        if (keyEvent->key() == Qt::Key_Z
+            && keyEvent->modifiers().testFlag(Qt::ControlModifier)
+            && keyEvent->modifiers().testFlag(Qt::ShiftModifier)
+            && !keyEvent->isAutoRepeat()) {
+            m_textEditor->redo();
             return true;
         }
     }

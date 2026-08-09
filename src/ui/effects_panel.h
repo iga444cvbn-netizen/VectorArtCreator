@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/document/document.h"
+#include "ui/collapsible_section.h"
 #include "ui/slider_spin_box.h"
 
 #include <QComboBox>
@@ -13,6 +14,7 @@
 #include <QWidget>
 
 class QLabel;
+class QCheckBox;
 
 namespace vt {
 
@@ -76,6 +78,8 @@ private:
     QVector<QWidget*> m_parameterControls;
     QDoubleSpinBox* m_masterStrengthSpin = nullptr;
     SliderSpinBox* m_masterStrengthSlider = nullptr;
+    QCheckBox* m_effectEnabledCheck = nullptr;
+    CollapsibleSection* m_advancedSection = nullptr;
     QComboBox* m_scopeCombo = nullptr;
     QLabel* m_scopeLabel = nullptr;
     QPushButton* m_resetScopeButton = nullptr;

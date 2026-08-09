@@ -11,6 +11,7 @@
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QLineF>
 #include <QMimeData>
 #include <QStandardPaths>
 
@@ -574,6 +575,57 @@ QString EditorController::createTextObject(const QPointF& position, const QStrin
     return objectId;
 }
 
+void EditorController::cancelNewTextObject(const QString& objectId)
+{
+    if (objectId.isEmpty()) {
+        return;
+    }
+    const TextObject* object = m_document.objectById(objectId);
+    const Layer* layer = currentPageLayerForObject(m_document, objectId);
+    if (!object || !layer || !layer->visible || layer->locked || !object->sourceText.isEmpty()) {
+        return;
+    }
+
+    if (m_undoStack.index() == m_undoStack.count()
+        && m_undoStack.count() > 0
+        && m_undoStack.undoText() == QStringLiteral("Create text object")) {
+        m_undoStack.undo();
+        m_selectionModel->remove(objectId);
+        synchronizeSelectionWithDocument();
+        emit documentChanged();
+        return;
+    }
+    deleteObject(objectId);
+}
+
+void EditorController::deleteObject(const QString& objectId)
+{
+    Layer* layer = currentPageLayerForObject(m_document, objectId);
+    if (!layer || !layer->visible || layer->locked) {
+        return;
+    }
+    TextObject* object = layer->objectById(objectId);
+    if (!object) {
+        return;
+    }
+    int index = -1;
+    for (int objectIndex = 0; objectIndex < static_cast<int>(layer->objects.size()); ++objectIndex) {
+        if (layer->objects[static_cast<size_t>(objectIndex)]
+            && layer->objects[static_cast<size_t>(objectIndex)]->id == objectId) {
+            index = objectIndex;
+            break;
+        }
+    }
+    if (index < 0) {
+        return;
+    }
+    m_undoStack.push(new RemoveTextObjectCommand(
+        m_document, layer->id, *object, index, [this] { onCommandChanged(); }));
+    m_selectionModel->remove(objectId);
+    synchronizeSelectionWithDocument();
+    emit documentChanged();
+}
+
 void EditorController::deleteSelectedObjects()
 {
     const QStringList ids = selectedObjectIds();
@@ -825,6 +877,16 @@ void EditorController::switchPage(const QString& pageId)
     emit documentChanged();
 }
 
+void EditorController::movePage(int from, int to)
+{
+    if (from < 0 || from >= static_cast<int>(m_document.pages.size())
+        || to < 0 || to >= static_cast<int>(m_document.pages.size()) || from == to) {
+        return;
+    }
+    m_undoStack.push(new ReorderPageCommand(
+        m_document, from, to, [this] { onCommandChanged(); }));
+}
+
 void EditorController::addLayer()
 {
     Page* page = m_document.currentPage();
@@ -910,6 +972,82 @@ void EditorController::moveLayer(int from, int to)
     }
     m_undoStack.push(new ReorderLayerCommand(
         m_document, page->id, from, to, [this] { onCommandChanged(); }));
+}
+
+void EditorController::moveActiveLayerUp()
+{
+    Page* page = m_document.currentPage();
+    if (!page) {
+        return;
+    }
+    for (int index = 0; index < static_cast<int>(page->layers.size()); ++index) {
+        if (page->layers[static_cast<size_t>(index)]
+            && page->layers[static_cast<size_t>(index)]->id == m_document.activeLayerId) {
+            moveLayer(index, index - 1);
+            return;
+        }
+    }
+}
+
+void EditorController::moveActiveLayerDown()
+{
+    Page* page = m_document.currentPage();
+    if (!page) {
+        return;
+    }
+    for (int index = 0; index < static_cast<int>(page->layers.size()); ++index) {
+        if (page->layers[static_cast<size_t>(index)]
+            && page->layers[static_cast<size_t>(index)]->id == m_document.activeLayerId) {
+            moveLayer(index, index + 1);
+            return;
+        }
+    }
+}
+
+void EditorController::moveObjectToLayer(const QString& objectId,
+                                          const QString& destinationLayerId)
+{
+    Page* page = m_document.currentPage();
+    if (!page || objectId.isEmpty() || destinationLayerId.isEmpty()) {
+        return;
+    }
+    Layer* sourceLayer = currentPageLayerForObject(m_document, objectId);
+    Layer* destinationLayer = page->layerById(destinationLayerId);
+    if (!sourceLayer || !destinationLayer || sourceLayer == destinationLayer
+        || !sourceLayer->visible || sourceLayer->locked
+        || !destinationLayer->visible || destinationLayer->locked) {
+        return;
+    }
+    TextObject* object = sourceLayer->objectById(objectId);
+    if (!object) {
+        return;
+    }
+    int sourceIndex = -1;
+    for (int index = 0; index < static_cast<int>(sourceLayer->objects.size()); ++index) {
+        if (sourceLayer->objects[static_cast<size_t>(index)]
+            && sourceLayer->objects[static_cast<size_t>(index)]->id == objectId) {
+            sourceIndex = index;
+            break;
+        }
+    }
+    if (sourceIndex < 0) {
+        return;
+    }
+
+    const QString oldActiveLayerId = m_document.activeLayerId;
+    m_selectionModel->selectSingle(objectId);
+    m_document.activeObjectId = objectId;
+    m_undoStack.push(new MoveObjectToLayerCommand(
+        m_document,
+        objectId,
+        sourceLayer->id,
+        destinationLayer->id,
+        sourceIndex,
+        static_cast<int>(destinationLayer->objects.size()),
+        oldActiveLayerId,
+        destinationLayer->id,
+        *object,
+        [this] { onCommandChanged(); }));
 }
 
 void EditorController::setActiveLayerVisible(bool visible)
@@ -1128,6 +1266,11 @@ void EditorController::addEffectMaskStroke(const QString& objectId,
         for (QPointF& point : localStroke.points) {
             point = inverse.map(point);
         }
+        const QPointF origin = transform.map(QPointF());
+        const qreal scaleX = QLineF(origin, transform.map(QPointF(1.0, 0.0))).length();
+        const qreal scaleY = QLineF(origin, transform.map(QPointF(0.0, 1.0))).length();
+        const qreal averageScale = std::sqrt(qMax<qreal>(0.0001, scaleX * scaleY));
+        localStroke.radius = qMax<qreal>(0.1, localStroke.radius / averageScale);
     }
     localStroke.opacity = qBound<qreal>(0.0, localStroke.opacity, 1.0);
     localStroke.hardness = qBound<qreal>(0.0, localStroke.hardness, 1.0);

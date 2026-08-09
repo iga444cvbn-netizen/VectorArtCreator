@@ -1,9 +1,11 @@
 #include "ui/layers_panel.h"
 
+#include <QAction>
 #include <QHBoxLayout>
 #include <QAbstractItemView>
 #include <QInputDialog>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QTreeWidget>
@@ -27,11 +29,15 @@ LayersPanel::LayersPanel(QWidget* parent)
     auto* buttons = new QHBoxLayout();
     auto* add = new QPushButton(QStringLiteral("+"), this);
     auto* remove = new QPushButton(QStringLiteral("−"), this);
+    auto* moveUp = new QPushButton(QStringLiteral("Up"), this);
+    auto* moveDown = new QPushButton(QStringLiteral("Down"), this);
     auto* rename = new QPushButton(QStringLiteral("Rename"), this);
     auto* visible = new QPushButton(QStringLiteral("Visible"), this);
     auto* lock = new QPushButton(QStringLiteral("Lock"), this);
     buttons->addWidget(add);
     buttons->addWidget(remove);
+    buttons->addWidget(moveUp);
+    buttons->addWidget(moveDown);
     buttons->addWidget(rename);
     buttons->addWidget(visible);
     buttons->addWidget(lock);
@@ -54,6 +60,8 @@ LayersPanel::LayersPanel(QWidget* parent)
             });
     connect(add, &QPushButton::clicked, this, &LayersPanel::addLayerRequested);
     connect(remove, &QPushButton::clicked, this, &LayersPanel::removeLayerRequested);
+    connect(moveUp, &QPushButton::clicked, this, &LayersPanel::moveLayerUpRequested);
+    connect(moveDown, &QPushButton::clicked, this, &LayersPanel::moveLayerDownRequested);
     connect(rename, &QPushButton::clicked, this, [this] {
         QTreeWidgetItem* item = m_tree->currentItem();
         if (!item || item->data(0, Qt::UserRole).toString().isEmpty()) {
@@ -81,6 +89,49 @@ LayersPanel::LayersPanel(QWidget* parent)
             const bool next = item->data(0, Qt::UserRole + 3).toBool();
             emit lockToggled(!next);
         }
+    });
+    m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_tree, &QTreeWidget::customContextMenuRequested, this, [this](const QPoint& position) {
+        QTreeWidgetItem* item = m_tree->itemAt(position);
+        if (!item) {
+            return;
+        }
+        const QString objectId = item->data(0, Qt::UserRole + 1).toString();
+        if (objectId.isEmpty()) {
+            return;
+        }
+        QTreeWidgetItem* sourceLayerItem = item->parent();
+        if (!sourceLayerItem) {
+            return;
+        }
+        const QString sourceLayerId = sourceLayerItem->data(0, Qt::UserRole).toString();
+        const bool sourceEditable = sourceLayerItem->data(0, Qt::UserRole + 2).toBool()
+            && !sourceLayerItem->data(0, Qt::UserRole + 3).toBool();
+        m_tree->setCurrentItem(item);
+
+        QMenu menu(this);
+        QMenu* moveMenu = menu.addMenu(QStringLiteral("Move to Layer"));
+        bool hasDestination = false;
+        for (int index = 0; index < m_tree->topLevelItemCount(); ++index) {
+            QTreeWidgetItem* target = m_tree->topLevelItem(index);
+            if (!target) {
+                continue;
+            }
+            const QString targetLayerId = target->data(0, Qt::UserRole).toString();
+            if (targetLayerId.isEmpty() || targetLayerId == sourceLayerId) {
+                continue;
+            }
+            QAction* action = moveMenu->addAction(target->text(0));
+            const bool destinationEditable = target->data(0, Qt::UserRole + 2).toBool()
+                && !target->data(0, Qt::UserRole + 3).toBool();
+            action->setEnabled(sourceEditable && destinationEditable);
+            hasDestination = hasDestination || action->isEnabled();
+            connect(action, &QAction::triggered, this, [this, objectId, targetLayerId] {
+                emit moveObjectRequested(objectId, targetLayerId);
+            });
+        }
+        moveMenu->setEnabled(hasDestination);
+        menu.exec(m_tree->viewport()->mapToGlobal(position));
     });
 }
 

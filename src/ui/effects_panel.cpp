@@ -2,6 +2,7 @@
 
 #include <QDoubleSpinBox>
 #include <QAbstractItemView>
+#include <QCheckBox>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -124,10 +125,14 @@ EffectsPanel::EffectsPanel(QWidget* parent)
             }
         }
         const int index = m_addEffectCombo->findData(currentType);
-        m_addEffectCombo->setCurrentIndex(index >= 0 ? index : 0);
+        m_addEffectCombo->setCurrentIndex(index >= 0 ? index : -1);
+        m_addEffectButton->setEnabled(m_addEffectCombo->count() > 0 && m_currentObject != nullptr);
     });
     connect(m_addEffectButton, &QPushButton::clicked, this, [this] {
-        emit addEffectRequested(m_addEffectCombo->currentData().toString());
+        const QString typeId = m_addEffectCombo->currentData().toString();
+        if (!typeId.isEmpty()) {
+            emit addEffectRequested(typeId);
+        }
     });
     connect(m_effectList, &QListWidget::itemChanged, this, &EffectsPanel::handleEffectItemChanged);
     connect(m_effectList, &QListWidget::currentRowChanged, this, [this](int row) {
@@ -179,6 +184,7 @@ void EffectsPanel::refresh(const TextObject* object, const QStringList& presetNa
 {
     m_currentObject = object;
     setEnabled(object != nullptr);
+    m_addEffectButton->setEnabled(object != nullptr && m_addEffectCombo->count() > 0);
     const QString previousId = m_selectedEffectId;
     {
         const QSignalBlocker blocker(m_effectList);
@@ -264,6 +270,20 @@ void EffectsPanel::rebuildParameterEditor()
     m_parameterIndex = index;
     m_parameterType = effect->typeId();
 
+    m_effectEnabledCheck = new QCheckBox(QStringLiteral("Enabled"), m_parameterHost);
+    m_effectEnabledCheck->setChecked(effect->enabled);
+    m_parameterHostLayout->addWidget(m_effectEnabledCheck);
+    const QString effectId = m_selectedEffectId;
+    connect(m_effectEnabledCheck, &QCheckBox::toggled, this,
+            [this, effectId](bool enabled) {
+                if (m_currentObject) {
+                    const int currentIndex = m_currentObject->effects.indexByInstanceId(effectId);
+                    if (currentIndex >= 0) {
+                        emit effectEnabledChanged(currentIndex, enabled);
+                    }
+                }
+            });
+
     auto* masterRow = new QWidget(m_parameterHost);
     auto* masterLayout = new QHBoxLayout(masterRow);
     masterLayout->setContentsMargins(0, 0, 0, 0);
@@ -275,7 +295,6 @@ void EffectsPanel::rebuildParameterEditor()
     m_masterStrengthSlider->setValue(effect->masterStrength);
     masterLayout->addWidget(m_masterStrengthSlider, 1);
     m_parameterHostLayout->addWidget(masterRow);
-    const QString effectId = m_selectedEffectId;
     connect(m_masterStrengthSlider, &SliderSpinBox::valueChanged, this,
             [this, effectId](double value) {
                 if (m_currentObject) {
@@ -316,6 +335,10 @@ void EffectsPanel::rebuildParameterEditor()
     }
     m_scopeLabel->setStyleSheet(QStringLiteral("color: #9da8b8;"));
     m_parameterHostLayout->addWidget(m_scopeLabel);
+
+    auto* advancedHost = new QWidget(m_parameterHost);
+    auto* advancedLayout = new QVBoxLayout(advancedHost);
+    advancedLayout->setContentsMargins(0, 0, 0, 0);
 
     for (const EffectParameter& parameter : effect->parameterDefinitions()) {
         auto* row = new QWidget(m_parameterHost);
@@ -378,9 +401,17 @@ void EffectsPanel::rebuildParameterEditor()
                         }
                     });
         }
-        m_parameterHostLayout->addWidget(row);
+        advancedLayout->addWidget(row);
         m_parameterControls.push_back(control);
     }
+
+    m_advancedSection = new CollapsibleSection(
+        QStringLiteral("effects/%1/advancedExpanded").arg(effect->typeId()),
+        QStringLiteral("Advanced"),
+        advancedHost,
+        false,
+        m_parameterHost);
+    m_parameterHostLayout->addWidget(m_advancedSection);
 
     m_upButton->setEnabled(index > 0);
     m_downButton->setEnabled(index + 1 < m_currentObject->effects.size());
@@ -413,6 +444,10 @@ void EffectsPanel::updateParameterEditorValues()
     if (m_masterStrengthSlider) {
         const QSignalBlocker blocker(m_masterStrengthSlider);
         m_masterStrengthSlider->setValue(effect->masterStrength);
+    }
+    if (m_effectEnabledCheck) {
+        const QSignalBlocker blocker(m_effectEnabledCheck);
+        m_effectEnabledCheck->setChecked(effect->enabled);
     }
 }
 
@@ -475,6 +510,8 @@ void EffectsPanel::clearParameterEditor()
     m_parameterControls.clear();
     m_masterStrengthSpin = nullptr;
     m_masterStrengthSlider = nullptr;
+    m_effectEnabledCheck = nullptr;
+    m_advancedSection = nullptr;
     m_scopeCombo = nullptr;
     m_scopeLabel = nullptr;
     m_resetScopeButton = nullptr;

@@ -185,6 +185,12 @@ only one page evaluation is active and only the newest pending snapshot is
 retained. Stale generations are discarded before publication. A preview stroke
 is evaluated only on the final scene copy and is never serialized.
 
+Independent text objects can evaluate in parallel. A single very complex text
+object still applies its ordered effect and deformation pipeline mostly
+sequentially; this is an intentional Phase 3 limitation. Interactive previews
+reuse the object's upstream cached stages and do not claim multicore execution
+inside one object's ordered deformation stack.
+
 ## Undo/redo and clean state
 
 `src/core/undo/document_commands.*` and `scene_commands.*` contain focused

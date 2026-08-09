@@ -3,6 +3,8 @@
 #include "core/document/document.h"
 #include "core/scene/scene_geometry.h"
 
+#include <QByteArray>
+
 namespace vt {
 
 class SceneEvaluator {
@@ -10,6 +12,7 @@ public:
     // The page is passed by value by asynchronous callers. This makes the
     // worker independent from the mutable editor document.
     [[nodiscard]] static SceneGeometry evaluate(const Page& page);
+    [[nodiscard]] static QByteArray shapingCacheKey(const TextObject& object);
 
 private:
     [[nodiscard]] static VectorGeometry evaluateObject(const TextObject& object,

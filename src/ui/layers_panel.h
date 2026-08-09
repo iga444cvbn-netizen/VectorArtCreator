@@ -23,9 +23,12 @@ signals:
     void objectSelected(const QString& objectId);
     void addLayerRequested();
     void removeLayerRequested();
+    void moveLayerUpRequested();
+    void moveLayerDownRequested();
     void renameLayerRequested(const QString& name);
     void visibilityToggled(bool visible);
     void lockToggled(bool locked);
+    void moveObjectRequested(const QString& objectId, const QString& destinationLayerId);
 
 private:
     QTreeWidget* m_tree = nullptr;

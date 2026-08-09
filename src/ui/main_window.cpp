@@ -18,6 +18,7 @@
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QStringList>
 #include <QToolBar>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -147,6 +148,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(removePageButton, &QToolButton::clicked,
             m_controller, &EditorController::removeCurrentPage);
     connect(m_pageTabs, &QTabBar::currentChanged, this, &MainWindow::pageTabChanged);
+    connect(m_pageTabs, &QTabBar::tabMoved, m_controller, &EditorController::movePage);
 
     connect(m_toolPalette, &ToolPalette::toolSelected,
             m_controller, &EditorController::setTool);
@@ -217,6 +219,8 @@ MainWindow::MainWindow(QWidget* parent)
         const QString objectId = m_controller->createTextObject(position);
         const TextObject* object = m_controller->activeObject();
         if (object && object->id == objectId) {
+            m_newTextEditObjectId = objectId;
+            m_newTextEditTouched = false;
             m_canvas->beginTextEditing(objectId,
                                        object->sourceText,
                                        object->font.toQFont(object->typography.fontSize),
@@ -238,6 +242,9 @@ MainWindow::MainWindow(QWidget* parent)
     });
     connect(m_canvas, &EditorCanvas::textEdited, this,
             [this](const QString& objectId, const QString& text) {
+                if (objectId == m_newTextEditObjectId) {
+                    m_newTextEditTouched = true;
+                }
                 if (m_controller->selectionModel()->activeObjectId() == objectId) {
                     m_controller->setText(text);
                 }
@@ -249,7 +256,7 @@ MainWindow::MainWindow(QWidget* parent)
                 }
             });
     connect(m_canvas, &EditorCanvas::textEditingChanged,
-            this, &MainWindow::setEditingShortcutsEnabled);
+            this, &MainWindow::handleTextEditingChanged);
     connect(m_canvas, &EditorCanvas::effectMaskStrokeReady, this,
             [this](const QString& objectId, const EffectMaskStroke& stroke) {
                 const QString effectId = m_effectsPanel->selectedEffectId();
@@ -374,12 +381,18 @@ MainWindow::MainWindow(QWidget* parent)
             m_controller, &EditorController::addLayer);
     connect(m_layersPanel, &LayersPanel::removeLayerRequested,
             m_controller, &EditorController::removeActiveLayer);
+    connect(m_layersPanel, &LayersPanel::moveLayerUpRequested,
+            m_controller, &EditorController::moveActiveLayerUp);
+    connect(m_layersPanel, &LayersPanel::moveLayerDownRequested,
+            m_controller, &EditorController::moveActiveLayerDown);
     connect(m_layersPanel, &LayersPanel::renameLayerRequested,
             m_controller, &EditorController::renameActiveLayer);
     connect(m_layersPanel, &LayersPanel::visibilityToggled,
             m_controller, &EditorController::setActiveLayerVisible);
     connect(m_layersPanel, &LayersPanel::lockToggled,
             m_controller, &EditorController::setActiveLayerLocked);
+    connect(m_layersPanel, &LayersPanel::moveObjectRequested,
+            m_controller, &EditorController::moveObjectToLayer);
 
     connect(m_shortcutManager, &ShortcutManager::shortcutsChanged, this, [this] {
         for (auto iterator = m_actions.cbegin(); iterator != m_actions.cend(); ++iterator) {
@@ -481,9 +494,7 @@ void MainWindow::refreshUi()
                                 ? QStringLiteral("Untitled Vector Typography Project")
                                 : m_controller->document().title,
                             m_controller->isModified() ? QStringLiteral("* ") : QString()));
-    if (m_canvas->isTextEditing()) {
-        setEditingShortcutsEnabled(false);
-    }
+    setGlobalEditorShortcutsEnabled(!m_canvas->isTextEditing());
 }
 
 void MainWindow::refreshFonts()
@@ -875,18 +886,59 @@ void MainWindow::applyNavigationSettings()
                                     settings.value(QStringLiteral("navigation/invertZoom"), false).toBool());
 }
 
-void MainWindow::setEditingShortcutsEnabled(bool enabled)
+void MainWindow::handleTextEditingChanged(bool editing)
+{
+    if (!editing) {
+        const QString objectId = m_newTextEditObjectId;
+        const bool touched = m_newTextEditTouched;
+        m_newTextEditObjectId.clear();
+        m_newTextEditTouched = false;
+        if (!touched) {
+            const TextObject* object = m_controller->document().objectById(objectId);
+            if (object && object->sourceText.isEmpty()) {
+                m_controller->cancelNewTextObject(objectId);
+            }
+        }
+    }
+    setGlobalEditorShortcutsEnabled(!editing);
+}
+
+void MainWindow::setGlobalEditorShortcutsEnabled(bool enabled)
 {
     for (QAction* action : std::as_const(m_toolActions)) {
         action->setEnabled(enabled);
     }
-    if (m_copyAction) m_copyAction->setEnabled(enabled);
-    if (m_cutAction) m_cutAction->setEnabled(enabled);
-    if (m_pasteAction) m_pasteAction->setEnabled(enabled);
-    if (m_selectAllAction) m_selectAllAction->setEnabled(enabled);
-    if (m_actions.contains(QStringLiteral("edit.undo"))) {
-        m_actions.value(QStringLiteral("edit.undo"))->setEnabled(enabled);
-        m_actions.value(QStringLiteral("edit.redo"))->setEnabled(enabled);
+
+    // These actions belong to the editor canvas, not to the in-place text
+    // document.  Disabling their application/window shortcuts lets the
+    // focused QPlainTextEdit receive ordinary letters and its native editing
+    // commands.  File commands remain available while text is being edited.
+    const QStringList editorActionIds = {
+        QStringLiteral("edit.copy"),
+        QStringLiteral("edit.cut"),
+        QStringLiteral("edit.paste"),
+        QStringLiteral("edit.selectAll"),
+        QStringLiteral("edit.duplicate"),
+        QStringLiteral("edit.delete"),
+        QStringLiteral("edit.undo"),
+        QStringLiteral("edit.redo"),
+        QStringLiteral("view.fitPage"),
+        QStringLiteral("view.zoomIn"),
+        QStringLiteral("view.zoomOut"),
+        QStringLiteral("view.zoom100"),
+        QStringLiteral("page.new"),
+        QStringLiteral("page.next"),
+        QStringLiteral("page.previous"),
+        QStringLiteral("layer.new"),
+        QStringLiteral("brush.radiusDecrease"),
+        QStringLiteral("brush.radiusIncrease"),
+        QStringLiteral("tools.refreshFonts"),
+        QStringLiteral("tools.preferences"),
+    };
+    for (const QString& actionId : editorActionIds) {
+        if (QAction* action = m_actions.value(actionId, nullptr)) {
+            action->setEnabled(enabled);
+        }
     }
 }
 

@@ -41,6 +41,38 @@ private:
     int m_index = -1;
 };
 
+class MoveObjectToLayerCommand final : public DocumentCommand {
+public:
+    MoveObjectToLayerCommand(Document& document,
+                             QString objectId,
+                             QString sourceLayerId,
+                             QString destinationLayerId,
+                             int sourceIndex,
+                             int destinationIndex,
+                             QString oldActiveLayerId,
+                             QString newActiveLayerId,
+                             TextObject object,
+                             DocumentChangeCallback onChanged,
+                             QString description = QStringLiteral("Move object to layer"));
+
+    void undo() override;
+    void redo() override;
+
+private:
+    bool removeFromLayer(const QString& layerId);
+    bool insertIntoLayer(const QString& layerId, int index);
+    void apply(bool forward);
+
+    QString m_objectId;
+    QString m_sourceLayerId;
+    QString m_destinationLayerId;
+    int m_sourceIndex = -1;
+    int m_destinationIndex = -1;
+    QString m_oldActiveLayerId;
+    QString m_newActiveLayerId;
+    TextObject m_object;
+};
+
 class MoveObjectsCommand final : public DocumentCommand {
 public:
     MoveObjectsCommand(Document& document,
@@ -155,6 +187,24 @@ private:
     void apply(int from, int to);
 
     QString m_pageId;
+    int m_from = -1;
+    int m_to = -1;
+};
+
+class ReorderPageCommand final : public DocumentCommand {
+public:
+    ReorderPageCommand(Document& document,
+                       int from,
+                       int to,
+                       DocumentChangeCallback onChanged,
+                       QString description = QStringLiteral("Reorder pages"));
+
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(int from, int to);
+
     int m_from = -1;
     int m_to = -1;
 };

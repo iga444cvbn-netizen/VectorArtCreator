@@ -56,10 +56,28 @@ QByteArray hashKey(const QByteArray& value)
 
 QByteArray shapingKey(const TextObject& object)
 {
-    QByteArray key = object.sourceText.toUtf8();
-    key += QJsonDocument(object.font.toJson()).toJson(QJsonDocument::Compact);
-    key += QJsonDocument(object.typography.toJson(object.fill)).toJson(QJsonDocument::Compact);
-    return hashKey(QString::fromUtf8(key));
+    QByteArray key;
+    key += QByteArrayLiteral("text=");
+    key += object.sourceText.toUtf8();
+    key += '\0';
+    key += QByteArrayLiteral("family=");
+    key += object.font.family.toUtf8();
+    key += '\0';
+    key += QByteArrayLiteral("style=");
+    key += object.font.styleName.toUtf8();
+    key += '\0';
+    key += QByteArrayLiteral("weight=");
+    key += QByteArray::number(object.font.weight);
+    key += '\0';
+    key += QByteArrayLiteral("fontSize=");
+    key += QByteArray::number(object.typography.fontSize, 'g', 16);
+    key += '\0';
+    key += QByteArrayLiteral("trackingEm=");
+    key += QByteArray::number(object.typography.trackingEm, 'g', 16);
+    key += '\0';
+    key += QByteArrayLiteral("lineSpacing=");
+    key += QByteArray::number(object.typography.lineSpacing, 'g', 16);
+    return hashKey(key);
 }
 
 QByteArray effectsKey(const TextObject& object)
@@ -90,7 +108,7 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
         workerCache.clear();
     }
     CachedObjectStages& cache = workerCache[object.id];
-    const QByteArray currentShapingKey = shapingKey(object);
+    const QByteArray currentShapingKey = SceneEvaluator::shapingCacheKey(object);
     if (cache.shapingKey != currentShapingKey) {
         cache.shaped = workerTextEngine.shape(object);
         cache.shapingKey = currentShapingKey;
@@ -132,6 +150,11 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
 }
 
 } // namespace
+
+QByteArray SceneEvaluator::shapingCacheKey(const TextObject& object)
+{
+    return shapingKey(object);
+}
 
 VectorGeometry SceneEvaluator::evaluateObject(const TextObject& object,
                                                QString* warning,

@@ -51,7 +51,8 @@ private:
     [[nodiscard]] bool maybeSave();
     void applyTheme();
     void applyNavigationSettings();
-    void setEditingShortcutsEnabled(bool enabled);
+    void setGlobalEditorShortcutsEnabled(bool enabled);
+    void handleTextEditingChanged(bool editing);
 
     EditorController* m_controller = nullptr;
     EditorCanvas* m_canvas = nullptr;
@@ -72,6 +73,8 @@ private:
     QAction* m_selectAllAction = nullptr;
     QVector<QAction*> m_toolActions;
     QHash<QString, QAction*> m_actions;
+    QString m_newTextEditObjectId;
+    bool m_newTextEditTouched = false;
 };
 
 } // namespace vt
