@@ -657,8 +657,8 @@ void CoreTests::shapePushBendsContours()
 {
     VectorGeometry original = rectangleGeometry();
     DeformationStroke stroke = pushStroke();
-    stroke.samples = {{QPointF(10.0, 0.0), QPointF(0.0, 8.0), 1.0}};
-    stroke.radius = 16.0;
+    stroke.samples = {{QPointF(2.0, 0.0), QPointF(0.0, 8.0), 1.0}};
+    stroke.radius = 14.0;
     ManualDeformation deformation;
     deformation.strokes.push_back(stroke);
 
@@ -684,16 +684,16 @@ void CoreTests::radialBrushModesMoveInExpectedDirections()
     stroke.mode = BrushMode::Inflate;
     inflate.strokes.push_back(stroke);
     VectorGeometry inflated = rectangleGeometry();
-    const QRectF originalBounds = inflated.bounds;
+    const QRectF originalBounds = inflated.pieces.first().path.boundingRect();
     inflate.apply(inflated);
-    QVERIFY(inflated.bounds.width() > originalBounds.width());
+    QVERIFY(inflated.pieces.first().path.boundingRect().width() > originalBounds.width());
 
     ManualDeformation pinch;
     stroke.mode = BrushMode::Pinch;
     pinch.strokes.push_back(stroke);
     VectorGeometry pinched = rectangleGeometry();
     pinch.apply(pinched);
-    QVERIFY(pinched.bounds.width() < originalBounds.width());
+    QVERIFY(pinched.pieces.first().path.boundingRect().width() < originalBounds.width());
 
     ManualDeformation pull;
     stroke.mode = BrushMode::Pull;
