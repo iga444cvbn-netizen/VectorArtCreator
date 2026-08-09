@@ -4,6 +4,7 @@
 
 #include <QFontDatabase>
 #include <QFontInfo>
+#include <QFontMetricsF>
 #include <QList>
 #include <QStringList>
 #include <QTextLayout>
@@ -43,16 +44,31 @@ qreal resolvedRawFontPixelSize(const QRawFont& rawFont, const QFont& font)
     // resolved size preserves the raw-font metric source without falling back
     // to a hard-coded DPI or document font size.
     const int resolvedPixelSize = QFontInfo(font).pixelSize();
-    if (resolvedPixelSize <= 0) {
-        return 0.0;
+    if (resolvedPixelSize > 0) {
+        QRawFont scaledRawFont = rawFont;
+        scaledRawFont.setPixelSize(resolvedPixelSize);
+        if (scaledRawFont.isValid() && std::isfinite(scaledRawFont.pixelSize())
+            && scaledRawFont.pixelSize() > 0.0) {
+            return scaledRawFont.pixelSize();
+        }
     }
-    QRawFont scaledRawFont = rawFont;
-    scaledRawFont.setPixelSize(resolvedPixelSize);
-    if (!scaledRawFont.isValid() || !std::isfinite(scaledRawFont.pixelSize())
-        || scaledRawFont.pixelSize() <= 0.0) {
-        return 0.0;
+
+    // If the platform font database cannot report a pixel size (the Qt
+    // offscreen plugin does this on some Windows runners), normalize the same
+    // physical raw font to one pixel and recover the current em scale from
+    // Qt's resolved screen-font ascent. This remains a raw-font metric
+    // calculation: the normalized raw ascent supplies the font's design
+    // ratio, while QFontMetricsF supplies the backend's resolved logical size.
+    QRawFont normalizedRawFont = rawFont;
+    normalizedRawFont.setPixelSize(1.0);
+    const qreal normalizedAscent = normalizedRawFont.ascent();
+    const qreal resolvedAscent = QFontMetricsF(font).ascent();
+    if (normalizedRawFont.isValid() && std::isfinite(normalizedAscent)
+        && normalizedAscent > 0.0 && std::isfinite(resolvedAscent)
+        && resolvedAscent > 0.0) {
+        return resolvedAscent / normalizedAscent;
     }
-    return scaledRawFont.pixelSize();
+    return 0.0;
 }
 
 void recordFallbackFont(ShapedText* result, const QRawFont& rawFont, int glyphCount)
