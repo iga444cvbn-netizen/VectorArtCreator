@@ -49,6 +49,7 @@ bool ShortcutManager::setShortcut(const QString& commandId,
     binding.action->setShortcut(sequence);
     QSettings settings;
     settings.setValue(QStringLiteral("shortcuts/%1").arg(commandId), sequence.toString());
+    settings.sync();
     emit shortcutsChanged();
     return true;
 }
@@ -84,6 +85,7 @@ void ShortcutManager::resetToDefaults()
         settings.setValue(QStringLiteral("shortcuts/%1").arg(iterator.key()),
                           iterator.value().sequence.toString());
     }
+    settings.sync();
     emit shortcutsChanged();
 }
 
