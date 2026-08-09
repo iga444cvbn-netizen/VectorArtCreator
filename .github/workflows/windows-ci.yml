@@ -76,8 +76,10 @@ jobs:
           $testExecutable = Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_tests.exe'
           $testStdout = Join-Path $env:RUNNER_TEMP 'vector_typography_tests.stdout.txt'
           $testStderr = Join-Path $env:RUNNER_TEMP 'vector_typography_tests.stderr.txt'
+          $testReport = Join-Path $env:RUNNER_TEMP 'vector_typography_tests.report.txt'
           Write-Host "Running the test executable directly for process-level diagnostics: $testExecutable"
           $testProcess = Start-Process -FilePath $testExecutable -Wait -PassThru -NoNewWindow `
+            -ArgumentList @('-o', "$testReport,txt") `
             -RedirectStandardOutput $testStdout -RedirectStandardError $testStderr
           Write-Host "Test executable exit code: $($testProcess.ExitCode)"
           if (Test-Path -LiteralPath $testStdout) {
@@ -87,6 +89,10 @@ jobs:
           if (Test-Path -LiteralPath $testStderr) {
             Write-Host '--- vector_typography_tests stderr ---'
             Get-Content -LiteralPath $testStderr
+          }
+          if (Test-Path -LiteralPath $testReport) {
+            Write-Host '--- vector_typography_tests QTest report ---'
+            Get-Content -LiteralPath $testReport
           }
           if ($testProcess.ExitCode -ne 0) {
             exit $testProcess.ExitCode
