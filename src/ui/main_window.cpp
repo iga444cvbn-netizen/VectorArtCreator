@@ -279,7 +279,9 @@ void MainWindow::refreshUi()
 
     {
         const QSignalBlocker blocker(m_pageTabs);
-        m_pageTabs->clear();
+        while (m_pageTabs->count() > 0) {
+            m_pageTabs->removeTab(m_pageTabs->count() - 1);
+        }
         for (const auto& page : m_controller->document().pages) {
             if (page) {
                 const int tab = m_pageTabs->addTab(page->name);
