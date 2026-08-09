@@ -467,8 +467,19 @@ void EditorController::moveSelectedObjects(const QPointF& delta)
     }
     QStringList movableIds;
     for (const QString& id : ids) {
-        const SceneObjectGeometry* sceneObject = m_sceneGeometry.objectById(id);
-        if (sceneObject && !sceneObject->locked) {
+        bool locked = false;
+        for (const auto& page : m_document.pages) {
+            if (!page || page->id != m_document.currentPageId) {
+                continue;
+            }
+            for (const auto& layer : page->layers) {
+                if (layer && layer->objectById(id)) {
+                    locked = layer->locked;
+                    break;
+                }
+            }
+        }
+        if (m_document.objectById(id) && !locked) {
             movableIds.push_back(id);
         }
     }
