@@ -19,6 +19,7 @@ find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Test Concurrent)
 set(CORE_SOURCES
     src/core/document/document.cpp
     src/core/scene/scene_geometry.cpp
+    src/core/scene/object_frame.cpp
     src/core/scene/scene_evaluator.cpp
     src/core/deformation/manual_deformation.cpp
     src/core/deformation/contour_sampler.cpp
@@ -118,5 +119,25 @@ target_link_libraries(vector_typography_tests PRIVATE
 )
 
 add_test(NAME vector_typography_core_tests COMMAND vector_typography_tests)
+
+add_executable(vector_typography_ui_tests
+    tests/ui_regression_tests.cpp
+    src/ui/slider_spin_box.h
+    src/ui/slider_spin_box.cpp
+    src/ui/collapsible_section.h
+    src/ui/collapsible_section.cpp
+    src/ui/effects_panel.h
+    src/ui/effects_panel.cpp
+)
+target_include_directories(vector_typography_ui_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(vector_typography_ui_tests PRIVATE
+    vector_typography_core
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Test
+)
+add_test(NAME vector_typography_ui_tests COMMAND vector_typography_ui_tests)
+set_tests_properties(vector_typography_ui_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 install(TARGETS vector_typography_editor RUNTIME DESTINATION bin)

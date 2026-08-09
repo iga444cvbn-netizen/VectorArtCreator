@@ -313,6 +313,7 @@ private:
 class AddDeformationStrokeCommand final : public DocumentCommand {
 public:
     AddDeformationStrokeCommand(Document& document,
+                                QString objectId,
                                 int index,
                                 DeformationStroke stroke,
                                 DocumentChangeCallback onChanged);
@@ -321,6 +322,7 @@ public:
     void redo() override;
 
 private:
+    QString m_targetObjectId;
     int m_index = -1;
     DeformationStroke m_stroke;
 };

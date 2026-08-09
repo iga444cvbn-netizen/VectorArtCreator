@@ -208,6 +208,10 @@ QJsonObject ManualDeformation::toJson() const
         serializedStroke.insert(QStringLiteral("radius"), stroke.radius);
         serializedStroke.insert(QStringLiteral("strength"), stroke.strength);
         serializedStroke.insert(QStringLiteral("hardness"), stroke.hardness);
+        serializedStroke.insert(QStringLiteral("coordinateSpace"),
+                                stroke.coordinateSpace == DeformationCoordinateSpace::ObjectLocal
+                                    ? QStringLiteral("objectLocal")
+                                    : QStringLiteral("legacyPageAmbiguous"));
 
         QJsonArray serializedSamples;
         for (const BrushSample& sample : stroke.samples) {
@@ -294,6 +298,10 @@ bool ManualDeformation::fromJson(const QJsonObject& object,
         stroke.radius = serializedStroke.value(QStringLiteral("radius")).toDouble(stroke.radius);
         stroke.strength = serializedStroke.value(QStringLiteral("strength")).toDouble(stroke.strength);
         stroke.hardness = serializedStroke.value(QStringLiteral("hardness")).toDouble(stroke.hardness);
+        const QString coordinateSpace = serializedStroke.value(QStringLiteral("coordinateSpace")).toString();
+        stroke.coordinateSpace = coordinateSpace == QStringLiteral("objectLocal")
+            ? DeformationCoordinateSpace::ObjectLocal
+            : DeformationCoordinateSpace::LegacyPageAmbiguous;
         if (!finiteValue(stroke.radius) || stroke.radius < 0.01 || stroke.radius > 100000.0
             || !finiteValue(stroke.strength) || stroke.strength < 0.0 || stroke.strength > 4.0
             || !finiteValue(stroke.hardness) || stroke.hardness < 0.0 || stroke.hardness > 1.0) {

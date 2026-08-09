@@ -2,10 +2,7 @@
 
 #include "core/text/text_engine.h"
 
-#include <QtConcurrentRun>
-
 #include <QCryptographicHash>
-#include <QFuture>
 #include <QHash>
 #include <QJsonDocument>
 
@@ -15,19 +12,12 @@ namespace vt {
 
 namespace {
 
-void applyObjectTransform(VectorGeometry* geometry, const ObjectTransform& transform)
+void applyObjectTransform(VectorGeometry* geometry, const ObjectFrame& frame)
 {
     if (!geometry) {
         return;
     }
-    const QPointF center = geometry->referenceBounds.center();
-    QTransform objectTransform;
-    Q_UNUSED(objectTransform.translate(transform.position.x(), transform.position.y()));
-    Q_UNUSED(objectTransform.translate(center.x(), center.y()));
-    Q_UNUSED(objectTransform.rotate(transform.rotation));
-    Q_UNUSED(objectTransform.scale(transform.scale.x(), transform.scale.y()));
-    Q_UNUSED(objectTransform.translate(-center.x(), -center.y()));
-    geometry->transformAll(objectTransform);
+    geometry->transformAll(frame.localToPage);
 }
 
 struct CachedObjectStages {
@@ -143,9 +133,22 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
         cache.deformationKey = currentDeformationKey;
     }
 
+    // Empty text is still an object.  Its local frame is deliberately
+    // independent from glyph visibility so it can be selected, moved and
+    // edited later.
+    QRectF baseBounds = cache.baseGeometry.referenceBounds;
+    if (baseBounds.isNull() || baseBounds.isEmpty()) {
+        baseBounds = QRectF(0.0,
+                            -object.typography.fontSize * 0.8,
+                            qMax<qreal>(120.0, object.typography.fontSize * 2.0),
+                            qMax<qreal>(36.0, object.typography.fontSize * 1.2));
+    }
+    evaluated.frame = ObjectFrame::fromTransform(object.transform,
+                                                  baseBounds,
+                                                  cache.deformationGeometry.bounds);
     evaluated.geometry = cache.deformationGeometry;
-    applyObjectTransform(&evaluated.geometry, object.transform);
-    evaluated.visualBounds = evaluated.geometry.bounds;
+    applyObjectTransform(&evaluated.geometry, evaluated.frame);
+    evaluated.visualBounds = evaluated.frame.pageAabb();
     return evaluated;
 }
 
@@ -194,16 +197,12 @@ SceneGeometry SceneEvaluator::evaluate(const Page& page)
             tasks.push_back({layer->id, *object, layer->locked});
         }
     }
-    QVector<QFuture<SceneObjectGeometry>> futures;
-    futures.reserve(tasks.size());
+    // EditorController schedules a complete page evaluation.  Do not queue
+    // child tasks and synchronously wait on the same global pool here: a
+    // constrained pool can otherwise starve itself.  Object evaluation stays
+    // ordered and sequential within that outer worker.
     for (const Task& task : tasks) {
-        futures.push_back(QtConcurrent::run([pageId = page.id, task] {
-            return evaluateObjectTask(pageId, task.layerId, task.object, task.locked);
-        }));
-    }
-    result.objects.reserve(futures.size());
-    for (QFuture<SceneObjectGeometry>& future : futures) {
-        result.objects.push_back(future.result());
+        result.objects.push_back(evaluateObjectTask(page.id, task.layerId, task.object, task.locked));
     }
     result.recomputeBounds();
     return result;

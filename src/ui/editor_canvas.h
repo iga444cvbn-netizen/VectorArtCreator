@@ -132,6 +132,7 @@ private:
     SceneGeometry m_sceneBeforeMove;
     QPlainTextEdit* m_textEditor = nullptr;
     QString m_editingObjectId;
+    QString m_editingPageId;
     QRectF m_editingDocumentBounds;
     bool m_updatingTextEditor = false;
     QString m_maskTargetId;

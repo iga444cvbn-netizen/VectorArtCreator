@@ -88,11 +88,16 @@ which are evaluated as nondestructive geometric attenuation and are undoable.
 6. `SceneEvaluator` applies object transforms and layer visibility/lock state,
    then returns immutable scene geometry for canvas or SVG use.
 
-The effect and deformation coordinate system is the document's vector coordinate
-system. Effect normalization uses the unmodified reference bounds. Brush radius,
-sample positions, and sample deltas are stored in that same coordinate system;
-canvas input maps through the inverse viewport transform, so zoom and pan do not
-change the brush's document-space size.
+`ObjectFrame` is the single object/page-space mapper.  Its legacy-compatible
+matrix is `T(position) * T(pivotLocal) * R(rotation) * S(scale) *
+T(-pivotLocal)`, where `pivotLocal` is the immutable base-local-bounds centre.
+Scene results retain base/current local bounds, both affine matrices, an oriented
+page quad, and a page AABB; the AABB is broad-phase only.  Effects and manual
+deformation run in object-local coordinates before this matrix is applied.
+Canvas points cross screen -> page -> object-local before persistence.  Deltas
+use the inverse linear matrix (translation is removed), and brush radii are
+stored as an explicitly documented local equivalent-area circle.  Consequently
+their footprint is an ellipse in page space under non-uniform scale.
 
 ## Manual deformation model
 
@@ -101,7 +106,7 @@ change the brush's document-space size.
 * `BrushMode`: Push, Pull, Inflate, Pinch, or Smooth;
 * `BrushTarget`: Glyphs or Shape;
 * radius, strength, hardness;
-* a bounded sequence of `{position, delta, pressure}` samples.
+* a bounded sequence of object-local `{position, delta, pressure}` samples.
 
 The samples are persistent spatial data. They do not point at `QPainterPath`
 objects, glyph array addresses, or transient contour indexes. `resampleBrushStroke`
@@ -123,7 +128,7 @@ not show a brush cursor or create a stroke. `Smooth` is shape-only: selecting it
 temporarily forces `BrushTarget::Shape` and restores the previous Glyphs/Shape
 choice when another brush tool is selected.
 
-The editor previews a current stroke by applying it to the already-built scene
+The editor previews the same converted local stroke that it later commits,
 without changing the document. On release, the canvas emits one completed
 `DeformationStroke`; the controller pushes one undo command. Source text, font,
 effect order, effect parameters, and preset application all rebuild from base

@@ -2,6 +2,7 @@
 
 #include "core/effects/effect.h"
 #include "core/scene/scene_evaluator.h"
+#include "core/scene/object_frame.h"
 #include "core/serialization/project_serializer.h"
 
 #include <QtConcurrentRun>
@@ -96,18 +97,6 @@ const Layer* currentPageLayerForObject(const Document& document, const QString& 
         }
     }
     return nullptr;
-}
-
-QTransform objectTransform(const TextObject& object, const QRectF& referenceBounds)
-{
-    const QPointF center = referenceBounds.center();
-    QTransform transform;
-    Q_UNUSED(transform.translate(object.transform.position.x(), object.transform.position.y()));
-    Q_UNUSED(transform.translate(center.x(), center.y()));
-    Q_UNUSED(transform.rotate(object.transform.rotation));
-    Q_UNUSED(transform.scale(object.transform.scale.x(), object.transform.scale.y()));
-    Q_UNUSED(transform.translate(-center.x(), -center.y()));
-    return transform;
 }
 
 std::optional<EffectParameter> findEffectParameter(const Effect& effect, const QString& id)
@@ -1262,19 +1251,12 @@ void EditorController::addEffectMaskStroke(const QString& objectId,
     }
 
     EffectMaskStroke localStroke = stroke;
-    const QRectF referenceBounds = localReferenceBounds(*object);
-    bool invertible = false;
-    const QTransform transform = objectTransform(*object, referenceBounds);
-    const QTransform inverse = transform.inverted(&invertible);
-    if (invertible) {
+    const ObjectFrame frame = ObjectFrame::fromTransform(object->transform, localReferenceBounds(*object));
+    if (!frame.localToPage.isIdentity() || !frame.pageToLocal.isIdentity()) {
         for (QPointF& point : localStroke.points) {
-            point = inverse.map(point);
+            point = frame.pagePointToLocal(point);
         }
-        const QPointF origin = transform.map(QPointF());
-        const qreal scaleX = QLineF(origin, transform.map(QPointF(1.0, 0.0))).length();
-        const qreal scaleY = QLineF(origin, transform.map(QPointF(0.0, 1.0))).length();
-        const qreal averageScale = std::sqrt(qMax<qreal>(0.0001, scaleX * scaleY));
-        localStroke.radius = qMax<qreal>(0.1, localStroke.radius / averageScale);
+        localStroke.radius = qMax<qreal>(0.1, frame.pageRadiusToLocalEquivalentArea(localStroke.radius));
     }
     localStroke.opacity = qBound<qreal>(0.0, localStroke.opacity, 1.0);
     localStroke.hardness = qBound<qreal>(0.0, localStroke.hardness, 1.0);
@@ -1333,6 +1315,7 @@ void EditorController::addDeformationStroke(const QString& objectId,
     const int index = object->deformation.strokes.size();
     m_undoStack.push(new AddDeformationStrokeCommand(
         m_document,
+        objectId,
         index,
         stroke,
         [this] { onCommandChanged(); }));

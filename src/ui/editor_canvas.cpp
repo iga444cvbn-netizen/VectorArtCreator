@@ -63,6 +63,12 @@ void EditorCanvas::setScene(const SceneGeometry& scene,
     if (!m_hasInitialFit && width() > 0 && height() > 0) {
         fitContent();
     }
+    if (!m_editingObjectId.isEmpty()) {
+        const SceneObjectGeometry* editing = m_sceneGeometry.objectById(m_editingObjectId);
+        if (m_editingPageId != m_sceneGeometry.pageId || !editing || !editing->visible || editing->locked) {
+            finishTextEditing();
+        }
+    }
     updateTextEditorGeometry();
     update();
 }
@@ -175,6 +181,7 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
     }
 
     m_editingObjectId = objectId;
+    m_editingPageId = m_sceneGeometry.pageId;
     m_editingDocumentBounds = documentBounds;
     m_updatingTextEditor = true;
     m_textEditor->setFont(font);
@@ -197,6 +204,7 @@ void EditorCanvas::finishTextEditing()
     }
     m_textEditor->hide();
     m_editingObjectId.clear();
+    m_editingPageId.clear();
     m_textRangeStart = -1;
     m_textRangeEnd = -1;
     setFocus(Qt::OtherFocusReason);
@@ -274,15 +282,18 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
     painter.drawRect(pageRect);
 
     for (const SceneObjectGeometry& object : m_sceneGeometry.objects) {
-        if (!object.visible || !object.geometry.hasVisibleGeometry()) {
+        if (!object.visible) {
             continue;
         }
-        if (object.objectId == m_editingObjectId && isTextEditing()) {
-            continue;
+        if (object.geometry.hasVisibleGeometry()) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(object.fill.isValid() ? object.fill : m_fill);
+            painter.drawPath(object.geometry.combinedPath());
+        } else {
+            painter.setPen(QPen(QColor(125, 145, 165, 170), 1.0 / qMax<qreal>(0.01, m_zoom), Qt::DashLine));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawPolygon(object.frame.orientedPageQuad());
         }
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(object.fill.isValid() ? object.fill : m_fill);
-        painter.drawPath(object.geometry.combinedPath());
 
         if (object.objectId == m_activeObjectId && m_textRangeStart >= 0 && m_textRangeEnd > m_textRangeStart) {
             painter.setBrush(QColor(65, 150, 255, 75));
@@ -296,7 +307,7 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
     }
 
     const QRectF pageBounds = pageRect;
-    if (!m_sceneGeometry.hasVisibleGeometry()) {
+    if (m_sceneGeometry.objects.isEmpty()) {
         painter.setPen(QColor(100, 108, 120));
         painter.drawText(pageBounds, Qt::AlignCenter,
                          QStringLiteral("Press T or choose the Text tool to create text"));
@@ -312,17 +323,14 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
                             (active ? 1.7 : 1.2) / qMax<qreal>(0.01, m_zoom),
                             Qt::DashLine));
         painter.setBrush(Qt::NoBrush);
-        const QRectF bounds = object->visualBounds.adjusted(-4.0 / m_zoom,
-                                                              -4.0 / m_zoom,
-                                                              4.0 / m_zoom,
-                                                              4.0 / m_zoom);
-        painter.drawRect(bounds);
+        const QPolygonF quad = object->frame.orientedPageQuad();
+        painter.drawPolygon(quad);
         if (active) {
             painter.setPen(Qt::NoPen);
             painter.setBrush(QColor(90, 176, 255));
             const qreal handle = 7.0 / qMax<qreal>(0.01, m_zoom);
             const QVector<QPointF> handles = {
-                bounds.topLeft(), bounds.topRight(), bounds.bottomLeft(), bounds.bottomRight()};
+                quad.value(0), quad.value(1), quad.value(3), quad.value(2)};
             for (const QPointF& handleCenter : handles) {
                 painter.drawRect(QRectF(handleCenter - QPointF(handle / 2.0, handle / 2.0),
                                         QSizeF(handle, handle)));
@@ -343,13 +351,23 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
                          .arg(qRound(m_zoom * 100.0)));
     if (m_tool != EditorTool::Select && m_tool != EditorTool::Move && m_tool != EditorTool::Text
         && m_hasCursorPosition && !m_panning && !m_spacePressed) {
-        const qreal screenRadius = qMax<qreal>(3.0, m_brushRadius * m_zoom);
         painter.setPen(QPen(m_tool == EditorTool::EffectMask
                                 ? QColor(255, 174, 104, 220)
                                 : QColor(85, 160, 255, 210),
                             1.0));
         painter.setBrush(Qt::NoBrush);
-        painter.drawEllipse(QPointF(m_cursorPosition), screenRadius, screenRadius);
+        const SceneObjectGeometry* target = m_sceneGeometry.objectById(
+            m_brushing ? m_brushTargetId : m_activeObjectId);
+        if (target && m_tool != EditorTool::EffectMask) {
+            const QPointF localCenter = target->frame.pagePointToLocal(documentPosition(m_cursorPosition));
+            QPainterPath localCircle;
+            const qreal localRadius = target->frame.pageRadiusToLocalEquivalentArea(m_brushRadius);
+            localCircle.addEllipse(localCenter, localRadius, localRadius);
+            painter.drawPath(viewTransform().map(target->frame.localToPage.map(localCircle)));
+        } else {
+            const qreal screenRadius = qMax<qreal>(3.0, m_brushRadius * m_zoom);
+            painter.drawEllipse(QPointF(m_cursorPosition), screenRadius, screenRadius);
+        }
         painter.drawLine(QPointF(m_cursorPosition.x() - 3, m_cursorPosition.y()),
                          QPointF(m_cursorPosition.x() + 3, m_cursorPosition.y()));
         painter.drawLine(QPointF(m_cursorPosition.x(), m_cursorPosition.y() - 3),
@@ -507,7 +525,10 @@ void EditorCanvas::mouseMoveEvent(QMouseEvent* event)
                 QTransform transform;
                 Q_UNUSED(transform.translate(delta.x(), delta.y()));
                 object->geometry.transformAll(transform);
-                object->visualBounds = object->geometry.bounds;
+                object->frame.localToPage = transform * object->frame.localToPage;
+                bool invertible = false;
+                object->frame.pageToLocal = object->frame.localToPage.inverted(&invertible);
+                object->visualBounds = object->frame.pageAabb();
             }
         }
         m_sceneGeometry.recomputeBounds();
@@ -728,11 +749,21 @@ DeformationStroke EditorCanvas::currentStroke() const
     DeformationStroke stroke;
     stroke.mode = m_brushMode;
     stroke.target = m_brushTarget;
-    stroke.radius = m_brushRadius;
+    const SceneObjectGeometry* object = m_sceneGeometry.objectById(m_brushTargetId);
+    stroke.radius = object ? object->frame.pageRadiusToLocalEquivalentArea(m_brushRadius) : m_brushRadius;
     stroke.strength = m_brushStrength;
     stroke.hardness = m_brushHardness;
-    stroke.samples = resampleBrushStroke(
-        m_brushPositions, qMax<qreal>(0.5, m_brushRadius * 0.25), 1.0, 4096);
+    QVector<QPointF> localPositions;
+    localPositions.reserve(m_brushPositions.size());
+    if (object) {
+        for (const QPointF& position : m_brushPositions) {
+            localPositions.push_back(object->frame.pagePointToLocal(position));
+        }
+    } else {
+        localPositions = m_brushPositions;
+    }
+    stroke.samples = resampleBrushStroke(localPositions,
+                                         qMax<qreal>(0.5, stroke.radius * 0.25), 1.0, 4096);
     return stroke;
 }
 

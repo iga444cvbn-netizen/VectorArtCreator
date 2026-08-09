@@ -58,6 +58,8 @@ private slots:
 
 private:
     void clearParameterEditor();
+    [[nodiscard]] bool structureMatches(const TextObject* object) const;
+    void refreshEffectListValues();
 
     QListWidget* m_effectList = nullptr;
     QLineEdit* m_effectSearch = nullptr;
@@ -75,6 +77,8 @@ private:
     QPushButton* m_deletePresetButton = nullptr;
 
     const TextObject* m_currentObject = nullptr;
+    QString m_currentObjectId;
+    QStringList m_effectStructure;
     QVector<QWidget*> m_parameterControls;
     QDoubleSpinBox* m_masterStrengthSpin = nullptr;
     SliderSpinBox* m_masterStrengthSlider = nullptr;

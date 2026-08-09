@@ -160,13 +160,23 @@ EffectsPanel::EffectsPanel(QWidget* parent)
 
 void EffectsPanel::setTextRange(int start, int end)
 {
+    if (m_textRangeStart == start && m_textRangeEnd == end) {
+        return;
+    }
     m_textRangeStart = start;
     m_textRangeEnd = end;
-    rebuildParameterEditor();
+    // A changed text selection alters values/availability, not the parameter
+    // schema.  Rebuilding here could delete the widget that emitted the
+    // selection change through the synchronous document refresh chain.
+    updateParameterEditorValues();
 }
 
 void EffectsPanel::setSelectedEffectId(const QString& effectId)
 {
+    if (effectId == m_selectedEffectId) {
+        updateParameterEditorValues();
+        return;
+    }
     int row = -1;
     for (int index = 0; index < m_effectList->count(); ++index) {
         if (m_effectList->item(index)->data(Qt::UserRole).toString() == effectId) {
@@ -182,9 +192,21 @@ void EffectsPanel::setSelectedEffectId(const QString& effectId)
 
 void EffectsPanel::refresh(const TextObject* object, const QStringList& presetNames)
 {
+    const bool structureChanged = !structureMatches(object);
     m_currentObject = object;
+    m_currentObjectId = object ? object->id : QString();
     setEnabled(object != nullptr);
     m_addEffectButton->setEnabled(object != nullptr && m_addEffectCombo->count() > 0);
+    if (!structureChanged) {
+        refreshEffectListValues();
+        {
+            const QSignalBlocker blocker(m_presetCombo);
+            m_presetCombo->clear();
+            m_presetCombo->addItems(presetNames);
+        }
+        updateParameterEditorValues();
+        return;
+    }
     const QString previousId = m_selectedEffectId;
     {
         const QSignalBlocker blocker(m_effectList);
@@ -231,7 +253,56 @@ void EffectsPanel::refresh(const TextObject* object, const QStringList& presetNa
     if (!object) {
         m_selectedEffectId.clear();
     }
+    m_effectStructure.clear();
+    if (object) {
+        for (int index = 0; index < object->effects.size(); ++index) {
+            if (const Effect* effect = object->effects.at(index)) {
+                m_effectStructure.push_back(effect->instanceId + QLatin1Char('|') + effect->typeId());
+            }
+        }
+    }
     rebuildParameterEditor();
+}
+
+bool EffectsPanel::structureMatches(const TextObject* object) const
+{
+    if ((object ? object->id : QString()) != m_currentObjectId) {
+        return false;
+    }
+    QStringList structure;
+    if (object) {
+        for (int index = 0; index < object->effects.size(); ++index) {
+            if (const Effect* effect = object->effects.at(index)) {
+                structure.push_back(effect->instanceId + QLatin1Char('|') + effect->typeId());
+            }
+        }
+    }
+    return structure == m_effectStructure;
+}
+
+void EffectsPanel::refreshEffectListValues()
+{
+    if (!m_currentObject) {
+        return;
+    }
+    const QSignalBlocker blocker(m_effectList);
+    for (int row = 0; row < m_effectList->count(); ++row) {
+        QListWidgetItem* item = m_effectList->item(row);
+        if (!item) {
+            continue;
+        }
+        const Effect* effect = m_currentObject->effects.byInstanceId(item->data(Qt::UserRole).toString());
+        if (!effect) {
+            continue;
+        }
+        item->setText(effect->displayName());
+        item->setCheckState(effect->enabled ? Qt::Checked : Qt::Unchecked);
+        item->setToolTip(QStringLiteral("%1\nScope: %2")
+                             .arg(effect->displayName(),
+                                  effect->scope.kind == EffectScopeKind::WholeObject
+                                      ? QStringLiteral("Whole Object")
+                                      : QStringLiteral("Selected Text Range")));
+    }
 }
 
 void EffectsPanel::handleEffectItemChanged(QListWidgetItem* item)
@@ -271,6 +342,7 @@ void EffectsPanel::rebuildParameterEditor()
     m_parameterType = effect->typeId();
 
     m_effectEnabledCheck = new QCheckBox(QStringLiteral("Enabled"), m_parameterHost);
+    m_effectEnabledCheck->setObjectName(QStringLiteral("effectEnabled"));
     m_effectEnabledCheck->setChecked(effect->enabled);
     m_parameterHostLayout->addWidget(m_effectEnabledCheck);
     const QString effectId = m_selectedEffectId;
@@ -289,6 +361,7 @@ void EffectsPanel::rebuildParameterEditor()
     masterLayout->setContentsMargins(0, 0, 0, 0);
     masterLayout->addWidget(new QLabel(QStringLiteral("Master strength"), masterRow));
     m_masterStrengthSlider = new SliderSpinBox(masterRow);
+    m_masterStrengthSlider->setObjectName(QStringLiteral("masterStrength"));
     m_masterStrengthSlider->setRange(0.0, 1.0);
     m_masterStrengthSlider->setSingleStep(0.01);
     m_masterStrengthSlider->setDecimals(2);
@@ -351,6 +424,7 @@ void EffectsPanel::rebuildParameterEditor()
         QWidget* control = nullptr;
         if (parameter.integer) {
             auto* spin = new QDoubleSpinBox(row);
+            spin->setObjectName(QStringLiteral("effectParameter/%1").arg(parameter.id));
             spin->setRange(parameter.minimum, parameter.maximum);
             spin->setSingleStep(parameter.step);
             spin->setDecimals(0);
@@ -384,6 +458,7 @@ void EffectsPanel::rebuildParameterEditor()
             }
         } else {
             auto* slider = new SliderSpinBox(row);
+            slider->setObjectName(QStringLiteral("effectParameter/%1").arg(parameter.id));
             slider->setRange(parameter.minimum, parameter.maximum);
             slider->setSingleStep(parameter.step);
             slider->setDecimals(3);
@@ -448,6 +523,17 @@ void EffectsPanel::updateParameterEditorValues()
     if (m_effectEnabledCheck) {
         const QSignalBlocker blocker(m_effectEnabledCheck);
         m_effectEnabledCheck->setChecked(effect->enabled);
+    }
+    if (m_scopeCombo) {
+        const QSignalBlocker blocker(m_scopeCombo);
+        const bool hasRange = m_textRangeStart >= 0 && m_textRangeEnd > m_textRangeStart;
+        m_scopeCombo->setEnabled(hasRange);
+        m_scopeCombo->setCurrentIndex(effect->scope.kind == EffectScopeKind::TextRange ? 1 : 0);
+    }
+    if (m_scopeLabel) {
+        m_scopeLabel->setText(effect->scope.kind == EffectScopeKind::TextRange
+                                  ? QStringLiteral("Characters %1вЂ“%2").arg(effect->scope.start).arg(effect->scope.end)
+                                  : QStringLiteral("All glyphs in this object"));
     }
 }
 

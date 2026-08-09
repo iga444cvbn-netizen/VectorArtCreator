@@ -563,10 +563,12 @@ void ApplyPresetCommand::redo()
 }
 
 AddDeformationStrokeCommand::AddDeformationStrokeCommand(Document& document,
+                                                         QString objectId,
                                                          int index,
                                                          DeformationStroke stroke,
                                                          DocumentChangeCallback onChanged)
     : DocumentCommand(document, std::move(onChanged), QStringLiteral("Add deformation stroke"))
+    , m_targetObjectId(std::move(objectId))
     , m_index(index)
     , m_stroke(std::move(stroke))
 {
@@ -574,7 +576,11 @@ AddDeformationStrokeCommand::AddDeformationStrokeCommand(Document& document,
 
 void AddDeformationStrokeCommand::undo()
 {
-    auto& strokes = targetObject().deformation.strokes;
+    TextObject* object = m_document.objectById(m_targetObjectId);
+    if (!object) {
+        return;
+    }
+    auto& strokes = object->deformation.strokes;
     if (m_index >= 0 && m_index < strokes.size()) {
         strokes.removeAt(m_index);
         notifyChanged();
@@ -583,7 +589,11 @@ void AddDeformationStrokeCommand::undo()
 
 void AddDeformationStrokeCommand::redo()
 {
-    auto& strokes = targetObject().deformation.strokes;
+    TextObject* object = m_document.objectById(m_targetObjectId);
+    if (!object) {
+        return;
+    }
+    auto& strokes = object->deformation.strokes;
     if (m_index < 0) {
         m_index = strokes.size();
     }

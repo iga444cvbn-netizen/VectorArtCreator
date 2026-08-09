@@ -85,7 +85,7 @@ struct Page {
 
 class Document {
 public:
-    static constexpr int CurrentFormatVersion = 4;
+    static constexpr int CurrentFormatVersion = 5;
 
     int formatVersion = CurrentFormatVersion;
     QString title = QStringLiteral("Untitled Vector Typography Project");

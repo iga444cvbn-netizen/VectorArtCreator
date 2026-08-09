@@ -860,6 +860,7 @@ void MainWindow::applyTheme()
             " background: #ffffff; color: #20242b; border: 1px solid #b6bfcc; padding: 3px; }"
             "QPushButton, QToolButton { background: #e3e8ef; border: 1px solid #b6bfcc; padding: 4px; }"
             "QPushButton:hover, QToolButton:hover { background: #d5e4f6; }"
+            "QMenu::item:selected { background: #b9d8f4; color: #162233; }"
             "QToolButton:checked { background: #4b91ce; color: white; }"
             "QTabBar::tab { background: #dbe2eb; padding: 5px 10px; }"
             "QTabBar::tab:selected { background: #4b91ce; color: white; }"));
@@ -871,6 +872,7 @@ void MainWindow::applyTheme()
             " background: #1e2126; color: #f1f3f7; border: 1px solid #4b515c; padding: 3px; }"
             "QPushButton, QToolButton { background: #343943; border: 1px solid #515866; padding: 4px; }"
             "QPushButton:hover, QToolButton:hover { background: #414957; }"
+            "QMenu::item:selected { background: #2e76ba; color: #ffffff; }"
             "QToolButton:checked { background: #2e76ba; border-color: #73b8f0; }"
             "QTabBar::tab { background: #343943; padding: 5px 10px; }"
             "QTabBar::tab:selected { background: #2e76ba; }"));
@@ -889,16 +891,8 @@ void MainWindow::applyNavigationSettings()
 void MainWindow::handleTextEditingChanged(bool editing)
 {
     if (!editing) {
-        const QString objectId = m_newTextEditObjectId;
-        const bool touched = m_newTextEditTouched;
         m_newTextEditObjectId.clear();
         m_newTextEditTouched = false;
-        if (!touched) {
-            const TextObject* object = m_controller->document().objectById(objectId);
-            if (object && object->sourceText.isEmpty()) {
-                m_controller->cancelNewTextObject(objectId);
-            }
-        }
     }
     setGlobalEditorShortcutsEnabled(!editing);
 }

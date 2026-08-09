@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/geometry/vector_geometry.h"
+#include "core/scene/object_frame.h"
 
 #include <QColor>
 #include <QPainterPath>
@@ -19,6 +20,9 @@ struct SceneObjectGeometry {
     VectorGeometry geometry;
     QColor fill;
     QRectF visualBounds;
+    // visualBounds is retained for broad-phase compatibility only.  Frame is
+    // the authoritative selection and input coordinate contract.
+    ObjectFrame frame;
     bool visible = true;
     bool locked = false;
     QString warning;

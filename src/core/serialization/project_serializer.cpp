@@ -247,7 +247,7 @@ QJsonDocument ProjectSerializer::toJson(const Document& document)
 
     // Keep a read-only compatibility projection for tools which produced
     // version 1-3 migration fixtures. New projects are authoritative in the
-    // page/layer hierarchy above; this array is never used when loading a v4
+    // page/layer hierarchy above; this array is never used when loading a v4+
     // document.
     QJsonArray legacyObjects;
     if (const Page* page = document.currentPage()) {

@@ -10,6 +10,7 @@
 #include "core/presets/preset_manager.h"
 #include "core/serialization/project_serializer.h"
 #include "core/scene/scene_evaluator.h"
+#include "core/scene/object_frame.h"
 #include "core/text/text_engine.h"
 #include "ui/deformation_tool_state.h"
 #include "ui/editor_controller.h"
@@ -211,6 +212,7 @@ private slots:
     void shapingCacheKeyIgnoresFillButTracksLayoutInputs();
     void shortcutManagerDetectsConflictsAndPersists();
     void asyncEvaluationPublishesLatestGeneration();
+    void objectFrameRoundTripsPointsAndVectors();
 };
 
 void CoreTests::projectSerializationRoundTrip()
@@ -1565,6 +1567,27 @@ void CoreTests::asyncEvaluationPublishesLatestGeneration()
                                  && controller.sceneGeometry().objectById(objectId)->sourceText
                                         == QStringLiteral("latest generation"),
                              5000);
+}
+
+void CoreTests::objectFrameRoundTripsPointsAndVectors()
+{
+    ObjectTransform transform;
+    transform.position = QPointF(240.0, -75.0);
+    transform.rotation = 31.0;
+    transform.scale = QPointF(2.0, -0.75);
+    const ObjectFrame frame = ObjectFrame::fromTransform(transform,
+                                                          QRectF(-20.0, 10.0, 120.0, 60.0));
+    const QPointF localPoint(12.5, 44.0);
+    const QPointF localVector(8.0, -3.0);
+    const QPointF pagePoint = frame.localPointToPage(localPoint);
+    const QPointF pageVector = frame.localVectorToPage(localVector);
+    const QPointF pointRoundTrip = frame.pagePointToLocal(pagePoint);
+    const QPointF vectorRoundTrip = frame.pageVectorToLocal(pageVector);
+    QVERIFY(QLineF(pointRoundTrip, localPoint).length() < 1.0e-8);
+    QVERIFY(QLineF(vectorRoundTrip, localVector).length() < 1.0e-8);
+    QVERIFY(QLineF(frame.pageVectorToLocal(frame.localPointToPage(localVector)), localVector).length() > 1.0);
+    QCOMPARE(frame.orientedPageQuad().size(), 4);
+    QVERIFY(frame.pageAabb().contains(pagePoint));
 }
 
 int main(int argc, char* argv[])
