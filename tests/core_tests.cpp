@@ -112,6 +112,7 @@ private slots:
     void glyphFallbackIsReportedWhenAvailable();
     void missingFontStatesAreDistinguished();
     void trackingScalesWithFontSize();
+    void trackingUsesTrueEmDistance();
     void controllerUndoRedoAndMerge();
     void controllerEffectCommandsAreGranular();
     void controllerCleanStateFollowsUndoStack();
@@ -460,6 +461,32 @@ void CoreTests::trackingScalesWithFontSize()
     QVERIFY(largeShape.logicalBounds.width() > smallShape.logicalBounds.width());
     const qreal ratio = largeShape.logicalBounds.width() / smallShape.logicalBounds.width();
     QVERIFY2(std::abs(ratio - 2.0) < 0.15, qPrintable(QStringLiteral("tracking ratio was %1").arg(ratio)));
+}
+
+void CoreTests::trackingUsesTrueEmDistance()
+{
+    TextObject narrow = configuredText(QStringLiteral("iiii"));
+    narrow.typography.trackingEm = 0.1;
+    TextObject narrowUntracked = narrow;
+    narrowUntracked.typography.trackingEm = 0.0;
+
+    TextObject wide = configuredText(QStringLiteral("WWWW"));
+    wide.typography.trackingEm = 0.1;
+    TextObject wideUntracked = wide;
+    wideUntracked.typography.trackingEm = 0.0;
+
+    TextEngine engine;
+    const qreal narrowDelta = engine.shape(narrow).logicalBounds.width()
+        - engine.shape(narrowUntracked).logicalBounds.width();
+    const qreal wideDelta = engine.shape(wide).logicalBounds.width()
+        - engine.shape(wideUntracked).logicalBounds.width();
+
+    const qreal expected = 3.0 * narrow.typography.fontSize * narrow.typography.trackingEm;
+    QVERIFY2(std::abs(narrowDelta - expected) < 0.01,
+             qPrintable(QStringLiteral("narrow tracking delta was %1").arg(narrowDelta)));
+    QVERIFY2(std::abs(wideDelta - expected) < 0.01,
+             qPrintable(QStringLiteral("wide tracking delta was %1").arg(wideDelta)));
+    QVERIFY(std::abs(narrowDelta - wideDelta) < 0.01);
 }
 
 void CoreTests::controllerUndoRedoAndMerge()
