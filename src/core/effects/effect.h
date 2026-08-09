@@ -41,6 +41,8 @@ struct EffectMaskStroke {
     QVector<QPointF> points;
     qreal radius = 32.0;
     qreal opacity = 1.0;
+    qreal hardness = 0.5;
+    bool restore = false;
 
     [[nodiscard]] QJsonObject toJson() const;
     [[nodiscard]] static EffectMaskStroke fromJson(const QJsonObject& object);

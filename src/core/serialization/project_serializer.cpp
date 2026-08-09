@@ -11,7 +11,7 @@ namespace vt {
 
 namespace {
 
-QJsonObject textObjectToJson(const TextObject& textObject)
+QJsonObject serializeTextObject(const TextObject& textObject)
 {
     QJsonObject object;
     object.insert(QStringLiteral("type"), QStringLiteral("text"));
@@ -27,10 +27,10 @@ QJsonObject textObjectToJson(const TextObject& textObject)
     return object;
 }
 
-bool textObjectFromJson(const QJsonObject& object,
-                        TextObject* textObject,
-                        int formatVersion,
-                        QString* error)
+bool deserializeTextObject(const QJsonObject& object,
+                           TextObject* textObject,
+                           int formatVersion,
+                           QString* error)
 {
     if (object.value(QStringLiteral("type")).toString() != QStringLiteral("text")) {
         if (error) {
@@ -100,7 +100,7 @@ QJsonObject layerToJson(const Layer& layer)
     QJsonArray objects;
     for (const auto& textObject : layer.objects) {
         if (textObject) {
-            objects.append(textObjectToJson(*textObject));
+            objects.append(serializeTextObject(*textObject));
         }
     }
     object.insert(QStringLiteral("objects"), objects);
@@ -135,7 +135,7 @@ bool layerFromJson(const QJsonObject& object, Layer* layer, int formatVersion, Q
             return false;
         }
         auto textObject = std::make_unique<TextObject>();
-        if (!textObjectFromJson(objects.at(index).toObject(), textObject.get(), formatVersion, error)) {
+        if (!deserializeTextObject(objects.at(index).toObject(), textObject.get(), formatVersion, error)) {
             return false;
         }
         result.objects.push_back(std::move(textObject));
@@ -208,6 +208,18 @@ bool pageFromJson(const QJsonObject& object, Page* page, int formatVersion, QStr
 
 } // namespace
 
+QJsonObject ProjectSerializer::textObjectToJson(const TextObject& object)
+{
+    return serializeTextObject(object);
+}
+
+bool ProjectSerializer::textObjectFromJson(const QJsonObject& json,
+                                           TextObject* object,
+                                           QString* error)
+{
+    return deserializeTextObject(json, object, Document::CurrentFormatVersion, error);
+}
+
 QJsonDocument ProjectSerializer::toJson(const Document& document)
 {
     QJsonObject root;
@@ -242,7 +254,7 @@ QJsonDocument ProjectSerializer::toJson(const Document& document)
         if (!page->layers.empty() && page->layers.front()) {
             for (const auto& textObject : page->layers.front()->objects) {
                 if (textObject) {
-                    legacyObjects.append(textObjectToJson(*textObject));
+                    legacyObjects.append(serializeTextObject(*textObject));
                 }
             }
         }
@@ -343,7 +355,7 @@ bool ProjectSerializer::fromJson(const QJsonDocument& json, Document* document, 
                 return false;
             }
             auto textObject = std::make_unique<TextObject>();
-            if (!textObjectFromJson(objects.at(index).toObject(), textObject.get(), version, error)) {
+            if (!deserializeTextObject(objects.at(index).toObject(), textObject.get(), version, error)) {
                 return false;
             }
             layer->objects.push_back(std::move(textObject));

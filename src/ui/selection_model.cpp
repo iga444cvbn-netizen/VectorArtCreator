@@ -106,6 +106,12 @@ void SelectionModel::clear()
     const QString oldActive = m_activeObjectId;
     m_selectedObjectIds.clear();
     m_activeObjectId.clear();
+    const bool hadTextRange = hasTextRange();
+    m_textRangeStart = -1;
+    m_textRangeEnd = -1;
+    if (hadTextRange) {
+        emit textRangeChanged(-1, -1);
+    }
     emitIfChanged(oldSelection, oldActive);
 }
 
@@ -133,6 +139,11 @@ void SelectionModel::clearTextRange()
 
 void SelectionModel::emitIfChanged(const QSet<QString>& oldSelection, const QString& oldActive)
 {
+    if (oldActive != m_activeObjectId && hasTextRange()) {
+        m_textRangeStart = -1;
+        m_textRangeEnd = -1;
+        emit textRangeChanged(-1, -1);
+    }
     if (oldSelection != m_selectedObjectIds || oldActive != m_activeObjectId) {
         emit selectionChanged();
     }

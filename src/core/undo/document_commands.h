@@ -21,9 +21,11 @@ public:
 
 protected:
     void notifyChanged();
+    [[nodiscard]] TextObject& targetObject();
 
     Document& m_document;
     DocumentChangeCallback m_onChanged;
+    QString m_objectId;
 };
 
 class SetTextCommand final : public DocumentCommand {
@@ -120,6 +122,23 @@ public:
 private:
     qreal m_oldTrackingEm = 0.0;
     qreal m_newTrackingEm = 0.0;
+};
+
+class SetLineSpacingCommand final : public DocumentCommand {
+public:
+    SetLineSpacingCommand(Document& document,
+                          qreal oldValue,
+                          qreal newValue,
+                          DocumentChangeCallback onChanged);
+
+    void undo() override;
+    void redo() override;
+    [[nodiscard]] int id() const override;
+    bool mergeWith(const QUndoCommand* other) override;
+
+private:
+    qreal m_oldValue = 1.0;
+    qreal m_newValue = 1.0;
 };
 
 class SetFillColorCommand final : public DocumentCommand {
@@ -255,6 +274,24 @@ private:
     int m_index = -1;
     EffectScope m_oldScope;
     EffectScope m_newScope;
+};
+
+class AddEffectMaskStrokeCommand final : public DocumentCommand {
+public:
+    AddEffectMaskStrokeCommand(Document& document,
+                               QString objectId,
+                               QString effectId,
+                               EffectMaskStroke stroke,
+                               DocumentChangeCallback onChanged,
+                               QString description = QStringLiteral("Paint effect mask"));
+
+    void undo() override;
+    void redo() override;
+
+private:
+    QString m_objectId;
+    QString m_effectId;
+    EffectMaskStroke m_stroke;
 };
 
 class ApplyPresetCommand final : public DocumentCommand {

@@ -50,8 +50,9 @@ dispatches. After tests pass, `windeployqt` creates and uploads
 1. Use the page tabs and Layers panel to switch pages/layers, add or duplicate
    pages, rename layers, and toggle visibility/lock state.
 2. Select objects by clicking or marquee; use additive selection, `Move`, arrow
-   nudging, duplicate, and delete. `Text` creates a new object at the canvas
-   point; source editing remains available in the Typography inspector.
+   nudging, duplicate, delete, and the built-in object clipboard. `Text` creates
+   a new object at the canvas point and opens a multiline in-canvas editor;
+   double-clicking an existing object in the Text tool edits it in place.
 3. Edit source text and typography in the inspector. Tracking is stored as
    `trackingEm`; `0.05 em` means an additional five percent of the current font
    em size between shaped glyphs. The UI labels this unit explicitly.
@@ -64,11 +65,14 @@ dispatches. After tests pass, `windeployqt` creates and uploads
    size. Escape cancels an active stroke.
 6. Toggle stored deformation or adjust Overall strength. Clear removes all
    stored strokes as one undoable operation.
-7. Save the effect stack as a named JSON preset, then apply it to another text.
+7. Select an effect in the Effects inspector, choose Whole Object or Selected
+   Text Range, and use the `Effect mask / eraser` tool to paint or restore the
+   effect locally. Masks are nondestructive and undoable.
+8. Save the effect stack as a named JSON preset, then apply it to another text.
    Preset names remain Unicode, including `Бездна`, `Паника`, `Шёпот`, and
    `Искажение реальности`.
-8. Save/open a `.vtproj` JSON project.
-9. Use **File -> Export SVG**. The SVG contains final `<path>` geometry and does
+9. Save/open a `.vtproj` JSON project.
+10. Use **File -> Export SVG**. The SVG contains final `<path>` geometry and does
    not depend on the original font being installed.
 
 Tracking is stored as `trackingEm`. The shaper converts it using the resolved
@@ -121,11 +125,9 @@ font loading are intentionally not implemented.
 
 ## Current limitations
 
-The canvas Text tool currently routes editing to the Typography inspector rather
-than providing a full in-canvas caret/clipboard overlay. Interactive mask painting
-and eraser UI, rich effect-browser search/categories, and internal clipboard
-commands remain bounded follow-ups. The mask/evaluator and command boundaries are
-kept extensible for them.
+The current milestone uses a compact effect catalog and scalar vector masks;
+it does not include raster painting, arbitrary Bézier mask editing, Word/EMF
+clipboard interchange, or font embedding/licensing workflows.
 
 This milestone intentionally does not include Zalgo, horror generators, glitch or
 blur systems, Word clipboard/EMF export, font embedding or licensing parsing,

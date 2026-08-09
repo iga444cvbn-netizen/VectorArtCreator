@@ -2,18 +2,22 @@
 
 #include "ui/editor_canvas.h"
 #include "ui/editor_controller.h"
+#include "ui/collapsible_section.h"
 #include "ui/deformation_panel.h"
 #include "ui/effects_panel.h"
 #include "ui/layers_panel.h"
 #include "ui/preferences_dialog.h"
 #include "ui/shortcut_manager.h"
 #include "ui/tool_palette.h"
+#include "ui/transform_panel.h"
 #include "ui/typography_panel.h"
 
 #include <QAction>
+#include <QHash>
 #include <QCloseEvent>
 #include <QMainWindow>
 #include <QTabBar>
+#include <QVector>
 
 namespace vt {
 
@@ -37,16 +41,22 @@ private slots:
     void exportSvg();
     void showPreferences();
     void pageTabChanged(int index);
+    void renameCurrentPage();
+    void setPageSize();
 
 private:
     void createActions();
     void createMenus();
     void setStatus(const QString& message);
     [[nodiscard]] bool maybeSave();
+    void applyTheme();
+    void applyNavigationSettings();
+    void setEditingShortcutsEnabled(bool enabled);
 
     EditorController* m_controller = nullptr;
     EditorCanvas* m_canvas = nullptr;
     TypographyPanel* m_typographyPanel = nullptr;
+    TransformPanel* m_transformPanel = nullptr;
     EffectsPanel* m_effectsPanel = nullptr;
     DeformationPanel* m_deformationPanel = nullptr;
     ToolPalette* m_toolPalette = nullptr;
@@ -56,6 +66,12 @@ private:
     QStringList m_presetNames;
     QString m_projectPath;
     QAction* m_saveAction = nullptr;
+    QAction* m_copyAction = nullptr;
+    QAction* m_cutAction = nullptr;
+    QAction* m_pasteAction = nullptr;
+    QAction* m_selectAllAction = nullptr;
+    QVector<QAction*> m_toolActions;
+    QHash<QString, QAction*> m_actions;
 };
 
 } // namespace vt

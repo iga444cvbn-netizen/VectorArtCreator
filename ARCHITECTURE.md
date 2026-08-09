@@ -26,8 +26,9 @@ TextEngine -> ShapedText -> GlyphGeometryBuilder -> VectorGeometry
 * `Document` owns metadata and the persistent `Page -> Layer -> TextObject`
   hierarchy. Every page, layer, and object has a stable UUID-like identity;
   selection and commands refer to those IDs rather than vector positions.
-  `primaryTextObject()` remains a compatibility adapter for older panels and
-  commands, not a second source of document state.
+  A new document contains Page 1 and Layer 1 but no text object; explicit calls
+  to `primaryTextObject()` remain a compatibility adapter for older fixtures,
+  not a second source of document state.
 * `TextEngine` shapes the complete Unicode source with paragraph-level
   `QTextLayout`/`QGlyphRun` instances, then `GlyphGeometryBuilder` obtains each
   glyph outline through `QRawFont::pathForGlyph`. No glyph is rasterized.
@@ -59,17 +60,18 @@ canvas supports object hit testing, additive selection, marquee selection,
 selection outlines, duplicate/delete, keyboard nudge, and text-object creation.
 Stable object IDs make these operations safe across asynchronous scene results.
 
-The current Text tool creates an object at the canvas point and routes editing
-to the Typography inspector. A full in-canvas caret/clipboard editor is a
-deliberately bounded follow-up; the document already stores multiline source
-text and source-cluster metadata independently of widgets.
+The Text tool creates an object at the canvas point and opens a multiline
+`QPlainTextEdit` overlay aligned to the object bounds. Clicking an existing
+object in the Text tool reuses the same overlay, so caret movement, selection,
+copy/paste, and source-range tracking remain standard text-editor behavior.
+The Typography inspector remains available for precise source and font edits.
 
 `ShortcutManager` registers commands independently of widgets, rejects duplicate
 key sequences, and persists accepted bindings through `QSettings`. The
-Preferences dialog currently covers the workspace-level settings exposed by the
-editor. Mask stroke data has a serializable place in the effect model and the
-evaluator boundary, but interactive mask painting/eraser UI is intentionally
-deferred until the mask semantics are finalized.
+Preferences dialog covers theme, navigation, zoom direction, and the complete
+registered command table. Effect instances carry stable IDs, text-range scopes,
+and vector mask strokes; the Effect Mask tool paints local erase/restore strokes
+which are evaluated as nondestructive geometric attenuation and are undoable.
 
 ## Geometry pipeline
 
@@ -176,11 +178,12 @@ command and never changes manual deformation strokes.
 
 `TextEngine` caches the last shaping result by source text, font descriptor,
 font size, line spacing, and `trackingEm`. The scene evaluator receives a copied
-`Page` snapshot and runs on `QThreadPool` workers with a fresh `TextEngine`; each
-result carries a generation number and stale generations are discarded before
-publication. A preview stroke is evaluated only on the final scene copy and is
-never serialized. Geometry copies remain the rendering-stage boundary rather
-than an undo mechanism.
+`Page` snapshot, evaluates visible objects as bounded per-object tasks on
+`QThreadPool` workers, and keeps shaping/base/effect/deformation stages in a
+thread-local per-object cache. Each controller request carries a generation;
+only one page evaluation is active and only the newest pending snapshot is
+retained. Stale generations are discarded before publication. A preview stroke
+is evaluated only on the final scene copy and is never serialized.
 
 ## Undo/redo and clean state
 

@@ -54,6 +54,12 @@ set(UI_SOURCES
     src/ui/selection_model.h
     src/ui/selection_model.cpp
     src/ui/deformation_tool_state.h
+    src/ui/slider_spin_box.h
+    src/ui/slider_spin_box.cpp
+    src/ui/collapsible_section.h
+    src/ui/collapsible_section.cpp
+    src/ui/transform_panel.h
+    src/ui/transform_panel.cpp
     src/ui/editor_canvas.h
     src/ui/editor_canvas.cpp
     src/ui/tool_palette.h

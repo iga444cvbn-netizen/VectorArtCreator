@@ -163,6 +163,7 @@ private slots:
     void unicodePresetStorageIsCollisionSafe();
     void deterministicJitter();
     void effectOrderingIsDeterministic();
+    void effectMasksAttenuateGeometry();
     void textReplacementPreservesEffects();
     void presetApplicationClonesEffects();
     void svgExportContainsPaths();
@@ -201,6 +202,7 @@ private slots:
     void proceduralEffectsAreDeterministicAndAvailable();
     void selectionModelSupportsSingleAndRangeSelection();
     void controllerSceneCommandsMoveDuplicateAndDeleteObjects();
+    void controllerUndoTargetsStableObject();
     void controllerPageAndLayerCommandsAreUndoable();
     void shortcutManagerDetectsConflictsAndPersists();
     void asyncEvaluationPublishesLatestGeneration();
@@ -217,6 +219,13 @@ void CoreTests::projectSerializationRoundTrip()
     wave->amplitude = 0.21;
     wave->frequency = 2.5;
     wave->phase = -0.25;
+    EffectMaskStroke mask;
+    mask.points = {QPointF(12.0, 18.0), QPointF(30.0, 18.0)};
+    mask.radius = 24.0;
+    mask.opacity = 0.8;
+    mask.hardness = 0.65;
+    mask.restore = true;
+    wave->maskStrokes.push_back(mask);
     object.effects.append(std::move(wave));
     auto jitter = std::make_unique<GlyphJitterEffect>();
     jitter->amount = 0.04;
@@ -248,6 +257,8 @@ void CoreTests::projectSerializationRoundTrip()
     QCOMPARE(restored.primaryTextObject().fill, object.fill);
     QCOMPARE(restored.primaryTextObject().effects.size(), 2);
     QCOMPARE(restored.primaryTextObject().effects.at(0)->typeId(), QStringLiteral("wave"));
+    QCOMPARE(restored.primaryTextObject().effects.at(0)->maskStrokes.size(), 1);
+    QCOMPARE(restored.primaryTextObject().effects.at(0)->maskStrokes.front().restore, true);
     QCOMPARE(restored.primaryTextObject().effects.at(1)->enabled, false);
     const auto* restoredJitter = dynamic_cast<const GlyphJitterEffect*>(restored.primaryTextObject().effects.at(1));
     QVERIFY(restoredJitter);
@@ -434,6 +445,29 @@ void CoreTests::effectOrderingIsDeterministic()
     VectorGeometry changed = baseGeometry(object);
     reordered.apply(changed);
     QVERIFY(geometrySignature(first) != geometrySignature(changed));
+}
+
+void CoreTests::effectMasksAttenuateGeometry()
+{
+    const VectorGeometry original = rectangleGeometry();
+    EffectStack stack;
+    auto stretch = std::make_unique<StretchEffect>();
+    stretch->horizontal = 2.0;
+    stretch->vertical = 1.0;
+    EffectMaskStroke mask;
+    mask.points = {QPointF(10.0, 10.0)};
+    mask.radius = 18.0;
+    mask.opacity = 1.0;
+    mask.hardness = 1.0;
+    stretch->maskStrokes.push_back(mask);
+    stack.append(std::move(stretch));
+
+    VectorGeometry masked = original;
+    stack.apply(masked);
+    QCOMPARE(firstPathElement(masked.pieces.at(0).path),
+             firstPathElement(original.pieces.at(0).path));
+    QVERIFY(firstPathElement(masked.pieces.at(1).path)
+            != firstPathElement(original.pieces.at(1).path));
 }
 
 void CoreTests::textReplacementPreservesEffects()
@@ -1007,96 +1041,105 @@ void CoreTests::cyrillicShapeDeformationProducesGeometry()
 void CoreTests::controllerUndoRedoAndMerge()
 {
     EditorController controller;
-    const QString initial = controller.document().primaryTextObject().sourceText;
+    const QString objectId = controller.createTextObject(QPointF(120.0, 160.0));
+    QVERIFY(!objectId.isEmpty());
+    const QString initial = controller.activeObject()->sourceText;
+    controller.undoStack()->setClean();
     QVERIFY(!controller.isModified());
+    const int initialCommandCount = controller.undoStack()->count();
     controller.setText(QStringLiteral("first"));
     controller.setText(QStringLiteral("second"));
-    QCOMPARE(controller.undoStack()->count(), 1);
+    QCOMPARE(controller.undoStack()->count(), initialCommandCount + 1);
     QVERIFY(controller.isModified());
-    QCOMPARE(controller.document().primaryTextObject().sourceText, QStringLiteral("second"));
+    QCOMPARE(controller.document().objectById(objectId)->sourceText, QStringLiteral("second"));
 
     controller.undoStack()->undo();
-    QCOMPARE(controller.document().primaryTextObject().sourceText, initial);
+    QCOMPARE(controller.document().objectById(objectId)->sourceText, initial);
     QVERIFY(!controller.isModified());
     controller.undoStack()->redo();
-    QCOMPARE(controller.document().primaryTextObject().sourceText, QStringLiteral("second"));
+    QCOMPARE(controller.document().objectById(objectId)->sourceText, QStringLiteral("second"));
     QVERIFY(controller.isModified());
 }
 
 void CoreTests::controllerEffectCommandsAreGranular()
 {
     EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(0.0, 0.0), QStringLiteral("Effects"));
+    QVERIFY(!objectId.isEmpty());
     controller.addEffect(QStringLiteral("wave"));
     controller.addEffect(QStringLiteral("stretch"));
-    QCOMPARE(controller.document().primaryTextObject().effects.size(), 2);
-    QCOMPARE(controller.document().primaryTextObject().effects.at(0)->typeId(), QStringLiteral("wave"));
-    QCOMPARE(controller.document().primaryTextObject().effects.at(1)->typeId(), QStringLiteral("stretch"));
+    QCOMPARE(controller.document().objectById(objectId)->effects.size(), 2);
+    QCOMPARE(controller.document().objectById(objectId)->effects.at(0)->typeId(), QStringLiteral("wave"));
+    QCOMPARE(controller.document().objectById(objectId)->effects.at(1)->typeId(), QStringLiteral("stretch"));
 
     const int beforeParameter = controller.undoStack()->count();
     const double initialAmplitude = effectParameterValue(
-        *controller.document().primaryTextObject().effects.at(0), QStringLiteral("amplitude"));
+        *controller.document().objectById(objectId)->effects.at(0), QStringLiteral("amplitude"));
     controller.setEffectParameter(0, QStringLiteral("amplitude"), 0.2);
     controller.setEffectParameter(0, QStringLiteral("amplitude"), 0.4);
     QCOMPARE(controller.undoStack()->count(), beforeParameter + 1);
     QCOMPARE(effectParameterValue(
-                 *controller.document().primaryTextObject().effects.at(0), QStringLiteral("amplitude")),
+                 *controller.document().objectById(objectId)->effects.at(0), QStringLiteral("amplitude")),
              0.4);
     controller.undoStack()->undo();
     QCOMPARE(effectParameterValue(
-                 *controller.document().primaryTextObject().effects.at(0), QStringLiteral("amplitude")),
+                 *controller.document().objectById(objectId)->effects.at(0), QStringLiteral("amplitude")),
              initialAmplitude);
     controller.undoStack()->redo();
     QCOMPARE(effectParameterValue(
-                 *controller.document().primaryTextObject().effects.at(0), QStringLiteral("amplitude")),
+                 *controller.document().objectById(objectId)->effects.at(0), QStringLiteral("amplitude")),
              0.4);
 
     controller.moveEffect(0, 1);
-    QCOMPARE(controller.document().primaryTextObject().effects.at(0)->typeId(), QStringLiteral("stretch"));
+    QCOMPARE(controller.document().objectById(objectId)->effects.at(0)->typeId(), QStringLiteral("stretch"));
     controller.undoStack()->undo();
-    QCOMPARE(controller.document().primaryTextObject().effects.at(0)->typeId(), QStringLiteral("wave"));
+    QCOMPARE(controller.document().objectById(objectId)->effects.at(0)->typeId(), QStringLiteral("wave"));
     controller.removeEffect(0);
-    QCOMPARE(controller.document().primaryTextObject().effects.size(), 1);
+    QCOMPARE(controller.document().objectById(objectId)->effects.size(), 1);
     controller.undoStack()->undo();
-    QCOMPARE(controller.document().primaryTextObject().effects.size(), 2);
-    QCOMPARE(controller.document().primaryTextObject().effects.at(0)->typeId(), QStringLiteral("wave"));
+    QCOMPARE(controller.document().objectById(objectId)->effects.size(), 2);
+    QCOMPARE(controller.document().objectById(objectId)->effects.at(0)->typeId(), QStringLiteral("wave"));
 }
 
 void CoreTests::controllerDeformationCommandsAreGranular()
 {
     EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(0.0, 0.0), QStringLiteral("Deform"));
+    QVERIFY(!objectId.isEmpty());
+    controller.undoStack()->setClean();
     const DeformationStroke stroke = pushStroke(BrushTarget::Shape);
     controller.setDeformationPreview(stroke);
     QVERIFY(!controller.isModified());
-    QVERIFY(controller.document().primaryTextObject().deformation.strokes.isEmpty());
+    QVERIFY(controller.document().objectById(objectId)->deformation.strokes.isEmpty());
     controller.clearDeformationPreview();
 
     const int initialCommandCount = controller.undoStack()->count();
     controller.addDeformationStroke(stroke);
     QCOMPARE(controller.undoStack()->count(), initialCommandCount + 1);
-    QCOMPARE(controller.document().primaryTextObject().deformation.strokes.size(), 1);
+    QCOMPARE(controller.document().objectById(objectId)->deformation.strokes.size(), 1);
 
     controller.undoStack()->undo();
-    QVERIFY(controller.document().primaryTextObject().deformation.strokes.isEmpty());
+    QVERIFY(controller.document().objectById(objectId)->deformation.strokes.isEmpty());
     controller.undoStack()->redo();
-    QCOMPARE(controller.document().primaryTextObject().deformation.strokes.size(), 1);
+    QCOMPARE(controller.document().objectById(objectId)->deformation.strokes.size(), 1);
 
     const int beforeStrength = controller.undoStack()->count();
     controller.setDeformationStrength(0.5);
     controller.setDeformationStrength(0.75);
     QCOMPARE(controller.undoStack()->count(), beforeStrength + 1);
-    QCOMPARE(controller.document().primaryTextObject().deformation.strength, 0.75);
+    QCOMPARE(controller.document().objectById(objectId)->deformation.strength, 0.75);
 
     controller.setDeformationEnabled(false);
-    QVERIFY(!controller.document().primaryTextObject().deformation.enabled);
+    QVERIFY(!controller.document().objectById(objectId)->deformation.enabled);
     controller.undoStack()->undo();
-    QVERIFY(controller.document().primaryTextObject().deformation.enabled);
+    QVERIFY(controller.document().objectById(objectId)->deformation.enabled);
     controller.undoStack()->undo();
-    QCOMPARE(controller.document().primaryTextObject().deformation.strength, 1.0);
+    QCOMPARE(controller.document().objectById(objectId)->deformation.strength, 1.0);
 
     controller.clearDeformation();
-    QVERIFY(controller.document().primaryTextObject().deformation.strokes.isEmpty());
+    QVERIFY(controller.document().objectById(objectId)->deformation.strokes.isEmpty());
     controller.undoStack()->undo();
-    QCOMPARE(controller.document().primaryTextObject().deformation.strokes.size(), 1);
+    QCOMPARE(controller.document().objectById(objectId)->deformation.strokes.size(), 1);
 }
 
 void CoreTests::controllerCleanStateFollowsUndoStack()
@@ -1104,6 +1147,8 @@ void CoreTests::controllerCleanStateFollowsUndoStack()
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(), QStringLiteral("Clean state"));
+    QVERIFY(!objectId.isEmpty());
     const QString projectPath = directory.filePath(QStringLiteral("clean-state.vtproj"));
     QString error;
     QVERIFY2(controller.saveProject(projectPath, &error), qPrintable(error));
@@ -1123,17 +1168,19 @@ void CoreTests::documentHierarchyHasStableIds()
     QVERIFY(!document.pages.empty());
     QVERIFY(!document.currentPageId.isEmpty());
     QVERIFY(!document.activeLayerId.isEmpty());
-    QVERIFY(!document.activeObjectId.isEmpty());
+    QVERIFY(document.activeObjectId.isEmpty());
+    QVERIFY(!document.hasObjects());
     QVERIFY(document.currentPage());
     QVERIFY(document.activeLayer());
-    QVERIFY(document.primaryTextObject().id != document.activeLayerId);
+    const QString compatibilityObjectId = document.primaryTextObject().id;
+    QVERIFY(compatibilityObjectId != document.activeLayerId);
 
     Page extraPage;
     Layer extraLayer;
     TextObject extraObject;
     QVERIFY(extraPage.id != document.currentPageId);
     QVERIFY(extraLayer.id != document.activeLayerId);
-    QVERIFY(extraObject.id != document.primaryTextObject().id);
+    QVERIFY(extraObject.id != compatibilityObjectId);
 }
 
 void CoreTests::legacyFlatProjectMigratesToPageAndLayer()
@@ -1238,7 +1285,8 @@ void CoreTests::selectionModelSupportsSingleAndRangeSelection()
 void CoreTests::controllerSceneCommandsMoveDuplicateAndDeleteObjects()
 {
     EditorController controller;
-    const QString firstId = controller.activeObject()->id;
+    const QString firstId = controller.createTextObject(QPointF(80.0, 100.0), QStringLiteral("First"));
+    QVERIFY(!firstId.isEmpty());
     controller.createTextObject(QPointF(120.0, 160.0), QStringLiteral("Second"));
     const QString secondId = controller.activeObject()->id;
     QCOMPARE(controller.document().objectsOnCurrentPage().size(), 2);
@@ -1256,16 +1304,39 @@ void CoreTests::controllerSceneCommandsMoveDuplicateAndDeleteObjects()
     QCOMPARE(controller.document().objectsOnCurrentPage().size(), 2);
 }
 
+void CoreTests::controllerUndoTargetsStableObject()
+{
+    EditorController controller;
+    const QString firstId = controller.createTextObject(QPointF(), QStringLiteral("First"));
+    QVERIFY(!firstId.isEmpty());
+    controller.undoStack()->setClean();
+    controller.setText(QStringLiteral("First edited"));
+
+    const QString secondId = controller.createTextObject(QPointF(), QStringLiteral("Second"));
+    QVERIFY(!secondId.isEmpty());
+    controller.setText(QStringLiteral("Second edited"));
+    controller.selectObject(firstId);
+
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().objectById(firstId)->sourceText, QStringLiteral("First edited"));
+    QCOMPARE(controller.document().objectById(secondId)->sourceText, QStringLiteral("Second"));
+    controller.undoStack()->redo();
+    QCOMPARE(controller.document().objectById(secondId)->sourceText, QStringLiteral("Second edited"));
+}
+
 void CoreTests::controllerPageAndLayerCommandsAreUndoable()
 {
     EditorController controller;
     QCOMPARE(controller.document().pages.size(), size_t(1));
     controller.addLayer();
+    const QString addedLayerId = controller.document().activeLayerId;
     QCOMPARE(controller.document().currentPage()->layers.size(), size_t(2));
     controller.undoStack()->undo();
     QCOMPARE(controller.document().currentPage()->layers.size(), size_t(1));
+    QVERIFY(controller.document().activeLayerId != addedLayerId);
     controller.undoStack()->redo();
     QCOMPARE(controller.document().currentPage()->layers.size(), size_t(2));
+    QCOMPARE(controller.document().activeLayerId, addedLayerId);
     controller.addPage();
     QCOMPARE(controller.document().pages.size(), size_t(2));
     const QString addedPageId = controller.document().currentPageId;
@@ -1274,6 +1345,13 @@ void CoreTests::controllerPageAndLayerCommandsAreUndoable()
     QVERIFY(controller.document().currentPageId != addedPageId);
     controller.undoStack()->redo();
     QCOMPARE(controller.document().pages.size(), size_t(2));
+    controller.removeCurrentPage();
+    QCOMPARE(controller.document().pages.size(), size_t(1));
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().pages.size(), size_t(2));
+    QCOMPARE(controller.document().currentPageId, addedPageId);
+    controller.undoStack()->redo();
+    QCOMPARE(controller.document().pages.size(), size_t(1));
 }
 
 void CoreTests::shortcutManagerDetectsConflictsAndPersists()
@@ -1316,7 +1394,8 @@ void CoreTests::shortcutManagerDetectsConflictsAndPersists()
 void CoreTests::asyncEvaluationPublishesLatestGeneration()
 {
     EditorController controller;
-    const QString objectId = controller.activeObject()->id;
+    const QString objectId = controller.createTextObject(QPointF(0.0, 0.0), QStringLiteral("initial"));
+    QVERIFY(!objectId.isEmpty());
     controller.setText(QStringLiteral("stale generation"));
     controller.setText(QStringLiteral("latest generation"));
 

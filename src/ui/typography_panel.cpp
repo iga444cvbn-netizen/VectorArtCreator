@@ -20,11 +20,12 @@ TypographyPanel::TypographyPanel(QWidget* parent)
 
     auto* group = new QGroupBox(QStringLiteral("Typography"), this);
     auto* layout = new QFormLayout(group);
+    layout->setContentsMargins(8, 8, 8, 8);
     layout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 
     m_textEdit = new QPlainTextEdit(group);
     m_textEdit->setPlaceholderText(QStringLiteral("Enter Latin or Cyrillic text…"));
-    m_textEdit->setMinimumHeight(74);
+    m_textEdit->setMinimumHeight(70);
     layout->addRow(QStringLiteral("Text"), m_textEdit);
 
     m_familyCombo = new QComboBox(group);
@@ -38,26 +39,33 @@ TypographyPanel::TypographyPanel(QWidget* parent)
     layout->addRow(QStringLiteral("Family"), m_familyCombo);
 
     m_styleCombo = new QComboBox(group);
-    m_styleCombo->setEditable(false);
     layout->addRow(QStringLiteral("Style"), m_styleCombo);
 
     m_weightCombo = new QComboBox(group);
     populateWeights();
     layout->addRow(QStringLiteral("Weight"), m_weightCombo);
 
-    m_fontSizeSpin = new QDoubleSpinBox(group);
-    m_fontSizeSpin->setRange(1.0, 2000.0);
-    m_fontSizeSpin->setDecimals(1);
-    m_fontSizeSpin->setSingleStep(1.0);
-    m_fontSizeSpin->setSuffix(QStringLiteral(" pt"));
-    layout->addRow(QStringLiteral("Size"), m_fontSizeSpin);
+    m_fontSizeSlider = new SliderSpinBox(group);
+    m_fontSizeSlider->setRange(1.0, 2000.0);
+    m_fontSizeSlider->setSingleStep(1.0);
+    m_fontSizeSlider->setDecimals(1);
+    m_fontSizeSlider->setSuffix(QStringLiteral(" pt"));
+    m_fontSizeSlider->setLogarithmic(true);
+    layout->addRow(QStringLiteral("Size"), m_fontSizeSlider);
 
-    m_trackingSpin = new QDoubleSpinBox(group);
-    m_trackingSpin->setRange(-1.0, 1.0);
-    m_trackingSpin->setDecimals(3);
-    m_trackingSpin->setSingleStep(0.01);
-    m_trackingSpin->setSuffix(QStringLiteral(" em"));
-    layout->addRow(QStringLiteral("Tracking (em)"), m_trackingSpin);
+    m_trackingSlider = new SliderSpinBox(group);
+    m_trackingSlider->setRange(-1.0, 1.0);
+    m_trackingSlider->setSingleStep(0.01);
+    m_trackingSlider->setDecimals(3);
+    m_trackingSlider->setSuffix(QStringLiteral(" em"));
+    layout->addRow(QStringLiteral("Tracking"), m_trackingSlider);
+
+    m_lineSpacingSlider = new SliderSpinBox(group);
+    m_lineSpacingSlider->setRange(0.5, 3.0);
+    m_lineSpacingSlider->setSingleStep(0.05);
+    m_lineSpacingSlider->setDecimals(2);
+    m_lineSpacingSlider->setSuffix(QStringLiteral(" ×"));
+    layout->addRow(QStringLiteral("Line spacing"), m_lineSpacingSlider);
 
     m_fillButton = new QPushButton(group);
     m_fillButton->setText(QStringLiteral("Choose color…"));
@@ -67,7 +75,6 @@ TypographyPanel::TypographyPanel(QWidget* parent)
     layout->addRow(QString(), m_refreshFontsButton);
 
     outerLayout->addWidget(group);
-    outerLayout->addStretch(1);
 
     connect(m_textEdit, &QPlainTextEdit::textChanged, this, [this] {
         emit textChangedByUser(m_textEdit->toPlainText());
@@ -86,12 +93,12 @@ TypographyPanel::TypographyPanel(QWidget* parent)
             emit fontWeightChanged(m_weightCombo->itemData(index).toInt());
         }
     });
-    connect(m_fontSizeSpin, &QDoubleSpinBox::valueChanged, this, [this](double value) {
-        emit fontSizeChanged(value);
-    });
-    connect(m_trackingSpin, &QDoubleSpinBox::valueChanged, this, [this](double value) {
-        emit trackingChanged(value);
-    });
+    connect(m_fontSizeSlider, &SliderSpinBox::valueChanged, this,
+            [this](double value) { emit fontSizeChanged(value); });
+    connect(m_trackingSlider, &SliderSpinBox::valueChanged, this,
+            [this](double value) { emit trackingChanged(value); });
+    connect(m_lineSpacingSlider, &SliderSpinBox::valueChanged, this,
+            [this](double value) { emit lineSpacingChanged(value); });
     connect(m_fillButton, &QPushButton::clicked, this, &TypographyPanel::chooseFillColor);
     connect(m_refreshFontsButton, &QPushButton::clicked, this, &TypographyPanel::refreshFontsRequested);
 }
@@ -116,14 +123,22 @@ void TypographyPanel::setFontStyles(const QStringList& styles)
     }
 }
 
-void TypographyPanel::refresh(const TextObject& object)
+void TypographyPanel::refresh(const TextObject* object)
 {
+    setEnabled(object != nullptr);
+    if (!object) {
+        const QSignalBlocker blocker(m_textEdit);
+        m_textEdit->clear();
+        m_textEdit->setPlaceholderText(QStringLiteral("No object selected"));
+        return;
+    }
+    m_textEdit->setPlaceholderText(QStringLiteral("Enter Latin or Cyrillic text…"));
     {
         const QSignalBlocker blocker(m_textEdit);
         const QTextCursor oldCursor = m_textEdit->textCursor();
-        m_textEdit->setPlainText(object.sourceText);
+        m_textEdit->setPlainText(object->sourceText);
         QTextCursor newCursor = m_textEdit->textCursor();
-        const int newLength = object.sourceText.size();
+        const int newLength = object->sourceText.size();
         newCursor.setPosition(qBound(0, oldCursor.position(), newLength));
         if (oldCursor.hasSelection()) {
             newCursor.setPosition(qBound(0, oldCursor.anchor(), newLength), QTextCursor::KeepAnchor);
@@ -132,29 +147,33 @@ void TypographyPanel::refresh(const TextObject& object)
     }
     {
         const QSignalBlocker blocker(m_familyCombo);
-        m_familyCombo->setCurrentText(object.font.family);
+        m_familyCombo->setCurrentText(object->font.family);
     }
     {
         const QSignalBlocker blocker(m_styleCombo);
-        m_styleCombo->setCurrentText(object.font.styleName);
+        m_styleCombo->setCurrentText(object->font.styleName);
     }
     {
         const QSignalBlocker blocker(m_weightCombo);
-        const int index = m_weightCombo->findData(object.font.weight);
+        const int index = m_weightCombo->findData(object->font.weight);
         if (index >= 0) {
             m_weightCombo->setCurrentIndex(index);
         }
     }
     {
-        const QSignalBlocker blocker(m_fontSizeSpin);
-        m_fontSizeSpin->setValue(object.typography.fontSize);
+        const QSignalBlocker blocker(m_fontSizeSlider);
+        m_fontSizeSlider->setValue(object->typography.fontSize);
     }
     {
-        const QSignalBlocker blocker(m_trackingSpin);
-        m_trackingSpin->setValue(object.typography.trackingEm);
+        const QSignalBlocker blocker(m_trackingSlider);
+        m_trackingSlider->setValue(object->typography.trackingEm);
+    }
+    {
+        const QSignalBlocker blocker(m_lineSpacingSlider);
+        m_lineSpacingSlider->setValue(object->typography.lineSpacing);
     }
 
-    m_fill = object.fill;
+    m_fill = object->fill;
     m_fillButton->setStyleSheet(QStringLiteral("QPushButton { background-color: %1; }")
                                     .arg(m_fill.name(QColor::HexRgb)));
 }

@@ -187,7 +187,7 @@ Document::Document()
     : createdAt(QDateTime::currentDateTimeUtc())
     , modifiedAt(createdAt)
 {
-    ensureDefaultScene(true);
+    ensureDefaultScene(false);
 }
 
 Document::Document(const Document& other)

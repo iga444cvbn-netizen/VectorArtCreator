@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/document/document.h"
+#include "ui/slider_spin_box.h"
 
 #include <QColor>
 #include <QComboBox>
@@ -19,7 +20,8 @@ public:
 
     void setFontFamilies(const QStringList& families);
     void setFontStyles(const QStringList& styles);
-    void refresh(const TextObject& object);
+    void refresh(const TextObject* object);
+    void refresh(const TextObject& object) { refresh(&object); }
 
 signals:
     void textChangedByUser(const QString& text);
@@ -28,6 +30,7 @@ signals:
     void fontWeightChanged(int weight);
     void fontSizeChanged(qreal size);
     void trackingChanged(qreal tracking);
+    void lineSpacingChanged(qreal lineSpacing);
     void fillColorChanged(const QColor& color);
     void refreshFontsRequested();
 
@@ -41,8 +44,9 @@ private:
     QComboBox* m_familyCombo = nullptr;
     QComboBox* m_styleCombo = nullptr;
     QComboBox* m_weightCombo = nullptr;
-    QDoubleSpinBox* m_fontSizeSpin = nullptr;
-    QDoubleSpinBox* m_trackingSpin = nullptr;
+    SliderSpinBox* m_fontSizeSlider = nullptr;
+    SliderSpinBox* m_trackingSlider = nullptr;
+    SliderSpinBox* m_lineSpacingSlider = nullptr;
     QPushButton* m_fillButton = nullptr;
     QPushButton* m_refreshFontsButton = nullptr;
     QColor m_fill;

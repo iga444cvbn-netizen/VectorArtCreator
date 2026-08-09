@@ -38,7 +38,9 @@ QJsonObject EffectMaskStroke::toJson() const
     }
     return {{QStringLiteral("points"), serializedPoints},
             {QStringLiteral("radius"), radius},
-            {QStringLiteral("opacity"), opacity}};
+            {QStringLiteral("opacity"), opacity},
+            {QStringLiteral("hardness"), hardness},
+            {QStringLiteral("restore"), restore}};
 }
 
 EffectMaskStroke EffectMaskStroke::fromJson(const QJsonObject& object)
@@ -52,6 +54,10 @@ EffectMaskStroke EffectMaskStroke::fromJson(const QJsonObject& object)
     }
     stroke.radius = qMax<qreal>(0.1, object.value(QStringLiteral("radius")).toDouble(stroke.radius));
     stroke.opacity = qBound<qreal>(0.0, object.value(QStringLiteral("opacity")).toDouble(stroke.opacity), 1.0);
+    stroke.hardness = qBound<qreal>(0.0,
+                                    object.value(QStringLiteral("hardness")).toDouble(stroke.hardness),
+                                    1.0);
+    stroke.restore = object.value(QStringLiteral("restore")).toBool(false);
     return stroke;
 }
 

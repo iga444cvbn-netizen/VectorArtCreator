@@ -6,7 +6,12 @@
 
 #include <QtConcurrentRun>
 
+#include <QClipboard>
 #include <QFontDatabase>
+#include <QGuiApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QMimeData>
 #include <QStandardPaths>
 
 #include <cmath>
@@ -57,6 +62,53 @@ bool effectStacksEqual(const EffectStack& left, const EffectStack& right)
     return true;
 }
 
+QRectF localReferenceBounds(const TextObject& object)
+{
+    TextEngine engine;
+    const ShapedText shaped = engine.shape(object);
+    return GlyphGeometryBuilder::build(shaped, object.typography.fontSize).referenceBounds;
+}
+
+Layer* currentPageLayerForObject(Document& document, const QString& objectId)
+{
+    Page* page = document.currentPage();
+    if (!page) {
+        return nullptr;
+    }
+    for (const auto& layer : page->layers) {
+        if (layer && layer->objectById(objectId)) {
+            return layer.get();
+        }
+    }
+    return nullptr;
+}
+
+const Layer* currentPageLayerForObject(const Document& document, const QString& objectId)
+{
+    const Page* page = document.currentPage();
+    if (!page) {
+        return nullptr;
+    }
+    for (const auto& layer : page->layers) {
+        if (layer && layer->objectById(objectId)) {
+            return layer.get();
+        }
+    }
+    return nullptr;
+}
+
+QTransform objectTransform(const TextObject& object, const QRectF& referenceBounds)
+{
+    const QPointF center = referenceBounds.center();
+    QTransform transform;
+    Q_UNUSED(transform.translate(object.transform.position.x(), object.transform.position.y()));
+    Q_UNUSED(transform.translate(center.x(), center.y()));
+    Q_UNUSED(transform.rotate(object.transform.rotation));
+    Q_UNUSED(transform.scale(object.transform.scale.x(), object.transform.scale.y()));
+    Q_UNUSED(transform.translate(-center.x(), -center.y()));
+    return transform;
+}
+
 std::optional<EffectParameter> findEffectParameter(const Effect& effect, const QString& id)
 {
     const QVector<EffectParameter> parameters = effect.parameterDefinitions();
@@ -76,10 +128,17 @@ EditorController::EditorController(QObject* parent)
 {
     m_selectionModel = new SelectionModel(this);
     connect(m_selectionModel, &SelectionModel::selectionChanged, this, [this] {
+        const QString previousObjectId = m_document.activeObjectId;
         if (!m_selectionModel->activeObjectId().isEmpty()) {
             if (TextObject* object = m_document.objectById(m_selectionModel->activeObjectId())) {
                 m_document.activeObjectId = object->id;
             }
+        } else {
+            m_document.activeObjectId.clear();
+        }
+        if (previousObjectId != m_document.activeObjectId) {
+            m_selectedEffectId.clear();
+            emit selectedEffectChanged(m_selectedEffectId);
         }
         emit documentChanged();
         emit sceneChanged();
@@ -156,21 +215,72 @@ TextObject* EditorController::activeObject()
 {
     if (m_selectionModel && !m_selectionModel->activeObjectId().isEmpty()) {
         if (TextObject* object = m_document.objectById(m_selectionModel->activeObjectId())) {
-            m_document.activeObjectId = object->id;
-            return object;
+            if (const Layer* layer = currentPageLayerForObject(m_document, object->id);
+                layer && layer->visible && !layer->locked) {
+                m_document.activeObjectId = object->id;
+                return object;
+            }
         }
     }
-    return &m_document.primaryTextObject();
+    return nullptr;
 }
 
 const TextObject* EditorController::activeObject() const
 {
     if (m_selectionModel && !m_selectionModel->activeObjectId().isEmpty()) {
         if (const TextObject* object = m_document.objectById(m_selectionModel->activeObjectId())) {
-            return object;
+            if (const Layer* layer = currentPageLayerForObject(m_document, object->id);
+                layer && layer->visible && !layer->locked) {
+                return object;
+            }
         }
     }
-    return &m_document.primaryTextObject();
+    return nullptr;
+}
+
+TextObject* EditorController::editableActiveObject()
+{
+    return activeObject();
+}
+
+const TextObject* EditorController::editableActiveObject() const
+{
+    return activeObject();
+}
+
+EditorTool EditorController::tool() const
+{
+    return m_toolState.tool();
+}
+
+BrushTarget EditorController::brushTarget() const
+{
+    return m_toolState.target();
+}
+
+qreal EditorController::brushRadius() const
+{
+    return m_brushRadius;
+}
+
+qreal EditorController::brushStrength() const
+{
+    return m_brushStrength;
+}
+
+qreal EditorController::brushHardness() const
+{
+    return m_brushHardness;
+}
+
+bool EditorController::maskRestoreMode() const
+{
+    return m_maskRestore;
+}
+
+QString EditorController::selectedEffectId() const
+{
+    return m_selectedEffectId;
 }
 
 QStringList EditorController::selectedObjectIds() const
@@ -186,14 +296,68 @@ void EditorController::refreshFonts()
     emit statusMessageChanged(QStringLiteral("System font list refreshed."));
 }
 
+void EditorController::setTool(EditorTool tool)
+{
+    if (m_toolState.tool() == tool) {
+        emit toolChanged(tool);
+        return;
+    }
+    m_toolState.setTool(tool);
+    emit toolChanged(tool);
+    if (const std::optional<BrushMode> mode = m_toolState.brushMode()) {
+        emit brushSettingsChanged(*mode,
+                                  m_toolState.target(),
+                                  m_brushRadius,
+                                  m_brushStrength,
+                                  m_brushHardness);
+    }
+    emit maskSettingsChanged(m_brushRadius, m_brushStrength, m_brushHardness, m_maskRestore);
+}
+
+void EditorController::setBrushSettings(BrushTarget target,
+                                        qreal radius,
+                                        qreal strength,
+                                        qreal hardness)
+{
+    m_toolState.setTarget(target);
+    m_brushRadius = qBound<qreal>(1.0, radius, 100000.0);
+    m_brushStrength = qBound<qreal>(0.0, strength, 4.0);
+    m_brushHardness = qBound<qreal>(0.0, hardness, 1.0);
+    if (const std::optional<BrushMode> mode = m_toolState.brushMode()) {
+        emit brushSettingsChanged(*mode,
+                                  m_toolState.target(),
+                                  m_brushRadius,
+                                  m_brushStrength,
+                                  m_brushHardness);
+    }
+    emit maskSettingsChanged(m_brushRadius, m_brushStrength, m_brushHardness, m_maskRestore);
+}
+
+void EditorController::setMaskRestoreMode(bool restore)
+{
+    m_maskRestore = restore;
+    emit maskSettingsChanged(m_brushRadius, m_brushStrength, m_brushHardness, m_maskRestore);
+}
+
+void EditorController::setSelectedEffectId(const QString& effectId)
+{
+    if (m_selectedEffectId == effectId) {
+        return;
+    }
+    m_selectedEffectId = effectId;
+    emit selectedEffectChanged(m_selectedEffectId);
+}
+
 void EditorController::newDocument()
 {
     m_document = Document();
     m_previewStroke.reset();
+    m_previewObjectId.clear();
     m_undoStack.clear();
     m_undoStack.setClean();
     m_selectionModel->clear();
     synchronizeSelectionWithDocument();
+    m_selectedEffectId.clear();
     m_textEngine.clearCache();
     rebuildScene();
     emit documentChanged();
@@ -202,52 +366,68 @@ void EditorController::newDocument()
 
 void EditorController::setText(const QString& text)
 {
-    const TextObject& object = *activeObject();
-    if (object.sourceText == text) {
+    const TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    if (object->sourceText == text) {
         return;
     }
     m_undoStack.push(new SetTextCommand(
         m_document,
-        object.sourceText,
+        object->sourceText,
         text,
         [this] { onCommandChanged(); }));
 }
 
+void EditorController::setTextRange(int start, int end)
+{
+    if (!editableActiveObject()) {
+        return;
+    }
+    m_selectionModel->setTextRange(start, end);
+}
+
+void EditorController::clearTextRange()
+{
+    m_selectionModel->clearTextRange();
+}
+
 void EditorController::setFontFamily(const QString& family)
 {
-    const TextObject& object = *activeObject();
-    if (object.font.family == family) {
+    const TextObject* object = editableActiveObject();
+    if (!object || object->font.family == family) {
         return;
     }
     m_undoStack.push(new SetFontFamilyCommand(
         m_document,
-        object.font.family,
+        object->font.family,
         family,
         [this] { onCommandChanged(); }));
 }
 
 void EditorController::setFontStyle(const QString& styleName)
 {
-    const TextObject& object = *activeObject();
-    if (object.font.styleName == styleName) {
+    const TextObject* object = editableActiveObject();
+    if (!object || object->font.styleName == styleName) {
         return;
     }
     m_undoStack.push(new SetFontStyleCommand(
         m_document,
-        object.font.styleName,
+        object->font.styleName,
         styleName,
         [this] { onCommandChanged(); }));
 }
 
 void EditorController::setFontWeight(int weight)
 {
-    const TextObject& object = *activeObject();
-    if (object.font.weight == weight) {
+    const TextObject* object = editableActiveObject();
+    if (!object || object->font.weight == weight) {
         return;
     }
     m_undoStack.push(new SetFontWeightCommand(
         m_document,
-        object.font.weight,
+        object->font.weight,
         weight,
         [this] { onCommandChanged(); }));
 }
@@ -255,7 +435,11 @@ void EditorController::setFontWeight(int weight)
 void EditorController::setFontSize(qreal pointSize)
 {
     const qreal boundedSize = qBound<qreal>(1.0, pointSize, 2000.0);
-    const qreal oldSize = activeObject()->typography.fontSize;
+    const TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    const qreal oldSize = object->typography.fontSize;
     if (nearlyEqual(oldSize, boundedSize)) {
         return;
     }
@@ -269,7 +453,11 @@ void EditorController::setFontSize(qreal pointSize)
 void EditorController::setTracking(qreal trackingEm)
 {
     const qreal boundedTracking = qBound<qreal>(-1.0, trackingEm, 1.0);
-    const qreal oldTracking = activeObject()->typography.trackingEm;
+    const TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    const qreal oldTracking = object->typography.trackingEm;
     if (nearlyEqual(oldTracking, boundedTracking)) {
         return;
     }
@@ -280,12 +468,31 @@ void EditorController::setTracking(qreal trackingEm)
         [this] { onCommandChanged(); }));
 }
 
+void EditorController::setLineSpacing(qreal lineSpacing)
+{
+    const TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    const qreal bounded = qBound<qreal>(0.5, lineSpacing, 3.0);
+    const qreal oldValue = object->typography.lineSpacing;
+    if (nearlyEqual(oldValue, bounded)) {
+        return;
+    }
+    m_undoStack.push(new SetLineSpacingCommand(
+        m_document, oldValue, bounded, [this] { onCommandChanged(); }));
+}
+
 void EditorController::setFillColor(const QColor& color)
 {
     if (!color.isValid()) {
         return;
     }
-    const QColor oldColor = activeObject()->fill;
+    const TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    const QColor oldColor = object->fill;
     if (oldColor == color) {
         return;
     }
@@ -346,11 +553,12 @@ void EditorController::selectObjectsInRect(const QRectF& rect, bool additive)
     emit sceneChanged();
 }
 
-void EditorController::createTextObject(const QPointF& position, const QString& text)
+QString EditorController::createTextObject(const QPointF& position, const QString& text)
 {
     Layer* layer = m_document.activeLayer();
-    if (!layer) {
-        return;
+    if (!layer || !layer->visible || layer->locked) {
+        publishError(QStringLiteral("The active layer is locked or hidden."));
+        return {};
     }
     TextObject object;
     if (!text.isEmpty()) {
@@ -363,6 +571,7 @@ void EditorController::createTextObject(const QPointF& position, const QString& 
     m_document.activeObjectId = objectId;
     m_selectionModel->selectSingle(objectId);
     emit documentChanged();
+    return objectId;
 }
 
 void EditorController::deleteSelectedObjects()
@@ -373,39 +582,22 @@ void EditorController::deleteSelectedObjects()
     }
     m_undoStack.beginMacro(QStringLiteral("Delete objects"));
     for (const QString& objectId : ids) {
-        TextObject* object = m_document.objectById(objectId);
-        if (!object) {
+        Layer* layer = currentPageLayerForObject(m_document, objectId);
+        if (!layer || !layer->visible || layer->locked) {
             continue;
         }
-        QString layerId;
+        TextObject* object = layer->objectById(objectId);
         int index = -1;
-        for (const auto& page : m_document.pages) {
-            if (!page) {
-                continue;
-            }
-            for (const auto& layer : page->layers) {
-                if (!layer) {
-                    continue;
-                }
-                for (int objectIndex = 0; objectIndex < static_cast<int>(layer->objects.size()); ++objectIndex) {
-                    if (layer->objects[static_cast<size_t>(objectIndex)]
-                        && layer->objects[static_cast<size_t>(objectIndex)]->id == objectId) {
-                        layerId = layer->id;
-                        index = objectIndex;
-                        break;
-                    }
-                }
-                if (index >= 0) {
-                    break;
-                }
-            }
-            if (index >= 0) {
+        for (int objectIndex = 0; objectIndex < static_cast<int>(layer->objects.size()); ++objectIndex) {
+            if (layer->objects[static_cast<size_t>(objectIndex)]
+                && layer->objects[static_cast<size_t>(objectIndex)]->id == objectId) {
+                index = objectIndex;
                 break;
             }
         }
-        if (index >= 0) {
+        if (object && index >= 0) {
             m_undoStack.push(new RemoveTextObjectCommand(
-                m_document, layerId, *object, index, [this] { onCommandChanged(); }));
+                m_document, layer->id, *object, index, [this] { onCommandChanged(); }));
         }
     }
     m_undoStack.endMacro();
@@ -423,26 +615,12 @@ void EditorController::duplicateSelectedObjects()
     QStringList duplicateIds;
     m_undoStack.beginMacro(QStringLiteral("Duplicate objects"));
     for (const QString& objectId : ids) {
-        const TextObject* source = m_document.objectById(objectId);
-        if (!source) {
+        const Layer* layer = currentPageLayerForObject(m_document, objectId);
+        if (!layer || !layer->visible || layer->locked) {
             continue;
         }
-        QString layerId;
-        for (const auto& page : m_document.pages) {
-            if (!page) {
-                continue;
-            }
-            for (const auto& layer : page->layers) {
-                if (layer && layer->objectById(objectId)) {
-                    layerId = layer->id;
-                    break;
-                }
-            }
-            if (!layerId.isEmpty()) {
-                break;
-            }
-        }
-        if (layerId.isEmpty()) {
+        const TextObject* source = layer->objectById(objectId);
+        if (!source) {
             continue;
         }
         TextObject duplicate(*source);
@@ -450,7 +628,7 @@ void EditorController::duplicateSelectedObjects()
         duplicate.transform.position += QPointF(24.0, 24.0);
         duplicateIds.push_back(duplicate.id);
         m_undoStack.push(new AddTextObjectCommand(
-            m_document, layerId, duplicate, [this] { onCommandChanged(); },
+            m_document, layer->id, duplicate, [this] { onCommandChanged(); },
             QStringLiteral("Duplicate text object")));
     }
     m_undoStack.endMacro();
@@ -462,24 +640,15 @@ void EditorController::duplicateSelectedObjects()
 void EditorController::moveSelectedObjects(const QPointF& delta)
 {
     QStringList ids = selectedObjectIds();
-    if (ids.isEmpty() && activeObject()) {
-        ids.push_back(activeObject()->id);
+    if (ids.isEmpty()) {
+        if (const TextObject* object = editableActiveObject()) {
+            ids.push_back(object->id);
+        }
     }
     QStringList movableIds;
     for (const QString& id : ids) {
-        bool locked = false;
-        for (const auto& page : m_document.pages) {
-            if (!page || page->id != m_document.currentPageId) {
-                continue;
-            }
-            for (const auto& layer : page->layers) {
-                if (layer && layer->objectById(id)) {
-                    locked = layer->locked;
-                    break;
-                }
-            }
-        }
-        if (m_document.objectById(id) && !locked) {
+        const Layer* layer = currentPageLayerForObject(m_document, id);
+        if (m_document.objectById(id) && layer && layer->visible && !layer->locked) {
             movableIds.push_back(id);
         }
     }
@@ -498,7 +667,9 @@ void EditorController::nudgeSelectedObjects(const QPointF& delta)
 void EditorController::setObjectTransform(const QString& objectId, const ObjectTransform& transform)
 {
     TextObject* object = m_document.objectById(objectId);
-    if (!object || object->transform.toJson() == transform.toJson()) {
+    const Layer* layer = currentPageLayerForObject(m_document, objectId);
+    if (!object || !layer || !layer->visible || layer->locked
+        || object->transform.toJson() == transform.toJson()) {
         return;
     }
     m_undoStack.push(new SetObjectTransformCommand(
@@ -522,6 +693,44 @@ void EditorController::addPage()
     m_document.activeObjectId.clear();
     synchronizeSelectionWithDocument();
     emit documentChanged();
+}
+
+void EditorController::renameCurrentPage(const QString& name)
+{
+    Page* page = m_document.currentPage();
+    const QString trimmed = name.trimmed();
+    if (!page || trimmed.isEmpty() || page->name == trimmed) {
+        return;
+    }
+    m_undoStack.push(new SetPageStateCommand(
+        m_document,
+        page->id,
+        SetPageStateCommand::Property::Name,
+        page->name,
+        trimmed,
+        [this] { onCommandChanged(); },
+        QStringLiteral("Rename page")));
+}
+
+void EditorController::setCurrentPageSize(const QSizeF& size)
+{
+    Page* page = m_document.currentPage();
+    if (!page) {
+        return;
+    }
+    const QSizeF bounded(qBound<qreal>(64.0, size.width(), 10000.0),
+                         qBound<qreal>(64.0, size.height(), 10000.0));
+    if (page->size == bounded) {
+        return;
+    }
+    m_undoStack.push(new SetPageStateCommand(
+        m_document,
+        page->id,
+        SetPageStateCommand::Property::Size,
+        QVariant::fromValue(page->size),
+        QVariant::fromValue(bounded),
+        [this] { onCommandChanged(); },
+        QStringLiteral("Resize page")));
 }
 
 void EditorController::duplicateCurrentPage()
@@ -578,11 +787,24 @@ void EditorController::removeCurrentPage()
     }
     const int replacementIndex = index > 0 ? index - 1 : 1;
     Page* replacement = m_document.pages[static_cast<size_t>(replacementIndex)].get();
-    m_document.currentPageId = replacement->id;
-    m_document.activeLayerId = replacement->layers.empty() ? QString() : replacement->layers.front()->id;
-    m_document.activeObjectId.clear();
+    const QString oldPageId = current->id;
+    const QString oldLayerId = m_document.activeLayerId;
+    const QString replacementLayerId = replacement->layers.empty()
+        ? QString()
+        : replacement->layers.front()->id;
+    m_undoStack.beginMacro(QStringLiteral("Delete page"));
+    m_undoStack.push(new SetCurrentPageCommand(
+        m_document,
+        oldPageId,
+        replacement->id,
+        oldLayerId,
+        replacementLayerId,
+        [this] { onCommandChanged(); },
+        QStringLiteral("Activate replacement page")));
     m_undoStack.push(new RemovePageCommand(
         m_document, *current, index, [this] { onCommandChanged(); }));
+    m_undoStack.endMacro();
+    m_document.activeObjectId.clear();
     synchronizeSelectionWithDocument();
     emit documentChanged();
 }
@@ -612,8 +834,19 @@ void EditorController::addLayer()
     Layer layer;
     layer.name = QStringLiteral("Layer %1").arg(page->layers.size() + 1);
     const QString layerId = layer.id;
+    const QString oldLayerId = m_document.activeLayerId;
+    m_undoStack.beginMacro(QStringLiteral("Add layer"));
     m_undoStack.push(new AddLayerCommand(
         m_document, page->id, layer, static_cast<int>(page->layers.size()), [this] { onCommandChanged(); }));
+    m_undoStack.push(new SetCurrentPageCommand(
+        m_document,
+        page->id,
+        page->id,
+        oldLayerId,
+        layerId,
+        [this] { onCommandChanged(); },
+        QStringLiteral("Activate layer")));
+    m_undoStack.endMacro();
     m_document.activeLayerId = layerId;
     m_document.activeObjectId.clear();
     m_selectionModel->clear();
@@ -638,8 +871,19 @@ void EditorController::removeActiveLayer()
     const int replacementIndex = index > 0 ? index - 1 : 1;
     const QString replacementId = page->layers[static_cast<size_t>(replacementIndex)]->id;
     const Layer removed = *layer;
+    const QString oldLayerId = layer->id;
+    m_undoStack.beginMacro(QStringLiteral("Delete layer"));
+    m_undoStack.push(new SetCurrentPageCommand(
+        m_document,
+        page->id,
+        page->id,
+        oldLayerId,
+        replacementId,
+        [this] { onCommandChanged(); },
+        QStringLiteral("Activate replacement layer")));
     m_undoStack.push(new RemoveLayerCommand(
         m_document, page->id, removed, index, [this] { onCommandChanged(); }));
+    m_undoStack.endMacro();
     m_document.activeLayerId = replacementId;
     m_document.activeObjectId.clear();
     m_selectionModel->clear();
@@ -655,6 +899,17 @@ void EditorController::renameActiveLayer(const QString& name)
     m_undoStack.push(new SetLayerStateCommand(
         m_document, layer->id, SetLayerStateCommand::Property::Name,
         layer->name, name.trimmed(), [this] { onCommandChanged(); }));
+}
+
+void EditorController::moveLayer(int from, int to)
+{
+    Page* page = m_document.currentPage();
+    if (!page || from < 0 || from >= static_cast<int>(page->layers.size())
+        || to < 0 || to >= static_cast<int>(page->layers.size()) || from == to) {
+        return;
+    }
+    m_undoStack.push(new ReorderLayerCommand(
+        m_document, page->id, from, to, [this] { onCommandChanged(); }));
 }
 
 void EditorController::setActiveLayerVisible(bool visible)
@@ -695,24 +950,41 @@ void EditorController::switchLayer(const QString& layerId)
 
 void EditorController::addEffect(const QString& typeId)
 {
+    TextObject* object = editableActiveObject();
+    if (!object) {
+        publishError(QStringLiteral("Select a text object before adding an effect."));
+        return;
+    }
     std::unique_ptr<Effect> effect = createEffect(typeId);
     if (!effect) {
         publishError(QStringLiteral("Cannot add unknown effect '%1'.").arg(typeId));
         return;
     }
     const QString description = QStringLiteral("Add %1 effect").arg(effect->displayName());
-    const int index = activeObject()->effects.size();
+    const QString effectId = effect->instanceId;
+    if (m_selectionModel->hasTextRange()) {
+        const auto range = m_selectionModel->textRange();
+        effect->scope.kind = EffectScopeKind::TextRange;
+        effect->scope.start = range.first;
+        effect->scope.end = range.second;
+    }
+    const int index = object->effects.size();
     m_undoStack.push(new AddEffectCommand(
         m_document,
         index,
         std::move(effect),
         [this] { onCommandChanged(); },
         description));
+    setSelectedEffectId(effectId);
 }
 
 void EditorController::removeEffect(int index)
 {
-    const Effect* effect = activeObject()->effects.at(index);
+    TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    const Effect* effect = object->effects.at(index);
     if (!effect) {
         return;
     }
@@ -725,7 +997,11 @@ void EditorController::removeEffect(int index)
 
 void EditorController::moveEffect(int from, int to)
 {
-    const EffectStack& effects = activeObject()->effects;
+    const TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    const EffectStack& effects = object->effects;
     if (from < 0 || from >= effects.size() || to < 0 || to >= effects.size() || from == to) {
         return;
     }
@@ -738,7 +1014,11 @@ void EditorController::moveEffect(int from, int to)
 
 void EditorController::setEffectEnabled(int index, bool enabled)
 {
-    Effect* effect = activeObject()->effects.at(index);
+    TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    Effect* effect = object->effects.at(index);
     if (!effect || effect->enabled == enabled) {
         return;
     }
@@ -752,7 +1032,11 @@ void EditorController::setEffectEnabled(int index, bool enabled)
 
 void EditorController::setEffectParameter(int index, const QString& parameterId, double value)
 {
-    Effect* effect = activeObject()->effects.at(index);
+    TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    Effect* effect = object->effects.at(index);
     if (!effect) {
         return;
     }
@@ -781,7 +1065,11 @@ void EditorController::setEffectParameter(int index, const QString& parameterId,
 
 void EditorController::setEffectScope(int index, const EffectScope& scope)
 {
-    Effect* effect = activeObject()->effects.at(index);
+    TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    Effect* effect = object->effects.at(index);
     if (!effect || effect->scope.toJson() == scope.toJson()) {
         return;
     }
@@ -789,9 +1077,71 @@ void EditorController::setEffectScope(int index, const EffectScope& scope)
         m_document, index, effect->scope, scope, [this] { onCommandChanged(); }));
 }
 
+void EditorController::setEffectScopeById(const QString& effectId, const EffectScope& scope)
+{
+    const TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    const int index = object->effects.indexByInstanceId(effectId);
+    if (index >= 0) {
+        setEffectScope(index, scope);
+    }
+}
+
+void EditorController::addEffectMaskStroke(const QString& objectId,
+                                            const QString& effectId,
+                                            const EffectMaskStroke& stroke)
+{
+    if (objectId.isEmpty() || effectId.isEmpty() || stroke.points.isEmpty()) {
+        return;
+    }
+    TextObject* object = m_document.objectById(objectId);
+    if (!object) {
+        return;
+    }
+    const Page* page = m_document.currentPage();
+    if (!page) {
+        return;
+    }
+    bool editable = false;
+    for (const auto& layer : page->layers) {
+        if (layer && layer->objectById(objectId)) {
+            editable = layer->visible && !layer->locked;
+            break;
+        }
+    }
+    if (!editable) {
+        return;
+    }
+    if (!object->effects.byInstanceId(effectId)) {
+        publishError(QStringLiteral("Select an effect before painting its mask."));
+        return;
+    }
+
+    EffectMaskStroke localStroke = stroke;
+    const QRectF referenceBounds = localReferenceBounds(*object);
+    bool invertible = false;
+    const QTransform transform = objectTransform(*object, referenceBounds);
+    const QTransform inverse = transform.inverted(&invertible);
+    if (invertible) {
+        for (QPointF& point : localStroke.points) {
+            point = inverse.map(point);
+        }
+    }
+    localStroke.opacity = qBound<qreal>(0.0, localStroke.opacity, 1.0);
+    localStroke.hardness = qBound<qreal>(0.0, localStroke.hardness, 1.0);
+    m_undoStack.push(new AddEffectMaskStrokeCommand(
+        m_document, objectId, effectId, localStroke, [this] { onCommandChanged(); }));
+}
+
 void EditorController::setEffectMasterStrength(int index, double strength)
 {
-    Effect* effect = activeObject()->effects.at(index);
+    TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    Effect* effect = object->effects.at(index);
     if (!effect) {
         return;
     }
@@ -805,11 +1155,35 @@ void EditorController::setEffectMasterStrength(int index, double strength)
 
 void EditorController::addDeformationStroke(const DeformationStroke& stroke)
 {
+    addDeformationStroke(m_document.activeObjectId, stroke);
+}
+
+void EditorController::addDeformationStroke(const QString& objectId,
+                                            const DeformationStroke& stroke)
+{
     if (stroke.samples.isEmpty() || !std::isfinite(stroke.radius) || stroke.radius <= 0.0) {
         return;
     }
     m_previewStroke.reset();
-    const int index = activeObject()->deformation.strokes.size();
+    m_previewObjectId.clear();
+    TextObject* object = m_document.objectById(objectId);
+    if (!object) {
+        return;
+    }
+    const Page* page = m_document.currentPage();
+    bool editable = false;
+    if (page) {
+        for (const auto& layer : page->layers) {
+            if (layer && layer->objectById(objectId)) {
+                editable = layer->visible && !layer->locked;
+                break;
+            }
+        }
+    }
+    if (!editable) {
+        return;
+    }
+    const int index = object->deformation.strokes.size();
     m_undoStack.push(new AddDeformationStrokeCommand(
         m_document,
         index,
@@ -819,11 +1193,18 @@ void EditorController::addDeformationStroke(const DeformationStroke& stroke)
 
 void EditorController::setDeformationPreview(const DeformationStroke& stroke)
 {
+    setDeformationPreview(m_document.activeObjectId, stroke);
+}
+
+void EditorController::setDeformationPreview(const QString& objectId,
+                                             const DeformationStroke& stroke)
+{
     if (stroke.samples.isEmpty()) {
         clearDeformationPreview();
         return;
     }
     m_previewStroke = stroke;
+    m_previewObjectId = objectId;
     rebuildScene();
 }
 
@@ -833,12 +1214,17 @@ void EditorController::clearDeformationPreview()
         return;
     }
     m_previewStroke.reset();
+    m_previewObjectId.clear();
     rebuildScene();
 }
 
 void EditorController::clearDeformation()
 {
-    const ManualDeformation before = activeObject()->deformation;
+    TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    const ManualDeformation before = object->deformation;
     if (before.strokes.isEmpty()) {
         return;
     }
@@ -851,7 +1237,11 @@ void EditorController::clearDeformation()
 
 void EditorController::setDeformationEnabled(bool enabled)
 {
-    const bool oldEnabled = activeObject()->deformation.enabled;
+    TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    const bool oldEnabled = object->deformation.enabled;
     if (oldEnabled == enabled) {
         return;
     }
@@ -865,7 +1255,11 @@ void EditorController::setDeformationEnabled(bool enabled)
 void EditorController::setDeformationStrength(qreal strength)
 {
     const qreal boundedStrength = qBound<qreal>(0.0, strength, 4.0);
-    const qreal oldStrength = activeObject()->deformation.strength;
+    TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    const qreal oldStrength = object->deformation.strength;
     if (nearlyEqual(oldStrength, boundedStrength)) {
         return;
     }
@@ -876,11 +1270,117 @@ void EditorController::setDeformationStrength(qreal strength)
         [this] { onCommandChanged(); }));
 }
 
+void EditorController::copySelectedObjects()
+{
+    const QStringList ids = selectedObjectIds();
+    if (ids.isEmpty()) {
+        return;
+    }
+    QJsonArray objects;
+    for (const QString& id : ids) {
+        const Layer* layer = currentPageLayerForObject(m_document, id);
+        const TextObject* object = layer && layer->visible && !layer->locked
+            ? layer->objectById(id)
+            : nullptr;
+        if (object) {
+            objects.append(ProjectSerializer::textObjectToJson(*object));
+        }
+    }
+    if (objects.isEmpty()) {
+        return;
+    }
+    auto* mimeData = new QMimeData();
+    mimeData->setData(QStringLiteral("application/x-vector-typography-objects"),
+                      QJsonDocument(objects).toJson(QJsonDocument::Compact));
+    QStringList fallback;
+    for (const QJsonValue& value : objects) {
+        fallback.push_back(value.toObject().value(QStringLiteral("sourceText")).toString());
+    }
+    mimeData->setText(fallback.join(QStringLiteral("\n")));
+    QGuiApplication::clipboard()->setMimeData(mimeData);
+    emit statusMessageChanged(QStringLiteral("Copied %1 object%2.")
+                                  .arg(objects.size())
+                                  .arg(objects.size() == 1 ? QString() : QStringLiteral("s")));
+}
+
+void EditorController::cutSelectedObjects()
+{
+    if (selectedObjectIds().isEmpty()) {
+        return;
+    }
+    copySelectedObjects();
+    deleteSelectedObjects();
+}
+
+void EditorController::pasteObjects()
+{
+    const QMimeData* mimeData = QGuiApplication::clipboard()->mimeData();
+    if (!mimeData || !mimeData->hasFormat(QStringLiteral("application/x-vector-typography-objects"))) {
+        return;
+    }
+    Layer* layer = m_document.activeLayer();
+    if (!layer || layer->locked || !layer->visible) {
+        publishError(QStringLiteral("The active layer is locked or hidden."));
+        return;
+    }
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(
+        mimeData->data(QStringLiteral("application/x-vector-typography-objects")), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isArray()) {
+        publishError(QStringLiteral("The clipboard does not contain editor objects."));
+        return;
+    }
+
+    QStringList pastedIds;
+    m_undoStack.beginMacro(QStringLiteral("Paste objects"));
+    for (const QJsonValue& value : document.array()) {
+        if (!value.isObject()) {
+            continue;
+        }
+        TextObject object;
+        QString error;
+        if (!ProjectSerializer::textObjectFromJson(value.toObject(), &object, &error)) {
+            continue;
+        }
+        object.id = createStableId(QStringLiteral("text"));
+        object.transform.position += QPointF(24.0, 24.0);
+        pastedIds.push_back(object.id);
+        m_undoStack.push(new AddTextObjectCommand(
+            m_document, layer->id, object, [this] { onCommandChanged(); }, QStringLiteral("Paste object")));
+    }
+    m_undoStack.endMacro();
+    if (!pastedIds.isEmpty()) {
+        m_selectionModel->setSelectedObjectIds(pastedIds, pastedIds.front());
+        m_document.activeObjectId = pastedIds.front();
+        emit documentChanged();
+    }
+}
+
+void EditorController::selectAllObjects()
+{
+    QStringList ids;
+    for (const SceneObjectGeometry& object : m_sceneGeometry.objects) {
+        if (object.visible && !object.locked) {
+            ids.push_back(object.objectId);
+        }
+    }
+    m_selectionModel->setSelectedObjectIds(ids, ids.value(0));
+    m_document.activeObjectId = ids.value(0);
+    emit sceneChanged();
+}
+
 bool EditorController::savePreset(const QString& name, QString* error)
 {
+    const TextObject* object = editableActiveObject();
+    if (!object) {
+        if (error) {
+            *error = QStringLiteral("Select a text object before saving a preset.");
+        }
+        return false;
+    }
     Preset preset;
     preset.name = name.trimmed();
-    preset.effects = activeObject()->effects;
+    preset.effects = object->effects;
     const bool saved = m_presetManager.savePreset(preset, error);
     if (saved) {
         emit statusMessageChanged(QStringLiteral("Preset '%1' saved.").arg(preset.name));
@@ -890,12 +1390,19 @@ bool EditorController::savePreset(const QString& name, QString* error)
 
 bool EditorController::applyPreset(const QString& name, QString* error)
 {
+    TextObject* object = editableActiveObject();
+    if (!object) {
+        if (error) {
+            *error = QStringLiteral("Select a text object before applying a preset.");
+        }
+        return false;
+    }
     Preset preset;
     if (!m_presetManager.loadPreset(name, &preset, error)) {
         return false;
     }
 
-    const EffectStack before = activeObject()->effects;
+    const EffectStack before = object->effects;
     if (!effectStacksEqual(before, preset.effects)) {
         m_undoStack.push(new ApplyPresetCommand(
             m_document,
@@ -936,6 +1443,7 @@ bool EditorController::openProject(const QString& filePath, QString* error)
     }
     m_document = std::move(loaded);
     m_previewStroke.reset();
+    m_previewObjectId.clear();
     m_undoStack.clear();
     m_undoStack.setClean();
     m_textEngine.clearCache();
@@ -978,25 +1486,43 @@ void EditorController::rebuildScene()
             if (!layer) {
                 continue;
             }
-            if (TextObject* object = layer->objectById(m_document.activeObjectId)) {
+            if (TextObject* object = layer->objectById(m_previewObjectId.isEmpty()
+                                                           ? m_document.activeObjectId
+                                                           : m_previewObjectId)) {
                 object->deformation.strokes.push_back(*m_previewStroke);
                 break;
             }
         }
     }
     const quint64 generation = ++m_evaluationGeneration;
+    if (m_evaluationWatcher) {
+        // The worker remains cancellable only at the task boundary. Retain
+        // exactly one latest snapshot instead of queueing every keystroke or
+        // brush sample behind the current evaluation.
+        m_pendingEvaluation = std::move(snapshot);
+        return;
+    }
+    startEvaluation(std::move(snapshot), generation);
+}
+
+void EditorController::startEvaluation(Page snapshot, quint64 generation)
+{
     auto* watcher = new QFutureWatcher<SceneGeometry>(this);
-    m_evaluationWatchers.push_back(watcher);
+    m_evaluationWatcher = watcher;
     connect(watcher, &QFutureWatcher<SceneGeometry>::finished, this, [this, watcher, generation] {
         SceneGeometry scene = watcher->result();
-        m_evaluationWatchers.removeOne(watcher);
         watcher->deleteLater();
-        if (generation != m_evaluationGeneration) {
-            return;
+        m_evaluationWatcher = nullptr;
+        if (generation == m_evaluationGeneration) {
+            publishSceneResult(std::move(scene), generation);
         }
-        publishSceneResult(std::move(scene), generation);
+        if (m_pendingEvaluation.has_value()) {
+            Page pending = std::move(*m_pendingEvaluation);
+            m_pendingEvaluation.reset();
+            startEvaluation(std::move(pending), m_evaluationGeneration);
+        }
     });
-    watcher->setFuture(QtConcurrent::run([snapshot] {
+    watcher->setFuture(QtConcurrent::run([snapshot = std::move(snapshot)] {
         return SceneEvaluator::evaluate(snapshot);
     }));
 }
@@ -1038,8 +1564,7 @@ void EditorController::synchronizeSelectionWithDocument()
         }
     }
     if (m_document.activeObjectId.isEmpty() || !activeIsOnCurrentPage) {
-        TextObject& object = m_document.primaryTextObject();
-        m_document.activeObjectId = object.id;
+        m_document.activeObjectId.clear();
     }
     m_selectionModel->setSelectedObjectIds(
         m_document.activeObjectId.isEmpty() ? QStringList() : QStringList{m_document.activeObjectId},

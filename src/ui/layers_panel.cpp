@@ -1,11 +1,13 @@
 #include "ui/layers_panel.h"
 
 #include <QHBoxLayout>
+#include <QAbstractItemView>
 #include <QInputDialog>
 #include <QLineEdit>
-#include <QListWidget>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QVBoxLayout>
 
 namespace vt {
@@ -15,9 +17,12 @@ LayersPanel::LayersPanel(QWidget* parent)
 {
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
-    m_list = new QListWidget(this);
-    m_list->setSelectionMode(QAbstractItemView::SingleSelection);
-    root->addWidget(m_list);
+    m_tree = new QTreeWidget(this);
+    m_tree->setHeaderHidden(true);
+    m_tree->setRootIsDecorated(true);
+    m_tree->setIndentation(16);
+    m_tree->setSelectionMode(QAbstractItemView::SingleSelection);
+    root->addWidget(m_tree);
 
     auto* buttons = new QHBoxLayout();
     auto* add = new QPushButton(QStringLiteral("+"), this);
@@ -32,16 +37,26 @@ LayersPanel::LayersPanel(QWidget* parent)
     buttons->addWidget(lock);
     root->addLayout(buttons);
 
-    connect(m_list, &QListWidget::currentRowChanged, this, [this](int row) {
-        if (row >= 0) {
-            emit layerSelected(m_list->item(row)->data(Qt::UserRole).toString());
-        }
-    });
+    connect(m_tree, &QTreeWidget::currentItemChanged, this,
+            [this](QTreeWidgetItem* current, QTreeWidgetItem*) {
+                if (!current) {
+                    return;
+                }
+                const QString objectId = current->data(0, Qt::UserRole + 1).toString();
+                if (!objectId.isEmpty()) {
+                    emit objectSelected(objectId);
+                    return;
+                }
+                const QString layerId = current->data(0, Qt::UserRole).toString();
+                if (!layerId.isEmpty()) {
+                    emit layerSelected(layerId);
+                }
+            });
     connect(add, &QPushButton::clicked, this, &LayersPanel::addLayerRequested);
     connect(remove, &QPushButton::clicked, this, &LayersPanel::removeLayerRequested);
     connect(rename, &QPushButton::clicked, this, [this] {
-        QListWidgetItem* item = m_list->currentItem();
-        if (!item) {
+        QTreeWidgetItem* item = m_tree->currentItem();
+        if (!item || item->data(0, Qt::UserRole).toString().isEmpty()) {
             return;
         }
         bool accepted = false;
@@ -49,45 +64,68 @@ LayersPanel::LayersPanel(QWidget* parent)
                                                    QStringLiteral("Rename layer"),
                                                    QStringLiteral("Name"),
                                                    QLineEdit::Normal,
-                                                   item->text(),
+                                                   item->text(0),
                                                    &accepted);
         if (accepted) {
             emit renameLayerRequested(name);
         }
     });
     connect(visible, &QPushButton::clicked, this, [this] {
-        if (QListWidgetItem* item = m_list->currentItem()) {
-            const bool next = item->data(Qt::UserRole + 1).toBool();
+        if (QTreeWidgetItem* item = m_tree->currentItem()) {
+            const bool next = item->data(0, Qt::UserRole + 2).toBool();
             emit visibilityToggled(!next);
         }
     });
     connect(lock, &QPushButton::clicked, this, [this] {
-        if (QListWidgetItem* item = m_list->currentItem()) {
-            const bool next = item->data(Qt::UserRole + 2).toBool();
+        if (QTreeWidgetItem* item = m_tree->currentItem()) {
+            const bool next = item->data(0, Qt::UserRole + 3).toBool();
             emit lockToggled(!next);
         }
     });
 }
 
-void LayersPanel::refresh(const Page& page, const QString& activeLayerId)
+void LayersPanel::refresh(const Page& page,
+                          const QString& activeLayerId,
+                          const QString& activeObjectId)
 {
-    const QSignalBlocker blocker(m_list);
-    m_list->clear();
+    const QSignalBlocker blocker(m_tree);
+    m_tree->clear();
+    QTreeWidgetItem* activeItem = nullptr;
     for (const auto& layer : page.layers) {
         if (!layer) {
             continue;
         }
-        auto* item = new QListWidgetItem(
-            QStringLiteral("%1%2%3").arg(layer->visible ? QStringLiteral("◉ ") : QStringLiteral("○ "),
-                                        layer->locked ? QStringLiteral("🔒 ") : QString(),
-                                        layer->name),
-            m_list);
-        item->setData(Qt::UserRole, layer->id);
-        item->setData(Qt::UserRole + 1, layer->visible);
-        item->setData(Qt::UserRole + 2, layer->locked);
+        auto* layerItem = new QTreeWidgetItem(m_tree);
+        layerItem->setText(0, QStringLiteral("%1%2%3")
+                                  .arg(layer->visible ? QStringLiteral("◉ ") : QStringLiteral("○ "))
+                                  .arg(layer->locked ? QStringLiteral("🔒 ") : QString())
+                                  .arg(layer->name));
+        layerItem->setData(0, Qt::UserRole, layer->id);
+        layerItem->setData(0, Qt::UserRole + 2, layer->visible);
+        layerItem->setData(0, Qt::UserRole + 3, layer->locked);
+        layerItem->setToolTip(0, layer->locked
+                                     ? QStringLiteral("Locked layer")
+                                     : QStringLiteral("Editable layer"));
         if (layer->id == activeLayerId) {
-            m_list->setCurrentItem(item);
+            activeItem = layerItem;
         }
+        for (const auto& object : layer->objects) {
+            if (!object) {
+                continue;
+            }
+            auto* objectItem = new QTreeWidgetItem(layerItem);
+            const QString preview = object->sourceText.simplified().left(28);
+            objectItem->setText(0, preview.isEmpty() ? QStringLiteral("Text object") : preview);
+            objectItem->setData(0, Qt::UserRole + 1, object->id);
+            objectItem->setToolTip(0, object->sourceText);
+            if (object->id == activeObjectId) {
+                activeItem = objectItem;
+            }
+        }
+        layerItem->setExpanded(true);
+    }
+    if (activeItem) {
+        m_tree->setCurrentItem(activeItem);
     }
 }
 

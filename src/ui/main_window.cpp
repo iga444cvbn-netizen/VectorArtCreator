@@ -1,14 +1,18 @@
 #include "ui/main_window.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QCloseEvent>
 #include <QFileDialog>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QKeySequence>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPalette>
 #include <QScrollArea>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -17,6 +21,9 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QVBoxLayout>
+
+#include <functional>
+#include <utility>
 
 namespace vt {
 
@@ -29,17 +36,7 @@ MainWindow::MainWindow(QWidget* parent)
     resize(1440, 900);
     const QSettings settings;
     restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
-    setStyleSheet(QStringLiteral(
-        "QMainWindow, QWidget { background: #272a30; color: #e8eaf0; }"
-        "QGroupBox { border: 1px solid #454a54; border-radius: 4px; margin-top: 8px; padding-top: 8px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
-        "QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox, QListWidget {"
-        " background: #1e2126; color: #f1f3f7; border: 1px solid #4b515c; border-radius: 3px; padding: 3px; }"
-        "QPushButton, QToolButton { background: #343943; border: 1px solid #515866; border-radius: 3px; padding: 4px; }"
-        "QPushButton:hover, QToolButton:hover { background: #414957; }"
-        "QToolButton:checked { background: #2e76ba; border-color: #73b8f0; }"
-        "QTabBar::tab { background: #343943; padding: 5px 10px; }"
-        "QTabBar::tab:selected { background: #2e76ba; }"));
+    applyTheme();
 
     auto* workspace = new QWidget(this);
     auto* workspaceLayout = new QHBoxLayout(workspace);
@@ -50,34 +47,53 @@ MainWindow::MainWindow(QWidget* parent)
     workspaceLayout->addWidget(m_toolPalette, 0);
 
     auto* splitter = new QSplitter(Qt::Horizontal, workspace);
-    m_canvas = new EditorCanvas(splitter);
-    splitter->addWidget(m_canvas);
-
-    auto* sidebar = new QWidget();
-    sidebar->setMinimumWidth(360);
-    sidebar->setMaximumWidth(500);
-    auto* sidebarLayout = new QVBoxLayout(sidebar);
-    sidebarLayout->setContentsMargins(8, 8, 8, 8);
-    sidebarLayout->setSpacing(8);
+    auto* canvasColumn = new QWidget(splitter);
+    auto* canvasLayout = new QVBoxLayout(canvasColumn);
+    canvasLayout->setContentsMargins(0, 0, 0, 0);
+    canvasLayout->setSpacing(4);
 
     auto* pageHeader = new QHBoxLayout();
-    m_pageTabs = new QTabBar(sidebar);
+    m_pageTabs = new QTabBar(canvasColumn);
     m_pageTabs->setExpanding(false);
     m_pageTabs->setUsesScrollButtons(true);
-    auto* addPageButton = new QToolButton(sidebar);
+    m_pageTabs->setMovable(true);
+    auto* addPageButton = new QToolButton(canvasColumn);
+    auto* duplicatePageButton = new QToolButton(canvasColumn);
+    auto* renamePageButton = new QToolButton(canvasColumn);
+    auto* sizePageButton = new QToolButton(canvasColumn);
+    auto* removePageButton = new QToolButton(canvasColumn);
     addPageButton->setText(QStringLiteral("+"));
-    auto* duplicatePageButton = new QToolButton(sidebar);
     duplicatePageButton->setText(QStringLiteral("⧉"));
-    auto* removePageButton = new QToolButton(sidebar);
+    renamePageButton->setText(QStringLiteral("Rename"));
+    sizePageButton->setText(QStringLiteral("Size"));
     removePageButton->setText(QStringLiteral("−"));
+    addPageButton->setToolTip(QStringLiteral("New page"));
+    duplicatePageButton->setToolTip(QStringLiteral("Duplicate page"));
+    renamePageButton->setToolTip(QStringLiteral("Rename current page"));
+    sizePageButton->setToolTip(QStringLiteral("Set page width and height"));
+    removePageButton->setToolTip(QStringLiteral("Delete current page"));
     pageHeader->addWidget(m_pageTabs, 1);
     pageHeader->addWidget(addPageButton);
     pageHeader->addWidget(duplicatePageButton);
+    pageHeader->addWidget(renamePageButton);
+    pageHeader->addWidget(sizePageButton);
     pageHeader->addWidget(removePageButton);
-    sidebarLayout->addLayout(pageHeader);
+    canvasLayout->addLayout(pageHeader);
+
+    m_canvas = new EditorCanvas(canvasColumn);
+    canvasLayout->addWidget(m_canvas, 1);
+    splitter->addWidget(canvasColumn);
+
+    auto* sidebar = new QWidget(splitter);
+    sidebar->setMinimumWidth(350);
+    sidebar->setMaximumWidth(520);
+    auto* sidebarLayout = new QVBoxLayout(sidebar);
+    sidebarLayout->setContentsMargins(4, 4, 4, 4);
+    sidebarLayout->setSpacing(4);
 
     auto* layersGroup = new QGroupBox(QStringLiteral("Layers"), sidebar);
     auto* layersLayout = new QVBoxLayout(layersGroup);
+    layersLayout->setContentsMargins(6, 6, 6, 6);
     m_layersPanel = new LayersPanel(layersGroup);
     layersLayout->addWidget(m_layersPanel);
     sidebarLayout->addWidget(layersGroup);
@@ -85,19 +101,37 @@ MainWindow::MainWindow(QWidget* parent)
     auto* inspector = new QWidget(sidebar);
     auto* inspectorLayout = new QVBoxLayout(inspector);
     inspectorLayout->setContentsMargins(0, 0, 0, 0);
+    inspectorLayout->setSpacing(2);
+    m_transformPanel = new TransformPanel(inspector);
     m_typographyPanel = new TypographyPanel(inspector);
     m_effectsPanel = new EffectsPanel(inspector);
     m_deformationPanel = new DeformationPanel(inspector);
-    inspectorLayout->addWidget(m_typographyPanel);
-    inspectorLayout->addWidget(m_effectsPanel);
-    inspectorLayout->addWidget(m_deformationPanel);
+    inspectorLayout->addWidget(new CollapsibleSection(QStringLiteral("Object"),
+                                                       QStringLiteral("Object"),
+                                                       m_transformPanel,
+                                                       true,
+                                                       inspector));
+    inspectorLayout->addWidget(new CollapsibleSection(QStringLiteral("Typography"),
+                                                       QStringLiteral("Typography"),
+                                                       m_typographyPanel,
+                                                       true,
+                                                       inspector));
+    inspectorLayout->addWidget(new CollapsibleSection(QStringLiteral("Effects"),
+                                                       QStringLiteral("Effects"),
+                                                       m_effectsPanel,
+                                                       true,
+                                                       inspector));
+    inspectorLayout->addWidget(new CollapsibleSection(QStringLiteral("Deformation"),
+                                                       QStringLiteral("Manual deformation"),
+                                                       m_deformationPanel,
+                                                       false,
+                                                       inspector));
     inspectorLayout->addStretch(1);
     auto* scrollArea = new QScrollArea(sidebar);
     scrollArea->setWidget(inspector);
     scrollArea->setWidgetResizable(true);
     scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     sidebarLayout->addWidget(scrollArea, 1);
-
     splitter->addWidget(sidebar);
     splitter->setStretchFactor(0, 1);
     splitter->setStretchFactor(1, 0);
@@ -108,30 +142,67 @@ MainWindow::MainWindow(QWidget* parent)
     connect(addPageButton, &QToolButton::clicked, m_controller, &EditorController::addPage);
     connect(duplicatePageButton, &QToolButton::clicked,
             m_controller, &EditorController::duplicateCurrentPage);
+    connect(renamePageButton, &QToolButton::clicked, this, &MainWindow::renameCurrentPage);
+    connect(sizePageButton, &QToolButton::clicked, this, &MainWindow::setPageSize);
     connect(removePageButton, &QToolButton::clicked,
             m_controller, &EditorController::removeCurrentPage);
     connect(m_pageTabs, &QTabBar::currentChanged, this, &MainWindow::pageTabChanged);
 
-    connect(m_toolPalette, &ToolPalette::toolSelected, m_canvas, &EditorCanvas::setTool);
+    connect(m_toolPalette, &ToolPalette::toolSelected,
+            m_controller, &EditorController::setTool);
+    connect(m_controller, &EditorController::toolChanged, this, [this](EditorTool tool) {
+        m_canvas->setTool(tool);
+        m_toolPalette->setActiveTool(tool);
+        m_deformationPanel->setTool(tool);
+    });
+    connect(m_controller, &EditorController::brushSettingsChanged,
+            m_canvas, &EditorCanvas::setBrushSettings);
+    connect(m_controller, &EditorController::maskSettingsChanged,
+            this, [this](qreal radius, qreal strength, qreal hardness, bool restore) {
+                m_canvas->setMaskRestoreMode(restore);
+                m_canvas->setBrushSettings(BrushMode::Push,
+                                           BrushTarget::Shape,
+                                           radius,
+                                           strength,
+                                           hardness);
+            });
     connect(m_controller, &EditorController::sceneChanged, this, [this] {
-        m_canvas->setScene(m_controller->sceneGeometry(), m_controller->selectedObjectIds());
+        m_canvas->setScene(m_controller->sceneGeometry(),
+                           m_controller->selectedObjectIds(),
+                           m_controller->selectionModel()->activeObjectId());
+        m_canvas->setMaskTarget(m_controller->selectionModel()->activeObjectId());
+        m_canvas->setMaskEnabled(!m_effectsPanel->selectedEffectId().isEmpty());
     });
     connect(m_controller, &EditorController::documentChanged, this, &MainWindow::refreshUi);
     connect(m_controller, &EditorController::statusMessageChanged, this, &MainWindow::setStatus);
     connect(m_controller, &EditorController::fontsChanged, this, [this](const QStringList& families) {
         m_typographyPanel->setFontFamilies(families);
-        updateStylesForFamily(m_controller->activeObject()->font.family);
-    });
-    connect(m_controller->selectionModel(), &SelectionModel::selectionChanged,
-            this, [this] { m_canvas->setSelection(m_controller->selectedObjectIds()); });
-
-    connect(m_canvas, &EditorCanvas::objectClicked, this, [this](const QString& id, bool additive) {
-        if (additive) {
-            m_controller->toggleObjectSelection(id);
-        } else {
-            m_controller->selectObject(id);
+        if (const TextObject* object = m_controller->activeObject()) {
+            updateStylesForFamily(object->font.family);
         }
     });
+    connect(m_controller->selectionModel(), &SelectionModel::selectionChanged, this, [this] {
+        m_canvas->setSelection(m_controller->selectedObjectIds(),
+                               m_controller->selectionModel()->activeObjectId());
+        m_canvas->setMaskTarget(m_controller->selectionModel()->activeObjectId());
+        refreshUi();
+    });
+    connect(m_controller->selectionModel(), &SelectionModel::textRangeChanged,
+            this, [this](int start, int end) {
+                m_canvas->setTextRange(start, end);
+                m_effectsPanel->setTextRange(start, end);
+            });
+
+    connect(m_canvas, &EditorCanvas::objectClicked, this,
+            [this](const QString& id, bool additive) {
+                if (id.isEmpty()) {
+                    m_controller->clearSelection();
+                } else if (additive) {
+                    m_controller->toggleObjectSelection(id);
+                } else {
+                    m_controller->selectObject(id);
+                }
+            });
     connect(m_canvas, &EditorCanvas::marqueeSelectionRequested,
             m_controller, &EditorController::selectObjectsInRect);
     connect(m_canvas, &EditorCanvas::moveCommitted, this,
@@ -143,12 +214,51 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_canvas, &EditorCanvas::duplicateRequested,
             m_controller, &EditorController::duplicateSelectedObjects);
     connect(m_canvas, &EditorCanvas::textCreateRequested, this, [this](const QPointF& position) {
-        m_controller->createTextObject(position, QStringLiteral("Text"));
-        m_canvas->setTool(EditorTool::Select);
+        const QString objectId = m_controller->createTextObject(position);
+        const TextObject* object = m_controller->activeObject();
+        if (object && object->id == objectId) {
+            m_canvas->beginTextEditing(objectId,
+                                       object->sourceText,
+                                       object->font.toQFont(object->typography.fontSize),
+                                       QRectF(position, QSizeF(420.0, 130.0)));
+        }
     });
-    connect(m_canvas, &EditorCanvas::textEditRequested, this, [this](const QString&) {
-        m_typographyPanel->setFocus();
+    connect(m_canvas, &EditorCanvas::textEditRequested, this, [this](const QString& objectId) {
+        m_controller->selectObject(objectId);
+        if (const TextObject* object = m_controller->activeObject()) {
+            QRectF bounds(QPointF(object->transform.position), QSizeF(420.0, 130.0));
+            if (const SceneObjectGeometry* sceneObject = m_controller->sceneGeometry().objectById(objectId)) {
+                bounds = sceneObject->visualBounds;
+            }
+            m_canvas->beginTextEditing(objectId,
+                                       object->sourceText,
+                                       object->font.toQFont(object->typography.fontSize),
+                                       bounds);
+        }
     });
+    connect(m_canvas, &EditorCanvas::textEdited, this,
+            [this](const QString& objectId, const QString& text) {
+                if (m_controller->selectionModel()->activeObjectId() == objectId) {
+                    m_controller->setText(text);
+                }
+            });
+    connect(m_canvas, &EditorCanvas::textRangeChanged, this,
+            [this](const QString& objectId, int start, int end) {
+                if (m_controller->selectionModel()->activeObjectId() == objectId) {
+                    m_controller->setTextRange(start, end);
+                }
+            });
+    connect(m_canvas, &EditorCanvas::textEditingChanged,
+            this, &MainWindow::setEditingShortcutsEnabled);
+    connect(m_canvas, &EditorCanvas::effectMaskStrokeReady, this,
+            [this](const QString& objectId, const EffectMaskStroke& stroke) {
+                const QString effectId = m_effectsPanel->selectedEffectId();
+                if (effectId.isEmpty()) {
+                    setStatus(QStringLiteral("Select an effect before painting its mask."));
+                    return;
+                }
+                m_controller->addEffectMaskStroke(objectId, effectId, stroke);
+            });
 
     connect(m_typographyPanel, &TypographyPanel::textChangedByUser,
             m_controller, &EditorController::setText);
@@ -164,10 +274,19 @@ MainWindow::MainWindow(QWidget* parent)
             m_controller, &EditorController::setFontSize);
     connect(m_typographyPanel, &TypographyPanel::trackingChanged,
             m_controller, &EditorController::setTracking);
+    connect(m_typographyPanel, &TypographyPanel::lineSpacingChanged,
+            m_controller, &EditorController::setLineSpacing);
     connect(m_typographyPanel, &TypographyPanel::fillColorChanged,
             m_controller, &EditorController::setFillColor);
     connect(m_typographyPanel, &TypographyPanel::refreshFontsRequested,
             m_controller, &EditorController::refreshFonts);
+
+    connect(m_transformPanel, &TransformPanel::transformChanged, this,
+            [this](const ObjectTransform& transform) {
+                if (const TextObject* object = m_controller->activeObject()) {
+                    m_controller->setObjectTransform(object->id, transform);
+                }
+            });
 
     connect(m_effectsPanel, &EffectsPanel::addEffectRequested,
             m_controller, &EditorController::addEffect);
@@ -181,6 +300,20 @@ MainWindow::MainWindow(QWidget* parent)
             m_controller, &EditorController::setEffectParameter);
     connect(m_effectsPanel, &EffectsPanel::effectMasterStrengthChanged,
             m_controller, &EditorController::setEffectMasterStrength);
+    connect(m_effectsPanel, &EffectsPanel::effectSelected,
+            this, [this](const QString& effectId) {
+                m_controller->setSelectedEffectId(effectId);
+                m_canvas->setMaskEnabled(!effectId.isEmpty());
+            });
+    connect(m_controller, &EditorController::selectedEffectChanged, this,
+            [this](const QString& effectId) {
+                m_effectsPanel->setSelectedEffectId(effectId);
+                m_canvas->setMaskEnabled(!effectId.isEmpty());
+            });
+    connect(m_effectsPanel, &EffectsPanel::effectScopeChanged, this,
+            [this](const QString& effectId, const EffectScope& scope) {
+                m_controller->setEffectScopeById(effectId, scope);
+            });
     connect(m_effectsPanel, &EffectsPanel::savePresetRequested, this, [this](const QString& name) {
         QString error;
         if (!m_controller->savePreset(name, &error)) {
@@ -212,10 +345,12 @@ MainWindow::MainWindow(QWidget* parent)
         refreshUi();
     });
 
-    connect(m_deformationPanel, &DeformationPanel::toolChanged,
-            m_canvas, &EditorCanvas::setTool);
-    connect(m_deformationPanel, &DeformationPanel::brushSettingsChanged,
-            m_canvas, &EditorCanvas::setBrushSettings);
+    connect(m_deformationPanel, &DeformationPanel::brushSettingsChanged, this,
+            [this](BrushMode, BrushTarget target, qreal radius, qreal strength, qreal hardness) {
+                m_controller->setBrushSettings(target, radius, strength, hardness);
+            });
+    connect(m_deformationPanel, &DeformationPanel::maskSettingsChanged,
+            m_controller, &EditorController::setMaskRestoreMode);
     connect(m_deformationPanel, &DeformationPanel::enabledChanged,
             m_controller, &EditorController::setDeformationEnabled);
     connect(m_deformationPanel, &DeformationPanel::overallStrengthChanged,
@@ -223,14 +358,18 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_deformationPanel, &DeformationPanel::clearRequested,
             m_controller, &EditorController::clearDeformation);
     connect(m_canvas, &EditorCanvas::deformationPreviewChanged,
-            m_controller, &EditorController::setDeformationPreview);
+            m_controller,
+            qOverload<const QString&, const DeformationStroke&>(&EditorController::setDeformationPreview));
     connect(m_canvas, &EditorCanvas::deformationPreviewCleared,
             m_controller, &EditorController::clearDeformationPreview);
     connect(m_canvas, &EditorCanvas::deformationStrokeReady,
-            m_controller, &EditorController::addDeformationStroke);
+            m_controller,
+            qOverload<const QString&, const DeformationStroke&>(&EditorController::addDeformationStroke));
 
     connect(m_layersPanel, &LayersPanel::layerSelected,
             m_controller, &EditorController::switchLayer);
+    connect(m_layersPanel, &LayersPanel::objectSelected,
+            m_controller, [this](const QString& objectId) { m_controller->selectObject(objectId); });
     connect(m_layersPanel, &LayersPanel::addLayerRequested,
             m_controller, &EditorController::addLayer);
     connect(m_layersPanel, &LayersPanel::removeLayerRequested,
@@ -242,8 +381,29 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_layersPanel, &LayersPanel::lockToggled,
             m_controller, &EditorController::setActiveLayerLocked);
 
+    connect(m_shortcutManager, &ShortcutManager::shortcutsChanged, this, [this] {
+        for (auto iterator = m_actions.cbegin(); iterator != m_actions.cend(); ++iterator) {
+            if (iterator.value()) {
+                iterator.value()->setShortcut(m_shortcutManager->shortcut(iterator.key()));
+            }
+        }
+        const QVector<QPair<EditorTool, QString>> toolCommands = {
+            {EditorTool::Select, QStringLiteral("tool.select")},
+            {EditorTool::Move, QStringLiteral("tool.move")},
+            {EditorTool::Text, QStringLiteral("tool.text")},
+            {EditorTool::Push, QStringLiteral("tool.push")},
+            {EditorTool::Pull, QStringLiteral("tool.pull")},
+            {EditorTool::Inflate, QStringLiteral("tool.inflate")},
+            {EditorTool::Pinch, QStringLiteral("tool.pinch")},
+            {EditorTool::Smooth, QStringLiteral("tool.smooth")},
+            {EditorTool::EffectMask, QStringLiteral("tool.effectMask")},
+        };
+        for (const auto& [tool, command] : toolCommands) {
+            m_toolPalette->setToolShortcut(tool, m_shortcutManager->shortcut(command));
+        }
+    });
+
     m_typographyPanel->setFontFamilies(m_controller->fontFamilies());
-    updateStylesForFamily(m_controller->activeObject()->font.family);
     QString presetError;
     m_presetNames = m_controller->presetNames(&presetError);
     if (!presetError.isEmpty()) {
@@ -252,6 +412,8 @@ MainWindow::MainWindow(QWidget* parent)
 
     createActions();
     createMenus();
+    applyNavigationSettings();
+    m_controller->setTool(EditorTool::Select);
     refreshUi();
 }
 
@@ -269,13 +431,27 @@ void MainWindow::closeEvent(QCloseEvent* event)
 void MainWindow::refreshUi()
 {
     const TextObject* object = m_controller->activeObject();
+    m_canvas->setScene(m_controller->sceneGeometry(),
+                       m_controller->selectedObjectIds(),
+                       m_controller->selectionModel()->activeObjectId());
+    m_canvas->setTextRange(m_controller->selectionModel()->textRange().first,
+                           m_controller->selectionModel()->textRange().second);
+    m_canvas->setMaskTarget(m_controller->selectionModel()->activeObjectId());
+    m_canvas->setMaskEnabled(!m_effectsPanel->selectedEffectId().isEmpty());
+    m_transformPanel->refresh(object);
+    m_typographyPanel->refresh(object);
+    m_effectsPanel->refresh(object, m_presetNames);
     if (!object) {
-        return;
+        m_controller->setSelectedEffectId(QString());
+    } else if (m_effectsPanel->selectedEffectId() != m_controller->selectedEffectId()) {
+        m_controller->setSelectedEffectId(m_effectsPanel->selectedEffectId());
     }
-    m_canvas->setScene(m_controller->sceneGeometry(), m_controller->selectedObjectIds());
-    m_typographyPanel->refresh(*object);
-    m_effectsPanel->refresh(*object, m_presetNames);
-    m_deformationPanel->refresh(object->deformation);
+    m_effectsPanel->setTextRange(m_controller->selectionModel()->textRange().first,
+                                 m_controller->selectionModel()->textRange().second);
+    m_deformationPanel->refresh(object ? &object->deformation : nullptr);
+    if (object) {
+        updateStylesForFamily(object->font.family);
+    }
 
     {
         const QSignalBlocker blocker(m_pageTabs);
@@ -293,14 +469,21 @@ void MainWindow::refreshUi()
         }
     }
     if (const Page* page = m_controller->document().currentPage()) {
-        m_layersPanel->refresh(*page, m_controller->document().activeLayerId);
+        m_layersPanel->refresh(*page,
+                               m_controller->document().activeLayerId,
+                               m_controller->selectionModel()->activeObjectId());
     }
     if (m_saveAction) {
         m_saveAction->setEnabled(true);
     }
     setWindowTitle(QStringLiteral("%1%2 — Vector Typography Editor")
-                       .arg(m_controller->document().title,
+                       .arg(!m_controller->document().hasObjects()
+                                ? QStringLiteral("Untitled Vector Typography Project")
+                                : m_controller->document().title,
                             m_controller->isModified() ? QStringLiteral("* ") : QString()));
+    if (m_canvas->isTextEditing()) {
+        setEditingShortcutsEnabled(false);
+    }
 }
 
 void MainWindow::refreshFonts()
@@ -319,6 +502,7 @@ void MainWindow::newProject()
         return;
     }
     m_projectPath.clear();
+    m_canvas->finishTextEditing();
     m_controller->newDocument();
 }
 
@@ -327,6 +511,7 @@ void MainWindow::openProject()
     if (!maybeSave()) {
         return;
     }
+    m_canvas->finishTextEditing();
     const QString filePath = QFileDialog::getOpenFileName(
         this, QStringLiteral("Open project"), QString(), QStringLiteral("Vector Typography Project (*.vtproj *.json)"));
     if (filePath.isEmpty()) {
@@ -338,7 +523,9 @@ void MainWindow::openProject()
         return;
     }
     m_projectPath = filePath;
-    updateStylesForFamily(m_controller->activeObject()->font.family);
+    if (const TextObject* object = m_controller->activeObject()) {
+        updateStylesForFamily(object->font.family);
+    }
 }
 
 void MainWindow::saveProject()
@@ -395,133 +582,231 @@ void MainWindow::exportSvg()
 
 void MainWindow::showPreferences()
 {
-    PreferencesDialog dialog(this);
-    if (dialog.exec() == QDialog::Accepted) {
-        setStatus(QStringLiteral("Preferences saved. Restart the editor to apply all workspace settings."));
-    }
+    PreferencesDialog dialog(m_shortcutManager, this);
+    connect(&dialog, &PreferencesDialog::preferencesChanged, this, [this] {
+        applyTheme();
+        applyNavigationSettings();
+        setStatus(QStringLiteral("Preferences applied."));
+    });
+    dialog.exec();
 }
 
 void MainWindow::pageTabChanged(int index)
 {
-    if (index < 0) {
+    if (index >= 0) {
+        m_controller->switchPage(m_pageTabs->tabData(index).toString());
+    }
+}
+
+void MainWindow::renameCurrentPage()
+{
+    const Page* page = m_controller->document().currentPage();
+    if (!page) {
         return;
     }
-    m_controller->switchPage(m_pageTabs->tabData(index).toString());
+    bool accepted = false;
+    const QString name = QInputDialog::getText(this,
+                                               QStringLiteral("Rename page"),
+                                               QStringLiteral("Name"),
+                                               QLineEdit::Normal,
+                                               page->name,
+                                               &accepted);
+    if (accepted) {
+        m_controller->renameCurrentPage(name);
+    }
+}
+
+void MainWindow::setPageSize()
+{
+    Page* page = m_controller->document().currentPage();
+    if (!page) {
+        return;
+    }
+    bool accepted = false;
+    const double width = QInputDialog::getDouble(this,
+                                                 QStringLiteral("Page width"),
+                                                 QStringLiteral("Width"),
+                                                 page->size.width(),
+                                                 64.0,
+                                                 10000.0,
+                                                 0,
+                                                 &accepted);
+    if (!accepted) {
+        return;
+    }
+    const double height = QInputDialog::getDouble(this,
+                                                  QStringLiteral("Page height"),
+                                                  QStringLiteral("Height"),
+                                                  page->size.height(),
+                                                  64.0,
+                                                  10000.0,
+                                                  0,
+                                                  &accepted);
+    if (accepted) {
+        m_controller->setCurrentPageSize(QSizeF(width, height));
+    }
 }
 
 void MainWindow::createActions()
 {
-    auto registerAction = [this](QAction* action, const QString& id, const QKeySequence& sequence) {
+    auto registerAction = [this](const QString& id,
+                                 const QString& name,
+                                 const QKeySequence& sequence,
+                                 const std::function<void()>& callback) {
+        auto* action = new QAction(name, this);
+        connect(action, &QAction::triggered, this, callback);
         addAction(action);
-        m_shortcutManager->registerAction(id, action, sequence);
+        m_shortcutManager->registerCommand(id, name, action, sequence);
+        m_actions.insert(id, action);
+        return action;
     };
 
-    auto* newAction = new QAction(QStringLiteral("New Project"), this);
-    connect(newAction, &QAction::triggered, this, &MainWindow::newProject);
-    registerAction(newAction, QStringLiteral("file.new"), QKeySequence::New);
-
-    auto* openAction = new QAction(QStringLiteral("Open Project…"), this);
-    connect(openAction, &QAction::triggered, this, &MainWindow::openProject);
-    registerAction(openAction, QStringLiteral("file.open"), QKeySequence::Open);
-
-    m_saveAction = new QAction(QStringLiteral("Save Project"), this);
-    connect(m_saveAction, &QAction::triggered, this, &MainWindow::saveProject);
-    registerAction(m_saveAction, QStringLiteral("file.save"), QKeySequence::Save);
-
-    auto* saveAsAction = new QAction(QStringLiteral("Save Project As…"), this);
-    connect(saveAsAction, &QAction::triggered, this, &MainWindow::saveProjectAs);
-    registerAction(saveAsAction, QStringLiteral("file.saveAs"), QKeySequence(QStringLiteral("Ctrl+Shift+S")));
-
-    auto* exportAction = new QAction(QStringLiteral("Export SVG…"), this);
-    connect(exportAction, &QAction::triggered, this, &MainWindow::exportSvg);
-    registerAction(exportAction, QStringLiteral("file.exportSvg"), QKeySequence(QStringLiteral("Ctrl+Alt+S")));
+    registerAction(QStringLiteral("file.new"), QStringLiteral("New Project"), QKeySequence::New,
+                   [this] { newProject(); });
+    registerAction(QStringLiteral("file.open"), QStringLiteral("Open Project…"), QKeySequence::Open,
+                   [this] { openProject(); });
+    m_saveAction = registerAction(QStringLiteral("file.save"), QStringLiteral("Save Project"), QKeySequence::Save,
+                                   [this] { saveProject(); });
+    registerAction(QStringLiteral("file.saveAs"), QStringLiteral("Save Project As…"),
+                   QKeySequence(QStringLiteral("Ctrl+Shift+S")), [this] { saveProjectAs(); });
+    registerAction(QStringLiteral("file.exportSvg"), QStringLiteral("Export SVG…"),
+                   QKeySequence(QStringLiteral("Ctrl+Alt+S")), [this] { exportSvg(); });
 
     auto* undoAction = m_controller->undoStack()->createUndoAction(this, QStringLiteral("Undo"));
     auto* redoAction = m_controller->undoStack()->createRedoAction(this, QStringLiteral("Redo"));
-    registerAction(undoAction, QStringLiteral("edit.undo"), QKeySequence::Undo);
-    registerAction(redoAction, QStringLiteral("edit.redo"), QKeySequence::Redo);
+    addAction(undoAction);
+    addAction(redoAction);
+    m_shortcutManager->registerCommand(QStringLiteral("edit.undo"), QStringLiteral("Undo"), undoAction, QKeySequence::Undo);
+    m_shortcutManager->registerCommand(QStringLiteral("edit.redo"), QStringLiteral("Redo"), redoAction,
+                                        QKeySequence(QStringLiteral("Ctrl+Shift+Z")));
+    m_actions.insert(QStringLiteral("edit.undo"), undoAction);
+    m_actions.insert(QStringLiteral("edit.redo"), redoAction);
 
-    auto* deleteAction = new QAction(QStringLiteral("Delete Selected Objects"), this);
-    connect(deleteAction, &QAction::triggered, m_controller, &EditorController::deleteSelectedObjects);
-    registerAction(deleteAction, QStringLiteral("edit.delete"), QKeySequence::Delete);
+    m_copyAction = registerAction(QStringLiteral("edit.copy"), QStringLiteral("Copy Objects"), QKeySequence::Copy,
+                                  [this] { m_controller->copySelectedObjects(); });
+    m_cutAction = registerAction(QStringLiteral("edit.cut"), QStringLiteral("Cut Objects"), QKeySequence::Cut,
+                                 [this] { m_controller->cutSelectedObjects(); });
+    m_pasteAction = registerAction(QStringLiteral("edit.paste"), QStringLiteral("Paste Objects"), QKeySequence::Paste,
+                                   [this] { m_controller->pasteObjects(); });
+    m_selectAllAction = registerAction(QStringLiteral("edit.selectAll"), QStringLiteral("Select All Objects"),
+                                       QKeySequence::SelectAll, [this] { m_controller->selectAllObjects(); });
+    registerAction(QStringLiteral("edit.duplicate"), QStringLiteral("Duplicate Objects"),
+                   QKeySequence(QStringLiteral("Ctrl+D")), [this] { m_controller->duplicateSelectedObjects(); });
+    registerAction(QStringLiteral("edit.delete"), QStringLiteral("Delete Selected Objects"), QKeySequence::Delete,
+                   [this] { m_controller->deleteSelectedObjects(); });
 
-    auto* duplicateAction = new QAction(QStringLiteral("Duplicate Selected Objects"), this);
-    connect(duplicateAction, &QAction::triggered,
-            m_controller, &EditorController::duplicateSelectedObjects);
-    registerAction(duplicateAction, QStringLiteral("edit.duplicate"), QKeySequence(QStringLiteral("Ctrl+D")));
-
-    auto* selectAction = new QAction(QStringLiteral("Select Tool"), this);
-    connect(selectAction, &QAction::triggered, this, [this] { m_canvas->setTool(EditorTool::Select); });
-    registerAction(selectAction, QStringLiteral("tool.select"), QKeySequence(QStringLiteral("V")));
-    auto* moveAction = new QAction(QStringLiteral("Move Tool"), this);
-    connect(moveAction, &QAction::triggered, this, [this] { m_canvas->setTool(EditorTool::Move); });
-    registerAction(moveAction, QStringLiteral("tool.move"), QKeySequence(QStringLiteral("M")));
-    auto* textAction = new QAction(QStringLiteral("Text Tool"), this);
-    connect(textAction, &QAction::triggered, this, [this] { m_canvas->setTool(EditorTool::Text); });
-    registerAction(textAction, QStringLiteral("tool.text"), QKeySequence(QStringLiteral("T")));
-
-    auto* fitAction = new QAction(QStringLiteral("Fit Content"), this);
-    connect(fitAction, &QAction::triggered, m_canvas, &EditorCanvas::fitContent);
-    registerAction(fitAction, QStringLiteral("view.fit"), QKeySequence(QStringLiteral("F")));
-    auto* refreshFontsAction = new QAction(QStringLiteral("Refresh Fonts"), this);
-    connect(refreshFontsAction, &QAction::triggered, this, &MainWindow::refreshFonts);
-    registerAction(refreshFontsAction, QStringLiteral("tools.refreshFonts"), QKeySequence(Qt::Key_F5));
-
-    auto* preferencesAction = new QAction(QStringLiteral("Preferences…"), this);
-    connect(preferencesAction, &QAction::triggered, this, &MainWindow::showPreferences);
-    addAction(preferencesAction);
+    const QVector<QPair<EditorTool, QPair<QString, QString>>> tools = {
+        {EditorTool::Select, {QStringLiteral("tool.select"), QStringLiteral("Select Tool")} },
+        {EditorTool::Move, {QStringLiteral("tool.move"), QStringLiteral("Move Tool")} },
+        {EditorTool::Text, {QStringLiteral("tool.text"), QStringLiteral("Text Tool")} },
+        {EditorTool::Push, {QStringLiteral("tool.push"), QStringLiteral("Push Tool")} },
+        {EditorTool::Pull, {QStringLiteral("tool.pull"), QStringLiteral("Pull Tool")} },
+        {EditorTool::Inflate, {QStringLiteral("tool.inflate"), QStringLiteral("Inflate Tool")} },
+        {EditorTool::Pinch, {QStringLiteral("tool.pinch"), QStringLiteral("Pinch Tool")} },
+        {EditorTool::Smooth, {QStringLiteral("tool.smooth"), QStringLiteral("Smooth Tool")} },
+        {EditorTool::EffectMask, {QStringLiteral("tool.effectMask"), QStringLiteral("Effect Mask Tool")} },
+    };
+    const QVector<QKeySequence> defaults = {
+        QKeySequence(QStringLiteral("V")), QKeySequence(QStringLiteral("M")),
+        QKeySequence(QStringLiteral("T")), QKeySequence(QStringLiteral("B")),
+        QKeySequence(QStringLiteral("P")), QKeySequence(QStringLiteral("I")),
+        QKeySequence(QStringLiteral("N")), QKeySequence(QStringLiteral("S")),
+        QKeySequence(QStringLiteral("E"))};
+    for (int index = 0; index < tools.size(); ++index) {
+        const auto& [tool, command] = tools[index];
+        QAction* action = registerAction(command.first,
+                                         command.second,
+                                         defaults[index],
+                                         [this, tool] { m_controller->setTool(tool); });
+        m_toolActions.push_back(action);
+        m_toolPalette->setToolShortcut(tool, m_shortcutManager->shortcut(command.first));
+    }
+    registerAction(QStringLiteral("view.fitPage"), QStringLiteral("Fit Page"), QKeySequence(QStringLiteral("F")),
+                   [this] { m_canvas->fitContent(); });
+    registerAction(QStringLiteral("view.zoomIn"), QStringLiteral("Zoom In"), QKeySequence(QStringLiteral("+")),
+                   [this] { m_canvas->zoomIn(); });
+    registerAction(QStringLiteral("view.zoomOut"), QStringLiteral("Zoom Out"), QKeySequence(QStringLiteral("-")),
+                   [this] { m_canvas->zoomOut(); });
+    registerAction(QStringLiteral("view.zoom100"), QStringLiteral("Zoom 100%"), QKeySequence(QStringLiteral("1")),
+                   [this] { m_canvas->zoom100(); });
+    registerAction(QStringLiteral("page.new"), QStringLiteral("New Page"), QKeySequence(QStringLiteral("Ctrl+Shift+N")),
+                   [this] { m_controller->addPage(); });
+    registerAction(QStringLiteral("page.next"), QStringLiteral("Next Page"),
+                   QKeySequence(QStringLiteral("Ctrl+PageDown")), [this] {
+                       const int next = m_pageTabs->currentIndex() + 1;
+                       if (next < m_pageTabs->count()) m_pageTabs->setCurrentIndex(next);
+                   });
+    registerAction(QStringLiteral("page.previous"), QStringLiteral("Previous Page"),
+                   QKeySequence(QStringLiteral("Ctrl+PageUp")), [this] {
+                       const int previous = m_pageTabs->currentIndex() - 1;
+                       if (previous >= 0) m_pageTabs->setCurrentIndex(previous);
+                   });
+    registerAction(QStringLiteral("layer.new"), QStringLiteral("New Layer"), QKeySequence(QStringLiteral("Ctrl+Shift+L")),
+                   [this] { m_controller->addLayer(); });
+    registerAction(QStringLiteral("brush.radiusDecrease"), QStringLiteral("Decrease Brush Radius"),
+                   QKeySequence(QStringLiteral("[")), [this] {
+                       m_controller->setBrushSettings(m_controller->brushTarget(),
+                                                      m_controller->brushRadius() / 1.2,
+                                                      m_controller->brushStrength(),
+                                                      m_controller->brushHardness());
+                   });
+    registerAction(QStringLiteral("brush.radiusIncrease"), QStringLiteral("Increase Brush Radius"),
+                   QKeySequence(QStringLiteral("]")), [this] {
+                       m_controller->setBrushSettings(m_controller->brushTarget(),
+                                                      m_controller->brushRadius() * 1.2,
+                                                      m_controller->brushStrength(),
+                                                      m_controller->brushHardness());
+                   });
+    auto* refreshFontsAction = registerAction(QStringLiteral("tools.refreshFonts"), QStringLiteral("Refresh Fonts"),
+                                              QKeySequence(Qt::Key_F5), [this] { refreshFonts(); });
+    Q_UNUSED(refreshFontsAction);
+    registerAction(QStringLiteral("tools.preferences"), QStringLiteral("Preferences…"), QKeySequence(),
+                   [this] { showPreferences(); });
 
     auto* fileToolBar = addToolBar(QStringLiteral("File"));
-    fileToolBar->addAction(newAction);
-    fileToolBar->addAction(openAction);
+    fileToolBar->setMovable(false);
+    fileToolBar->addAction(m_actions.value(QStringLiteral("file.new")));
+    fileToolBar->addAction(m_actions.value(QStringLiteral("file.open")));
     fileToolBar->addAction(m_saveAction);
-    fileToolBar->addAction(exportAction);
+    fileToolBar->addAction(m_actions.value(QStringLiteral("file.exportSvg")));
     fileToolBar->addSeparator();
-    fileToolBar->addAction(fitAction);
+    fileToolBar->addAction(m_actions.value(QStringLiteral("view.fitPage")));
 }
 
 void MainWindow::createMenus()
 {
     QMenu* fileMenu = menuBar()->addMenu(QStringLiteral("File"));
-    for (QAction* action : actions()) {
-        if (action->text().startsWith(QStringLiteral("New"))
-            || action->text().startsWith(QStringLiteral("Open"))
-            || action == m_saveAction
-            || action->text().startsWith(QStringLiteral("Save Project As"))
-            || action->text().startsWith(QStringLiteral("Export"))) {
-            fileMenu->addAction(action);
-        }
-    }
+    fileMenu->addAction(m_actions.value(QStringLiteral("file.new")));
+    fileMenu->addAction(m_actions.value(QStringLiteral("file.open")));
+    fileMenu->addAction(m_saveAction);
+    fileMenu->addAction(m_actions.value(QStringLiteral("file.saveAs")));
+    fileMenu->addSeparator();
+    fileMenu->addAction(m_actions.value(QStringLiteral("file.exportSvg")));
 
     QMenu* editMenu = menuBar()->addMenu(QStringLiteral("Edit"));
-    for (QAction* action : actions()) {
-        if (action->text() == QStringLiteral("Undo")
-            || action->text() == QStringLiteral("Redo")
-            || action->text().startsWith(QStringLiteral("Delete"))
-            || action->text().startsWith(QStringLiteral("Duplicate"))) {
-            editMenu->addAction(action);
-        }
-    }
+    editMenu->addAction(m_actions.value(QStringLiteral("edit.undo")));
+    editMenu->addAction(m_actions.value(QStringLiteral("edit.redo")));
+    editMenu->addSeparator();
+    editMenu->addAction(m_copyAction);
+    editMenu->addAction(m_cutAction);
+    editMenu->addAction(m_pasteAction);
+    editMenu->addAction(m_actions.value(QStringLiteral("edit.duplicate")));
+    editMenu->addAction(m_actions.value(QStringLiteral("edit.delete")));
+    editMenu->addAction(m_selectAllAction);
 
     QMenu* viewMenu = menuBar()->addMenu(QStringLiteral("View"));
-    for (QAction* action : actions()) {
-        if (action->text() == QStringLiteral("Fit Content")) {
-            viewMenu->addAction(action);
-        }
-    }
+    viewMenu->addAction(m_actions.value(QStringLiteral("view.fitPage")));
+    viewMenu->addAction(m_actions.value(QStringLiteral("view.zoomIn")));
+    viewMenu->addAction(m_actions.value(QStringLiteral("view.zoomOut")));
+    viewMenu->addAction(m_actions.value(QStringLiteral("view.zoom100")));
+
     QMenu* toolsMenu = menuBar()->addMenu(QStringLiteral("Tools"));
-    for (QAction* action : actions()) {
-        if (action->text() == QStringLiteral("Refresh Fonts")
-            || action->text().contains(QStringLiteral("Tool"))) {
-            toolsMenu->addAction(action);
-        }
+    for (const QAction* action : std::as_const(m_toolActions)) {
+        toolsMenu->addAction(const_cast<QAction*>(action));
     }
     toolsMenu->addSeparator();
-    for (QAction* action : actions()) {
-        if (action->text().startsWith(QStringLiteral("Preferences"))) {
-            toolsMenu->addAction(action);
-        }
-    }
+    toolsMenu->addAction(m_actions.value(QStringLiteral("tools.refreshFonts")));
+    toolsMenu->addAction(m_actions.value(QStringLiteral("tools.preferences")));
 }
 
 void MainWindow::setStatus(const QString& message)
@@ -548,6 +833,61 @@ bool MainWindow::maybeSave()
         return !m_controller->isModified();
     }
     return true;
+}
+
+void MainWindow::applyTheme()
+{
+    const QSettings settings;
+    const QString theme = settings.value(QStringLiteral("appearance/theme"), QStringLiteral("dark")).toString();
+    const bool light = theme == QStringLiteral("light")
+        || (theme == QStringLiteral("system") && palette().color(QPalette::Window).lightness() > 160);
+    if (light) {
+        qApp->setStyleSheet(QStringLiteral(
+            "QMainWindow, QWidget { background: #eef1f5; color: #20242b; }"
+            "QGroupBox { border: 1px solid #c7ced8; margin-top: 8px; padding-top: 8px; }"
+            "QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox, QListWidget, QTreeWidget {"
+            " background: #ffffff; color: #20242b; border: 1px solid #b6bfcc; padding: 3px; }"
+            "QPushButton, QToolButton { background: #e3e8ef; border: 1px solid #b6bfcc; padding: 4px; }"
+            "QPushButton:hover, QToolButton:hover { background: #d5e4f6; }"
+            "QToolButton:checked { background: #4b91ce; color: white; }"
+            "QTabBar::tab { background: #dbe2eb; padding: 5px 10px; }"
+            "QTabBar::tab:selected { background: #4b91ce; color: white; }"));
+    } else {
+        qApp->setStyleSheet(QStringLiteral(
+            "QMainWindow, QWidget { background: #272a30; color: #e8eaf0; }"
+            "QGroupBox { border: 1px solid #454a54; margin-top: 8px; padding-top: 8px; }"
+            "QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox, QListWidget, QTreeWidget {"
+            " background: #1e2126; color: #f1f3f7; border: 1px solid #4b515c; padding: 3px; }"
+            "QPushButton, QToolButton { background: #343943; border: 1px solid #515866; padding: 4px; }"
+            "QPushButton:hover, QToolButton:hover { background: #414957; }"
+            "QToolButton:checked { background: #2e76ba; border-color: #73b8f0; }"
+            "QTabBar::tab { background: #343943; padding: 5px 10px; }"
+            "QTabBar::tab:selected { background: #2e76ba; }"));
+    }
+}
+
+void MainWindow::applyNavigationSettings()
+{
+    const QSettings settings;
+    m_canvas->setNavigationSettings(settings.value(QStringLiteral("navigation/mode"),
+                                                    QStringLiteral("middleSpace"))
+                                        .toString(),
+                                    settings.value(QStringLiteral("navigation/invertZoom"), false).toBool());
+}
+
+void MainWindow::setEditingShortcutsEnabled(bool enabled)
+{
+    for (QAction* action : std::as_const(m_toolActions)) {
+        action->setEnabled(enabled);
+    }
+    if (m_copyAction) m_copyAction->setEnabled(enabled);
+    if (m_cutAction) m_cutAction->setEnabled(enabled);
+    if (m_pasteAction) m_pasteAction->setEnabled(enabled);
+    if (m_selectAllAction) m_selectAllAction->setEnabled(enabled);
+    if (m_actions.contains(QStringLiteral("edit.undo"))) {
+        m_actions.value(QStringLiteral("edit.undo"))->setEnabled(enabled);
+        m_actions.value(QStringLiteral("edit.redo"))->setEnabled(enabled);
+    }
 }
 
 } // namespace vt

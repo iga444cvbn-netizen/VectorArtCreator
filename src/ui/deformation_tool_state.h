@@ -18,6 +18,7 @@ enum class EditorTool {
     Inflate,
     Pinch,
     Smooth,
+    EffectMask,
 };
 
 class DeformationToolState {
@@ -72,6 +73,8 @@ public:
             return BrushMode::Pinch;
         case EditorTool::Smooth:
             return BrushMode::Smooth;
+        case EditorTool::EffectMask:
+            return std::nullopt;
         }
         return std::nullopt;
     }

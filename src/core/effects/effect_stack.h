@@ -21,6 +21,9 @@ public:
     [[nodiscard]] bool isEmpty() const;
     [[nodiscard]] Effect* at(int index);
     [[nodiscard]] const Effect* at(int index) const;
+    [[nodiscard]] Effect* byInstanceId(const QString& instanceId);
+    [[nodiscard]] const Effect* byInstanceId(const QString& instanceId) const;
+    [[nodiscard]] int indexByInstanceId(const QString& instanceId) const;
 
     void append(std::unique_ptr<Effect> effect);
     void insert(int index, std::unique_ptr<Effect> effect);

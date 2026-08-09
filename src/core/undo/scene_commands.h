@@ -139,6 +139,26 @@ private:
     QVariant m_newValue;
 };
 
+class ReorderLayerCommand final : public DocumentCommand {
+public:
+    ReorderLayerCommand(Document& document,
+                        QString pageId,
+                        int from,
+                        int to,
+                        DocumentChangeCallback onChanged,
+                        QString description = QStringLiteral("Reorder layers"));
+
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(int from, int to);
+
+    QString m_pageId;
+    int m_from = -1;
+    int m_to = -1;
+};
+
 class AddPageCommand final : public DocumentCommand {
 public:
     AddPageCommand(Document& document,
@@ -191,6 +211,30 @@ private:
     QString m_newPageId;
     QString m_oldLayerId;
     QString m_newLayerId;
+};
+
+class SetPageStateCommand final : public DocumentCommand {
+public:
+    enum class Property { Name, Size };
+
+    SetPageStateCommand(Document& document,
+                        QString pageId,
+                        Property property,
+                        QVariant oldValue,
+                        QVariant newValue,
+                        DocumentChangeCallback onChanged,
+                        QString description = QStringLiteral("Change page"));
+
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(const QVariant& value);
+
+    QString m_pageId;
+    Property m_property;
+    QVariant m_oldValue;
+    QVariant m_newValue;
 };
 
 } // namespace vt

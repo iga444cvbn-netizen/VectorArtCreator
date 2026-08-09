@@ -1,11 +1,16 @@
 #include "ui/editor_canvas.h"
 
 #include <QApplication>
-#include <QEnterEvent>
+#include <QEvent>
+#include <QFrame>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPalette>
+#include <QPlainTextEdit>
 #include <QResizeEvent>
+#include <QTextCursor>
+#include <QTextOption>
 #include <QWheelEvent>
 
 #include <cmath>
@@ -39,20 +44,18 @@ void EditorCanvas::setScene(const VectorGeometry& geometry, const QColor& fill)
     if (!m_hasInitialFit && width() > 0 && height() > 0) {
         fitContent();
     }
+    updateTextEditorGeometry();
     update();
 }
 
-void EditorCanvas::setScene(const SceneGeometry& scene, const QStringList& selectedObjectIds)
+void EditorCanvas::setScene(const SceneGeometry& scene,
+                            const QStringList& selectedObjectIds,
+                            const QString& activeObjectId)
 {
     m_sceneGeometry = scene;
     m_selectedObjectIds = selectedObjectIds;
-    const SceneObjectGeometry* active = nullptr;
-    if (!selectedObjectIds.isEmpty()) {
-        active = m_sceneGeometry.objectById(selectedObjectIds.first());
-    }
-    if (!active && !m_sceneGeometry.objects.isEmpty()) {
-        active = &m_sceneGeometry.objects.first();
-    }
+    m_activeObjectId = activeObjectId.isEmpty() ? selectedObjectIds.value(0) : activeObjectId;
+    const SceneObjectGeometry* active = m_sceneGeometry.objectById(m_activeObjectId);
     m_geometry = active ? active->geometry : VectorGeometry();
     if (active && active->fill.isValid()) {
         m_fill = active->fill;
@@ -60,12 +63,21 @@ void EditorCanvas::setScene(const SceneGeometry& scene, const QStringList& selec
     if (!m_hasInitialFit && width() > 0 && height() > 0) {
         fitContent();
     }
+    updateTextEditorGeometry();
     update();
 }
 
-void EditorCanvas::setSelection(const QStringList& selectedObjectIds)
+void EditorCanvas::setSelection(const QStringList& selectedObjectIds, const QString& activeObjectId)
 {
     m_selectedObjectIds = selectedObjectIds;
+    m_activeObjectId = activeObjectId.isEmpty() ? selectedObjectIds.value(0) : activeObjectId;
+    update();
+}
+
+void EditorCanvas::setTextRange(int start, int end)
+{
+    m_textRangeStart = start;
+    m_textRangeEnd = end;
     update();
 }
 
@@ -74,6 +86,9 @@ void EditorCanvas::setTool(EditorTool tool)
     if (m_tool == tool) {
         updateCursorShape();
         return;
+    }
+    if (m_textEditor && m_textEditor->isVisible() && tool != EditorTool::Text) {
+        finishTextEditing();
     }
     cancelBrushStroke();
     m_marqueeSelecting = false;
@@ -104,6 +119,91 @@ void EditorCanvas::setBrushSettings(BrushMode mode,
     update();
 }
 
+void EditorCanvas::setMaskRestoreMode(bool restore)
+{
+    m_maskRestore = restore;
+}
+
+void EditorCanvas::setMaskTarget(const QString& objectId)
+{
+    m_maskTargetId = objectId;
+}
+
+void EditorCanvas::setMaskEnabled(bool enabled)
+{
+    m_maskEnabled = enabled;
+}
+
+void EditorCanvas::setNavigationSettings(const QString& mode, bool invertZoom)
+{
+    m_navigationMode = mode;
+    m_invertZoom = invertZoom;
+}
+
+void EditorCanvas::beginTextEditing(const QString& objectId,
+                                    const QString& text,
+                                    const QFont& font,
+                                    const QRectF& documentBounds)
+{
+    if (objectId.isEmpty()) {
+        return;
+    }
+    if (!m_textEditor) {
+        m_textEditor = new QPlainTextEdit(this);
+        m_textEditor->setFrameShape(QFrame::NoFrame);
+        m_textEditor->setWordWrapMode(QTextOption::NoWrap);
+        m_textEditor->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_textEditor->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_textEditor->setStyleSheet(QStringLiteral(
+            "QPlainTextEdit { background: rgba(18, 21, 27, 190); color: #f4f7fb; "
+            "border: 1px solid #79bfff; padding: 4px; selection-background-color: #2e76ba; }"));
+        m_textEditor->installEventFilter(this);
+        connect(m_textEditor, &QPlainTextEdit::textChanged, this, [this] {
+            if (!m_updatingTextEditor && !m_editingObjectId.isEmpty()) {
+                emit textEdited(m_editingObjectId, m_textEditor->toPlainText());
+            }
+        });
+        connect(m_textEditor, &QPlainTextEdit::selectionChanged, this, [this] {
+            if (m_editingObjectId.isEmpty()) {
+                return;
+            }
+            const QTextCursor cursor = m_textEditor->textCursor();
+            emit textRangeChanged(m_editingObjectId,
+                                  qMin(cursor.anchor(), cursor.position()),
+                                  qMax(cursor.anchor(), cursor.position()));
+        });
+    }
+
+    m_editingObjectId = objectId;
+    m_editingDocumentBounds = documentBounds;
+    m_updatingTextEditor = true;
+    m_textEditor->setFont(font);
+    m_textEditor->setPlainText(text);
+    QTextCursor cursor = m_textEditor->textCursor();
+    cursor.movePosition(QTextCursor::End);
+    m_textEditor->setTextCursor(cursor);
+    m_updatingTextEditor = false;
+    updateTextEditorGeometry();
+    m_textEditor->show();
+    m_textEditor->raise();
+    m_textEditor->setFocus(Qt::OtherFocusReason);
+    emit textEditingChanged(true);
+}
+
+void EditorCanvas::finishTextEditing()
+{
+    if (!m_textEditor || m_editingObjectId.isEmpty()) {
+        return;
+    }
+    m_textEditor->hide();
+    m_editingObjectId.clear();
+    m_textRangeStart = -1;
+    m_textRangeEnd = -1;
+    setFocus(Qt::OtherFocusReason);
+    emit textEditingChanged(false);
+    update();
+}
+
 qreal EditorCanvas::zoom() const
 {
     return m_zoom;
@@ -111,17 +211,14 @@ qreal EditorCanvas::zoom() const
 
 void EditorCanvas::fitContent()
 {
-    QRectF bounds = m_sceneGeometry.bounds;
+    QRectF bounds(QPointF(0.0, 0.0), m_sceneGeometry.pageSize);
+    if (bounds.isEmpty()) {
+        bounds = m_sceneGeometry.bounds;
+    }
     if (bounds.isEmpty()) {
         bounds = m_geometry.bounds;
     }
     if (bounds.isEmpty()) {
-        bounds = m_geometry.referenceBounds;
-    }
-    if (bounds.isEmpty() && !m_sceneGeometry.pageSize.isEmpty()) {
-        bounds = QRectF(QPointF(0.0, 0.0), m_sceneGeometry.pageSize);
-    }
-    if (bounds.isEmpty() || width() <= 0 || height() <= 0) {
         return;
     }
 
@@ -134,7 +231,23 @@ void EditorCanvas::fitContent()
     m_hasViewCenter = true;
     setZoom(qBound<qreal>(0.02, qMin(widthScale, heightScale), 32.0));
     m_hasInitialFit = true;
+    updateTextEditorGeometry();
     update();
+}
+
+void EditorCanvas::zoomIn()
+{
+    setZoom(m_zoom * 1.2);
+}
+
+void EditorCanvas::zoomOut()
+{
+    setZoom(m_zoom / 1.2);
+}
+
+void EditorCanvas::zoom100()
+{
+    setZoom(1.0);
 }
 
 void EditorCanvas::paintEvent(QPaintEvent* event)
@@ -142,59 +255,96 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
     Q_UNUSED(event);
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.fillRect(rect(), QColor(35, 38, 44));
+    painter.fillRect(rect(), QColor(30, 33, 39));
 
-    const QRectF bounds = m_sceneGeometry.bounds.isEmpty()
-        ? (m_geometry.bounds.isEmpty() ? m_geometry.referenceBounds : m_geometry.bounds)
-        : m_sceneGeometry.bounds;
-    if (!m_sceneGeometry.hasVisibleGeometry() && !m_geometry.hasVisibleGeometry()) {
-        painter.setPen(QColor(180, 185, 195));
-        painter.drawText(rect(), Qt::AlignCenter, QStringLiteral("Type text to begin"));
-    } else {
-        painter.setTransform(viewTransform());
-        for (const SceneObjectGeometry& object : m_sceneGeometry.objects) {
-            if (!object.visible || !object.geometry.hasVisibleGeometry()) {
-                continue;
-            }
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(object.fill.isValid() ? object.fill : m_fill);
-            painter.drawPath(object.geometry.combinedPath());
-        }
-        if (m_sceneGeometry.objects.isEmpty() && m_geometry.hasVisibleGeometry()) {
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(m_fill);
-            painter.drawPath(m_geometry.combinedPath());
-        }
+    const QRectF pageRect(QPointF(0.0, 0.0), m_sceneGeometry.pageSize.isEmpty()
+                                                       ? QSizeF(1200.0, 800.0)
+                                                       : m_sceneGeometry.pageSize);
+    painter.setTransform(viewTransform());
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(10, 12, 15, 90));
+    painter.drawRect(pageRect.translated(8.0 / qMax<qreal>(0.01, m_zoom),
+                                         8.0 / qMax<qreal>(0.01, m_zoom)));
+    painter.setBrush(m_sceneGeometry.pageBackground.isValid()
+                         ? m_sceneGeometry.pageBackground
+                         : QColor(242, 242, 246));
+    painter.drawRect(pageRect);
+    painter.setPen(QPen(QColor(125, 132, 144), 1.0 / qMax<qreal>(0.01, m_zoom)));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(pageRect);
 
-        for (const QString& objectId : m_selectedObjectIds) {
-            const SceneObjectGeometry* object = m_sceneGeometry.objectById(objectId);
-            if (!object || !object->visible) {
-                continue;
+    for (const SceneObjectGeometry& object : m_sceneGeometry.objects) {
+        if (!object.visible || !object.geometry.hasVisibleGeometry()) {
+            continue;
+        }
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(object.fill.isValid() ? object.fill : m_fill);
+        painter.drawPath(object.geometry.combinedPath());
+
+        if (object.objectId == m_activeObjectId && m_textRangeStart >= 0 && m_textRangeEnd > m_textRangeStart) {
+            painter.setBrush(QColor(65, 150, 255, 75));
+            for (const GeometryPiece& piece : object.geometry.pieces) {
+                const int pieceEnd = piece.sourceClusterStart + qMax(1, piece.sourceClusterLength);
+                if (piece.sourceClusterStart < m_textRangeEnd && pieceEnd > m_textRangeStart) {
+                    painter.drawPath(piece.path);
+                }
             }
-            painter.setPen(QPen(QColor(85, 160, 255), 1.5 / qMax<qreal>(0.01, m_zoom), Qt::DashLine));
-            painter.setBrush(Qt::NoBrush);
-            painter.drawRect(object->visualBounds.adjusted(-4.0 / m_zoom,
-                                                            -4.0 / m_zoom,
-                                                            4.0 / m_zoom,
-                                                            4.0 / m_zoom));
         }
-        if (m_marqueeSelecting) {
-            painter.setPen(QPen(QColor(85, 160, 255), 1.0 / qMax<qreal>(0.01, m_zoom), Qt::DashLine));
-            painter.setBrush(QColor(85, 160, 255, 40));
-            painter.drawRect(m_marqueeRect.normalized());
+    }
+
+    const QRectF pageBounds = pageRect;
+    if (!m_sceneGeometry.hasVisibleGeometry()) {
+        painter.setPen(QColor(100, 108, 120));
+        painter.drawText(pageBounds, Qt::AlignCenter,
+                         QStringLiteral("Press T or choose the Text tool to create text"));
+    }
+
+    for (const QString& objectId : m_selectedObjectIds) {
+        const SceneObjectGeometry* object = m_sceneGeometry.objectById(objectId);
+        if (!object || !object->visible) {
+            continue;
         }
+        const bool active = objectId == m_activeObjectId;
+        painter.setPen(QPen(active ? QColor(90, 176, 255) : QColor(150, 190, 235),
+                            (active ? 1.7 : 1.2) / qMax<qreal>(0.01, m_zoom),
+                            Qt::DashLine));
+        painter.setBrush(Qt::NoBrush);
+        const QRectF bounds = object->visualBounds.adjusted(-4.0 / m_zoom,
+                                                              -4.0 / m_zoom,
+                                                              4.0 / m_zoom,
+                                                              4.0 / m_zoom);
+        painter.drawRect(bounds);
+        if (active) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(90, 176, 255));
+            const qreal handle = 7.0 / qMax<qreal>(0.01, m_zoom);
+            const QVector<QPointF> handles = {
+                bounds.topLeft(), bounds.topRight(), bounds.bottomLeft(), bounds.bottomRight()};
+            for (const QPointF& handleCenter : handles) {
+                painter.drawRect(QRectF(handleCenter - QPointF(handle / 2.0, handle / 2.0),
+                                        QSizeF(handle, handle)));
+            }
+        }
+    }
+    if (m_marqueeSelecting) {
+        painter.setPen(QPen(QColor(85, 160, 255), 1.0 / qMax<qreal>(0.01, m_zoom), Qt::DashLine));
+        painter.setBrush(QColor(85, 160, 255, 40));
+        painter.drawRect(m_marqueeRect.normalized());
     }
 
     painter.resetTransform();
     painter.setPen(QColor(175, 180, 190));
     painter.drawText(12,
-                    height() - 12,
-                    QStringLiteral("Zoom %1%   •   Wheel to zoom   •   Middle-drag to pan")
-                        .arg(qRound(m_zoom * 100.0)));
+                     height() - 12,
+                     QStringLiteral("Zoom %1%   •   Wheel to zoom   •   Middle-drag to pan")
+                         .arg(qRound(m_zoom * 100.0)));
     if (m_tool != EditorTool::Select && m_tool != EditorTool::Move && m_tool != EditorTool::Text
         && m_hasCursorPosition && !m_panning && !m_spacePressed) {
         const qreal screenRadius = qMax<qreal>(3.0, m_brushRadius * m_zoom);
-        painter.setPen(QPen(QColor(85, 160, 255, 210), 1.0));
+        painter.setPen(QPen(m_tool == EditorTool::EffectMask
+                                ? QColor(255, 174, 104, 220)
+                                : QColor(85, 160, 255, 210),
+                            1.0));
         painter.setBrush(Qt::NoBrush);
         painter.drawEllipse(QPointF(m_cursorPosition), screenRadius, screenRadius);
         painter.drawLine(QPointF(m_cursorPosition.x() - 3, m_cursorPosition.y()),
@@ -206,12 +356,17 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
 
 void EditorCanvas::wheelEvent(QWheelEvent* event)
 {
-    const int delta = event->angleDelta().y();
-    if (delta == 0) {
+    if (event->angleDelta().y() == 0
+        || (event->modifiers().testFlag(Qt::ControlModifier)
+            && m_navigationMode == QStringLiteral("middleSpace"))) {
         event->ignore();
         return;
     }
-    const qreal factor = std::pow(1.0015, static_cast<qreal>(delta));
+    qreal delta = static_cast<qreal>(event->angleDelta().y());
+    if (m_invertZoom) {
+        delta = -delta;
+    }
+    const qreal factor = std::pow(1.0015, delta);
     setZoom(qBound<qreal>(0.02, m_zoom * factor, 32.0));
     event->accept();
 }
@@ -220,7 +375,8 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
 {
     setFocus(Qt::MouseFocusReason);
     if (event->button() == Qt::MiddleButton
-        || (event->button() == Qt::LeftButton && m_spacePressed)) {
+        || (event->button() == Qt::LeftButton
+            && m_spacePressed && m_navigationMode == QStringLiteral("middleSpace"))) {
         m_panning = true;
         m_lastMousePosition = event->position().toPoint();
         updateCursorShape();
@@ -265,7 +421,9 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
         }
         if (m_tool == EditorTool::Select && hitObjectId.isEmpty()) {
             m_marqueeSelecting = true;
+            m_marqueeMoved = false;
             m_moveStartDocument = documentPoint;
+            m_marqueeStartWidget = event->position();
             m_marqueeRect = QRectF(documentPoint, documentPoint);
             grabMouse();
             event->accept();
@@ -273,11 +431,41 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
         }
     }
 
-    if (event->button() == Qt::LeftButton && m_tool != EditorTool::Select
-        && m_tool != EditorTool::Move && m_tool != EditorTool::Text) {
+    if (event->button() == Qt::LeftButton && m_tool == EditorTool::EffectMask) {
+        const QPointF documentPoint = documentPosition(event->position());
+        const QString hit = hitTestObject(documentPoint);
+        if (!m_maskEnabled || m_maskTargetId.isEmpty()
+            || (!hit.isEmpty() && hit != m_maskTargetId)) {
+            event->ignore();
+            return;
+        }
         m_cursorPosition = event->position().toPoint();
         m_hasCursorPosition = true;
         m_brushing = true;
+        m_brushTargetId = m_maskTargetId;
+        m_brushPositions.clear();
+        m_brushPositions.push_back(documentPoint);
+        grabMouse();
+        update();
+        event->accept();
+        return;
+    }
+
+    if (event->button() == Qt::LeftButton && m_tool != EditorTool::Select
+        && m_tool != EditorTool::Move && m_tool != EditorTool::Text
+        && m_tool != EditorTool::EffectMask) {
+        m_cursorPosition = event->position().toPoint();
+        m_hasCursorPosition = true;
+        m_brushing = true;
+        m_brushTargetId = hitTestObject(documentPosition(event->position()));
+        if (m_brushTargetId.isEmpty()) {
+            m_brushTargetId = m_activeObjectId;
+        }
+        if (m_brushTargetId.isEmpty()) {
+            m_brushing = false;
+            event->ignore();
+            return;
+        }
         m_brushPositions.clear();
         m_brushPositions.push_back(documentPosition(event->position()));
         grabMouse();
@@ -296,11 +484,13 @@ void EditorCanvas::mouseMoveEvent(QMouseEvent* event)
         const QPoint current = event->position().toPoint();
         m_panOffset += QPointF(current - m_lastMousePosition);
         m_lastMousePosition = current;
+        updateTextEditorGeometry();
         update();
         event->accept();
         return;
     }
     if (m_marqueeSelecting) {
+        m_marqueeMoved = (event->position() - m_marqueeStartWidget).manhattanLength() >= 4;
         m_marqueeRect = QRectF(m_moveStartDocument, documentPosition(event->position())).normalized();
         update();
         event->accept();
@@ -318,6 +508,7 @@ void EditorCanvas::mouseMoveEvent(QMouseEvent* event)
             }
         }
         m_sceneGeometry.recomputeBounds();
+        updateTextEditorGeometry();
         update();
         event->accept();
         return;
@@ -326,7 +517,9 @@ void EditorCanvas::mouseMoveEvent(QMouseEvent* event)
         const QPointF position = documentPosition(event->position());
         if (m_brushPositions.isEmpty() || m_brushPositions.last() != position) {
             m_brushPositions.push_back(position);
-            updateBrushPreview();
+            if (m_tool != EditorTool::EffectMask) {
+                updateBrushPreview();
+            }
         }
         update();
         event->accept();
@@ -346,8 +539,12 @@ void EditorCanvas::mouseReleaseEvent(QMouseEvent* event)
     if (m_marqueeSelecting && event->button() == Qt::LeftButton) {
         m_marqueeSelecting = false;
         releaseMouse();
-        emit marqueeSelectionRequested(m_marqueeRect.normalized(),
-                                       QApplication::keyboardModifiers().testFlag(Qt::ShiftModifier));
+        if (m_marqueeMoved) {
+            emit marqueeSelectionRequested(m_marqueeRect.normalized(),
+                                           QApplication::keyboardModifiers().testFlag(Qt::ShiftModifier));
+        } else {
+            emit objectClicked({}, false);
+        }
         m_marqueeRect = QRectF();
         update();
         event->accept();
@@ -358,21 +555,30 @@ void EditorCanvas::mouseReleaseEvent(QMouseEvent* event)
         m_movingObjects = false;
         releaseMouse();
         m_sceneGeometry = m_sceneBeforeMove;
-        emit moveCommitted(m_moveObjectIds, delta);
+        if (!delta.isNull()) {
+            emit moveCommitted(m_moveObjectIds, delta);
+        }
         m_moveObjectIds.clear();
         update();
         event->accept();
         return;
     }
     if (m_brushing && event->button() == Qt::LeftButton) {
+        const QString targetId = m_brushTargetId;
         const DeformationStroke stroke = currentStroke();
+        const EffectMaskStroke maskStroke = currentMaskStroke();
         m_brushing = false;
         releaseMouse();
         m_brushPositions.clear();
         emit deformationPreviewCleared();
-        if (!stroke.samples.isEmpty()) {
-            emit deformationStrokeReady(stroke);
+        if (m_tool == EditorTool::EffectMask) {
+            if (!maskStroke.points.isEmpty()) {
+                emit effectMaskStrokeReady(targetId, maskStroke);
+            }
+        } else if (!stroke.samples.isEmpty()) {
+            emit deformationStrokeReady(targetId, stroke);
         }
+        m_brushTargetId.clear();
         updateCursorShape();
         update();
         event->accept();
@@ -447,6 +653,7 @@ void EditorCanvas::resizeEvent(QResizeEvent* event)
     if (!m_hasInitialFit) {
         fitContent();
     }
+    updateTextEditorGeometry();
 }
 
 void EditorCanvas::enterEvent(QEnterEvent* event)
@@ -462,6 +669,18 @@ void EditorCanvas::leaveEvent(QEvent* event)
     QWidget::leaveEvent(event);
 }
 
+bool EditorCanvas::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_textEditor && event->type() == QEvent::KeyPress) {
+        auto* keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_Escape && !keyEvent->isAutoRepeat()) {
+            finishTextEditing();
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
 void EditorCanvas::setZoom(qreal value)
 {
     const qreal bounded = qBound<qreal>(0.02, value, 32.0);
@@ -470,15 +689,16 @@ void EditorCanvas::setZoom(qreal value)
     }
     m_zoom = bounded;
     emit zoomChanged(m_zoom);
+    updateTextEditorGeometry();
     update();
 }
 
 QTransform EditorCanvas::viewTransform() const
 {
-    const QRectF bounds = m_sceneGeometry.bounds.isEmpty()
-        ? (m_geometry.bounds.isEmpty() ? m_geometry.referenceBounds : m_geometry.bounds)
-        : m_sceneGeometry.bounds;
-    const QPointF center = m_hasViewCenter ? m_viewCenter : bounds.center();
+    const QRectF pageBounds(QPointF(0.0, 0.0), m_sceneGeometry.pageSize.isEmpty()
+                                                   ? QSizeF(1200.0, 800.0)
+                                                   : m_sceneGeometry.pageSize);
+    const QPointF center = m_hasViewCenter ? m_viewCenter : pageBounds.center();
     QTransform transform;
     Q_UNUSED(transform.translate(width() * 0.5 + m_panOffset.x(), height() * 0.5 + m_panOffset.y()));
     Q_UNUSED(transform.scale(m_zoom, m_zoom));
@@ -506,11 +726,22 @@ DeformationStroke EditorCanvas::currentStroke() const
     return stroke;
 }
 
+EffectMaskStroke EditorCanvas::currentMaskStroke() const
+{
+    EffectMaskStroke stroke;
+    stroke.points = m_brushPositions;
+    stroke.radius = m_brushRadius;
+    stroke.opacity = qBound<qreal>(0.0, m_brushStrength / 4.0, 1.0);
+    stroke.hardness = m_brushHardness;
+    stroke.restore = m_maskRestore;
+    return stroke;
+}
+
 void EditorCanvas::updateBrushPreview()
 {
     const DeformationStroke stroke = currentStroke();
     if (!stroke.samples.isEmpty()) {
-        emit deformationPreviewChanged(stroke);
+        emit deformationPreviewChanged(m_brushTargetId, stroke);
     }
 }
 
@@ -522,6 +753,7 @@ void EditorCanvas::cancelBrushStroke()
     m_brushing = false;
     releaseMouse();
     m_brushPositions.clear();
+    m_brushTargetId.clear();
     emit deformationPreviewCleared();
     updateCursorShape();
     update();
@@ -544,6 +776,29 @@ void EditorCanvas::updateCursorShape()
     }
 }
 
+void EditorCanvas::updateTextEditorGeometry()
+{
+    if (!m_textEditor || m_editingObjectId.isEmpty()) {
+        return;
+    }
+    QRectF documentBounds = m_editingDocumentBounds;
+    if (const SceneObjectGeometry* object = m_sceneGeometry.objectById(m_editingObjectId)) {
+        if (!object->visualBounds.isEmpty()) {
+            documentBounds = object->visualBounds;
+        }
+    }
+    if (documentBounds.isEmpty()) {
+        documentBounds = QRectF(QPointF(0.0, 0.0), QSizeF(360.0, 120.0));
+    }
+    QRectF screenBounds = viewTransform().mapRect(documentBounds).adjusted(-6.0, -6.0, 12.0, 12.0);
+    screenBounds = screenBounds.intersected(rect().adjusted(4, 4, -4, -24));
+    if (screenBounds.width() < 100.0 || screenBounds.height() < 40.0) {
+        screenBounds.setWidth(qMax<qreal>(100.0, screenBounds.width()));
+        screenBounds.setHeight(qMax<qreal>(40.0, screenBounds.height()));
+    }
+    m_textEditor->setGeometry(screenBounds.toRect());
+}
+
 QString EditorCanvas::hitTestObject(const QPointF& documentPoint) const
 {
     for (int index = m_sceneGeometry.objects.size() - 1; index >= 0; --index) {
@@ -557,11 +812,6 @@ QString EditorCanvas::hitTestObject(const QPointF& documentPoint) const
         }
     }
     return {};
-}
-
-QRectF EditorCanvas::selectionRectInDocument() const
-{
-    return m_marqueeRect.normalized();
 }
 
 } // namespace vt

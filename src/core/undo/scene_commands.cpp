@@ -285,6 +285,42 @@ void SetLayerStateCommand::redo()
     apply(m_newValue);
 }
 
+ReorderLayerCommand::ReorderLayerCommand(Document& document,
+                                         QString pageId,
+                                         int from,
+                                         int to,
+                                         DocumentChangeCallback onChanged,
+                                         QString description)
+    : DocumentCommand(document, std::move(onChanged), description)
+    , m_pageId(std::move(pageId))
+    , m_from(from)
+    , m_to(to)
+{
+}
+
+void ReorderLayerCommand::apply(int from, int to)
+{
+    Page* page = m_document.pageById(m_pageId);
+    if (!page || from < 0 || from >= static_cast<int>(page->layers.size())
+        || to < 0 || to >= static_cast<int>(page->layers.size()) || from == to) {
+        return;
+    }
+    auto layer = std::move(page->layers[static_cast<size_t>(from)]);
+    page->layers.erase(page->layers.begin() + from);
+    page->layers.insert(page->layers.begin() + to, std::move(layer));
+    notifyChanged();
+}
+
+void ReorderLayerCommand::undo()
+{
+    apply(m_to, m_from);
+}
+
+void ReorderLayerCommand::redo()
+{
+    apply(m_from, m_to);
+}
+
 AddPageCommand::AddPageCommand(Document& document,
                                Page page,
                                int index,
@@ -380,6 +416,48 @@ void SetCurrentPageCommand::undo()
 void SetCurrentPageCommand::redo()
 {
     apply(m_newPageId, m_newLayerId);
+}
+
+SetPageStateCommand::SetPageStateCommand(Document& document,
+                                         QString pageId,
+                                         Property property,
+                                         QVariant oldValue,
+                                         QVariant newValue,
+                                         DocumentChangeCallback onChanged,
+                                         QString description)
+    : DocumentCommand(document, std::move(onChanged), description)
+    , m_pageId(std::move(pageId))
+    , m_property(property)
+    , m_oldValue(std::move(oldValue))
+    , m_newValue(std::move(newValue))
+{
+}
+
+void SetPageStateCommand::apply(const QVariant& value)
+{
+    Page* page = m_document.pageById(m_pageId);
+    if (!page) {
+        return;
+    }
+    switch (m_property) {
+    case Property::Name:
+        page->name = value.toString();
+        break;
+    case Property::Size:
+        page->size = value.toSizeF();
+        break;
+    }
+    notifyChanged();
+}
+
+void SetPageStateCommand::undo()
+{
+    apply(m_oldValue);
+}
+
+void SetPageStateCommand::redo()
+{
+    apply(m_newValue);
 }
 
 } // namespace vt

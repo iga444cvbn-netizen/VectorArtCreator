@@ -30,7 +30,7 @@ struct ObjectTransform {
 
 struct TextObject {
     QString id;
-    QString sourceText = QStringLiteral("Vector typography");
+    QString sourceText;
     FontDescriptor font;
     TypographyProperties typography;
     QColor fill = QColor(24, 24, 28);
@@ -124,7 +124,7 @@ public:
     [[nodiscard]] QVector<TextObject*> objectsOnCurrentPage();
     [[nodiscard]] QVector<const TextObject*> objectsOnCurrentPage() const;
     [[nodiscard]] bool hasObjects() const;
-    void ensureDefaultScene(bool withTextObject = true);
+    void ensureDefaultScene(bool withTextObject = false);
     void touchModified();
 };
 
