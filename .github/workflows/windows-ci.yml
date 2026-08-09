@@ -72,6 +72,12 @@ jobs:
           $env:QT_QPA_PLATFORM_PLUGIN_PATH = $qtPlatforms
           Write-Host "Running tests with Qt runtime PATH: $env:Path"
           Write-Host "Running tests with Qt platform plugin path: $env:QT_QPA_PLATFORM_PLUGIN_PATH"
+          $testExecutable = Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_tests.exe'
+          Write-Host "Running the test executable directly for process-level diagnostics: $testExecutable"
+          & $testExecutable
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
           ctest --test-dir build --output-on-failure -VV
 
       - name: Package runnable Windows build
