@@ -70,13 +70,26 @@ jobs:
           $env:Path = "$qtBin;$env:Path"
           $env:QT_QPA_PLATFORM = 'offscreen'
           $env:QT_QPA_PLATFORM_PLUGIN_PATH = $qtPlatforms
+          $env:QT_DEBUG_PLUGINS = '1'
           Write-Host "Running tests with Qt runtime PATH: $env:Path"
           Write-Host "Running tests with Qt platform plugin path: $env:QT_QPA_PLATFORM_PLUGIN_PATH"
           $testExecutable = Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_tests.exe'
+          $testStdout = Join-Path $env:RUNNER_TEMP 'vector_typography_tests.stdout.txt'
+          $testStderr = Join-Path $env:RUNNER_TEMP 'vector_typography_tests.stderr.txt'
           Write-Host "Running the test executable directly for process-level diagnostics: $testExecutable"
-          & $testExecutable
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
+          $testProcess = Start-Process -FilePath $testExecutable -Wait -PassThru -NoNewWindow `
+            -RedirectStandardOutput $testStdout -RedirectStandardError $testStderr
+          Write-Host "Test executable exit code: $($testProcess.ExitCode)"
+          if (Test-Path -LiteralPath $testStdout) {
+            Write-Host '--- vector_typography_tests stdout ---'
+            Get-Content -LiteralPath $testStdout
+          }
+          if (Test-Path -LiteralPath $testStderr) {
+            Write-Host '--- vector_typography_tests stderr ---'
+            Get-Content -LiteralPath $testStderr
+          }
+          if ($testProcess.ExitCode -ne 0) {
+            exit $testProcess.ExitCode
           }
           ctest --test-dir build --output-on-failure -VV
 
