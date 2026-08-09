@@ -17,6 +17,7 @@
 #include "ui/shortcut_manager.h"
 
 #include <QAction>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFont>
@@ -1277,6 +1278,13 @@ void CoreTests::controllerPageAndLayerCommandsAreUndoable()
 
 void CoreTests::shortcutManagerDetectsConflictsAndPersists()
 {
+    QTemporaryDir settingsDirectory;
+    QVERIFY(settingsDirectory.isValid());
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
+    QCoreApplication::setOrganizationName(QStringLiteral("VectorTypographyTests"));
+    QCoreApplication::setApplicationName(QStringLiteral("ShortcutManager"));
+
     const QString suffix = QUuid::createUuid().toString(QUuid::WithoutBraces);
     const QString firstId = QStringLiteral("test.open.%1").arg(suffix);
     const QString secondId = QStringLiteral("test.close.%1").arg(suffix);
@@ -1303,10 +1311,6 @@ void CoreTests::shortcutManagerDetectsConflictsAndPersists()
     restored.resetToDefaults();
     QCOMPARE(restored.shortcut(secondId), secondDefault);
 
-    QSettings settings;
-    settings.remove(QStringLiteral("shortcuts/%1").arg(firstId));
-    settings.remove(QStringLiteral("shortcuts/%1").arg(secondId));
-    settings.sync();
 }
 
 void CoreTests::asyncEvaluationPublishesLatestGeneration()
