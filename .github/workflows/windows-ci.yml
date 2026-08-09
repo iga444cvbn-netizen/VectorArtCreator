@@ -83,6 +83,13 @@ jobs:
             if (Test-Path -LiteralPath $fullReplayLog) {
               Get-Content -LiteralPath $fullReplayLog
             }
+            $uiTestExecutable = Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_ui_tests.exe'
+            $uiReplayLog = Join-Path $env:RUNNER_TEMP 'vector-typography-ui-replay.txt'
+            & $uiTestExecutable -vs -o "$uiReplayLog,txt"
+            Write-Host "UI Qt Test replay exit code: $LASTEXITCODE"
+            if (Test-Path -LiteralPath $uiReplayLog) {
+              Get-Content -LiteralPath $uiReplayLog
+            }
             $diagnosticCases = @(
               'documentHierarchyHasStableIds',
               'legacyFlatProjectMigratesToPageAndLayer',
