@@ -99,10 +99,13 @@ The shaper first performs normal Qt shaping, then offsets successive shaped glyp
 positions by `trackingEm * resolvedEmSize` and adjusts logical width. The resolved
 em size comes from the selected `QRawFont::pixelSize()` (or the first actual glyph
 run raw font when necessary), so it is in the same logical coordinate system as
-the shaped positions rather than assuming a point size is one layout unit. This
-avoids treating Qt's advance-relative percentage spacing as an em unit and makes
-tracking scale with the resolved font metrics. Projects serialize `trackingEm`
-plus `trackingUnit: "em"`.
+the shaped positions rather than assuming a point size is one layout unit. If a
+Windows offscreen backend reports zero for that raw-font pixel size, the same
+physical raw font is normalized to one pixel and its ascent is compared with
+Qt's resolved `QFontMetricsF` ascent. This keeps the fallback backend-derived
+and font-relative. The implementation avoids treating Qt's advance-relative
+percentage spacing as an em unit and makes tracking scale with the resolved
+font metrics. Projects serialize `trackingEm` plus `trackingUnit: "em"`.
 Version 1 absolute `tracking` values are migrated by dividing by the stored font
 size.
 

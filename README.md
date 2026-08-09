@@ -71,7 +71,9 @@ dispatches. After tests pass, `windeployqt` creates and uploads
 
 Tracking is stored as `trackingEm`. The shaper converts it using the resolved
 `QRawFont::pixelSize()` em metric in the same logical coordinates as the shaped
-glyph positions; the project does not assume that a point size is one layout unit.
+glyph positions; on Windows offscreen Qt builds that report zero there, it
+normalizes the same physical raw font and derives the scale from Qt's resolved
+font metrics. The project does not assume that a point size is one layout unit.
 Shape deformation preserves open versus closed QPainterPath subpaths during
 sampling and reconstruction.
 
