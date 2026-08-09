@@ -1,0 +1,94 @@
+name: Windows Qt CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Enable MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+          setup-python: false
+
+      - name: Add Qt runtime to PATH
+        shell: pwsh
+        run: |
+          $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
+          $qtCore = Join-Path $qtBin 'Qt6Core.dll'
+          if (-not (Test-Path -LiteralPath $qtCore)) {
+            throw "Qt runtime was not found at $qtCore"
+          }
+          $qtBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          'QT_QPA_PLATFORM=offscreen' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Qt runtime added to PATH: $qtBin"
+
+      - name: Configure
+        shell: pwsh
+        run: >-
+          cmake -S . -B build
+          -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR/lib/cmake"
+
+      - name: Build Release
+        shell: pwsh
+        run: cmake --build build --parallel
+
+      - name: Run CTest
+        shell: pwsh
+        run: |
+          $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
+          $qtPlatforms = Join-Path $env:QT_ROOT_DIR 'plugins\platforms'
+          if (-not (Test-Path -LiteralPath (Join-Path $qtPlatforms 'qoffscreen.dll'))) {
+            throw "Qt offscreen platform plugin was not found at $qtPlatforms"
+          }
+          $env:Path = "$qtBin;$env:Path"
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $env:QT_QPA_PLATFORM_PLUGIN_PATH = $qtPlatforms
+          Write-Host "Running tests with Qt runtime PATH: $env:Path"
+          Write-Host "Running tests with Qt platform plugin path: $env:QT_QPA_PLATFORM_PLUGIN_PATH"
+          ctest --test-dir build --output-on-failure -VV
+
+      - name: Package runnable Windows build
+        shell: pwsh
+        run: |
+          $deployDirectory = Join-Path $env:GITHUB_WORKSPACE 'deploy'
+          $executable = Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_editor.exe'
+          New-Item -ItemType Directory -Force -Path $deployDirectory | Out-Null
+          $windeployqt = Join-Path $env:QT_ROOT_DIR 'bin\windeployqt.exe'
+          & $windeployqt --release --no-translations --dir $deployDirectory $executable
+          Copy-Item -LiteralPath $executable -Destination $deployDirectory -Force
+          $archive = Join-Path $env:GITHUB_WORKSPACE 'VectorTypographyEditor-windows-x64.zip'
+          Compress-Archive -Path (Join-Path $deployDirectory '*') -DestinationPath $archive -Force
+
+      - name: Upload runnable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VectorTypographyEditor-windows-x64
+          path: VectorTypographyEditor-windows-x64.zip
+          if-no-files-found: error

@@ -26,10 +26,14 @@ struct FontDescriptor {
 
 struct TypographyProperties {
     qreal fontSize = 72.0;
-    qreal tracking = 0.0;
+    // Additional letter spacing expressed as an em-relative value. For example,
+    // 0.05 means five percent of the current font size.
+    qreal trackingEm = 0.0;
 
     [[nodiscard]] QJsonObject toJson(const QColor& fill) const;
-    [[nodiscard]] static TypographyProperties fromJson(const QJsonObject& object, QColor* fill);
+    [[nodiscard]] static TypographyProperties fromJson(const QJsonObject& object,
+                                                        QColor* fill,
+                                                        int formatVersion = 2);
 };
 
 } // namespace vt

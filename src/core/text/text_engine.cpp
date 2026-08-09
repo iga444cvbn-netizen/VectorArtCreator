@@ -4,12 +4,60 @@
 
 #include <QFontDatabase>
 #include <QList>
+#include <QStringList>
 #include <QTextLayout>
 #include <QTextOption>
 
 #include <limits>
 
 namespace vt {
+
+namespace {
+
+bool samePhysicalFont(const QRawFont& left, const QRawFont& right)
+{
+    if (!left.isValid() || !right.isValid()) {
+        return false;
+    }
+    // QRawFont equality identifies the physical font instance without asking
+    // the Windows font backend to materialize its name table. That name-table
+    // accessor is not reliable for every DirectWrite glyph run on Qt 6.8.
+    return left == right;
+}
+
+void recordFallbackFont(ShapedText* result, const QRawFont& rawFont, int glyphCount)
+{
+    if (!result || glyphCount <= 0) {
+        return;
+    }
+    result->fallbackGlyphCount += glyphCount;
+    for (FallbackFontUsage& usage : result->fallbackFonts) {
+        if (usage.rawFont == rawFont) {
+            usage.glyphCount += glyphCount;
+            return;
+        }
+    }
+    // Keep the actual physical font on the diagnostic record. The UI can
+    // resolve/display its name in a context where the platform backend allows
+    // that query; shaping itself must remain safe on Windows CI.
+    result->fallbackFonts.push_back({rawFont, QStringLiteral("Qt fallback font"), {}, glyphCount});
+}
+
+QString fallbackWarning(const ShapedText& result)
+{
+    QStringList fonts;
+    for (const FallbackFontUsage& usage : result.fallbackFonts) {
+        const QString face = usage.styleName.isEmpty()
+            ? usage.family
+            : QStringLiteral("%1 %2").arg(usage.family, usage.styleName);
+        fonts.push_back(QStringLiteral("%1 (%2)").arg(face).arg(usage.glyphCount));
+    }
+    return QStringLiteral("Selected font does not contain all required glyphs. %1 glyphs use fallback font(s): %2.")
+        .arg(result.fallbackGlyphCount)
+        .arg(fonts.join(QStringLiteral(", ")));
+}
+
+} // namespace
 
 QString TextEngine::cacheKey(const TextObject& object) const
 {
@@ -24,7 +72,7 @@ QString TextEngine::cacheKey(const TextObject& object) const
         + QChar(0x1f)
         + QString::number(object.typography.fontSize, 'g', 16)
         + QChar(0x1f)
-        + QString::number(object.typography.tracking, 'g', 16);
+        + QString::number(object.typography.trackingEm, 'g', 16);
 }
 
 ShapedText TextEngine::shape(const TextObject& object)
@@ -44,16 +92,19 @@ ShapedText TextEngine::shape(const TextObject& object)
     result.requestedFontAvailable = familyAvailable && styleAvailable;
 
     if (!familyAvailable) {
+        result.fontResolutionStatus = FontResolutionStatus::MissingFamily;
         result.warning = QStringLiteral("The requested system font '%1' is unavailable; Qt fallback is used for preview.")
                               .arg(object.font.family);
     } else if (!styleAvailable) {
+        result.fontResolutionStatus = FontResolutionStatus::MissingStyle;
         result.warning = QStringLiteral("The requested style '%1' is unavailable in '%2'; Qt fallback is used for preview.")
                               .arg(object.font.styleName, object.font.family);
     }
 
     const QFont font = object.font.toQFont(object.typography.fontSize);
+    const QRawFont requestedRawFont = QRawFont::fromFont(font);
     QFont shapedFont = font;
-    shapedFont.setLetterSpacing(QFont::AbsoluteSpacing, object.typography.tracking);
+    shapedFont.setLetterSpacing(QFont::PercentageSpacing, 100.0 + object.typography.trackingEm * 100.0);
 
     QTextLayout layout(object.sourceText, shapedFont);
     QTextOption option;
@@ -77,14 +128,28 @@ ShapedText TextEngine::shape(const TextObject& object)
         if (!rawFont.isValid()) {
             continue;
         }
+        const bool canDetectGlyphFallback = requestedRawFont.isValid();
+        const bool usesFallback = result.fontResolutionStatus == FontResolutionStatus::RequestedFont
+            && canDetectGlyphFallback
+            && !samePhysicalFont(rawFont, requestedRawFont);
+        if (usesFallback) {
+            recordFallbackFont(&result, rawFont, glyphIndexes.size());
+        }
         for (int i = 0; i < glyphIndexes.size(); ++i) {
             ShapedGlyph glyph;
             glyph.glyphIndex = glyphIndexes[i];
             glyph.rawFont = rawFont;
             glyph.position = positions.value(i, QPointF());
             glyph.ordinal = ordinal++;
+            glyph.usesFallback = usesFallback;
             result.glyphs.push_back(glyph);
         }
+    }
+
+    if (result.fontResolutionStatus == FontResolutionStatus::RequestedFont
+        && result.fallbackGlyphCount > 0) {
+        result.fontResolutionStatus = FontResolutionStatus::GlyphFallback;
+        result.warning = fallbackWarning(result);
     }
 
     if (!object.sourceText.isEmpty() && result.glyphs.isEmpty()) {

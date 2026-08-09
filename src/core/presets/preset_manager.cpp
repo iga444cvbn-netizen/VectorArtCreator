@@ -5,6 +5,7 @@
 #include <QJsonParseError>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QUuid>
 
 #include <utility>
 
@@ -34,8 +35,22 @@ bool PresetManager::ensureDirectory(QString* error) const
     return true;
 }
 
-QString PresetManager::filePathForName(const QString& name) const
+bool PresetManager::isStorageId(const QString& id)
 {
+    static const QRegularExpression uuidPattern(
+        QStringLiteral("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"));
+    return uuidPattern.match(id).hasMatch();
+}
+
+QString PresetManager::filePathForId(const QString& id) const
+{
+    return QDir(m_directoryPath).filePath(id + QStringLiteral(".json"));
+}
+
+QString PresetManager::legacyFilePathForName(const QString& name) const
+{
+    // This mapping is retained only so v1 ASCII preset files remain readable.
+    // New files never use display names as storage paths.
     QString safeName = name.trimmed();
     safeName.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9 _.-]")), QStringLiteral("_"));
     safeName.replace(QStringLiteral(".."), QStringLiteral("_"));
@@ -45,47 +60,94 @@ QString PresetManager::filePathForName(const QString& name) const
     return QDir(m_directoryPath).filePath(safeName + QStringLiteral(".json"));
 }
 
-QStringList PresetManager::listPresetNames(QString* error) const
+bool PresetManager::readPresetFile(const QString& filePath, Preset* preset, QString* error) const
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        if (error) {
+            *error = QStringLiteral("Cannot read preset '%1': %2")
+                         .arg(QFileInfo(filePath).fileName(), file.errorString());
+        }
+        return false;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument json = QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError) {
+        if (error) {
+            *error = QStringLiteral("Preset '%1' is invalid: %2")
+                         .arg(QFileInfo(filePath).fileName(), parseError.errorString());
+        }
+        return false;
+    }
+
+    QString parseMessage;
+    if (!Preset::fromJson(json, preset, &parseMessage)) {
+        if (error) {
+            *error = QStringLiteral("Preset '%1' is invalid: %2")
+                         .arg(QFileInfo(filePath).fileName(), parseMessage);
+        }
+        return false;
+    }
+    return true;
+}
+
+QVector<PresetManager::PresetRecord> PresetManager::readPresetRecords(QString* error) const
 {
     if (!ensureDirectory(error)) {
         return {};
     }
 
-    QStringList names;
+    QVector<PresetRecord> records;
     const QDir directory(m_directoryPath);
     const QStringList files = directory.entryList({QStringLiteral("*.json")}, QDir::Files, QDir::Name);
     for (const QString& fileName : files) {
-        QFile file(directory.filePath(fileName));
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            if (error) {
-                *error = QStringLiteral("Cannot read preset '%1': %2").arg(fileName, file.errorString());
-            }
-            return {};
-        }
-        QJsonParseError parseError;
-        const QJsonDocument json = QJsonDocument::fromJson(file.readAll(), &parseError);
-        if (parseError.error != QJsonParseError::NoError) {
-            if (error) {
-                *error = QStringLiteral("Preset '%1' is invalid: %2").arg(fileName, parseError.errorString());
-            }
-            return {};
-        }
+        const QString filePath = directory.filePath(fileName);
         Preset preset;
-        QString parseMessage;
-        if (!Preset::fromJson(json, &preset, &parseMessage)) {
-            if (error) {
-                *error = QStringLiteral("Preset '%1' is invalid: %2").arg(fileName, parseMessage);
-            }
+        if (!readPresetFile(filePath, &preset, error)) {
             return {};
         }
+
+        PresetInfo info;
+        info.id = isStorageId(preset.id) ? preset.id : QString();
+        info.name = preset.name;
+        records.push_back({info, filePath});
+    }
+    return records;
+}
+
+QVector<PresetInfo> PresetManager::listPresets(QString* error) const
+{
+    QVector<PresetInfo> result;
+    const QVector<PresetRecord> records = readPresetRecords(error);
+    if (error && !error->isEmpty()) {
+        return {};
+    }
+    result.reserve(records.size());
+    for (const PresetRecord& record : records) {
+        result.push_back(record.info);
+    }
+    return result;
+}
+
+QStringList PresetManager::listPresetNames(QString* error) const
+{
+    QStringList names;
+    const QVector<PresetInfo> presets = listPresets(error);
+    if (error && !error->isEmpty()) {
+        return {};
+    }
+    names.reserve(presets.size());
+    for (const PresetInfo& preset : presets) {
         names.push_back(preset.name);
     }
     return names;
 }
 
-bool PresetManager::savePreset(const Preset& preset, QString* error) const
+bool PresetManager::savePreset(Preset preset, QString* error) const
 {
-    if (preset.name.trimmed().isEmpty()) {
+    preset.name = preset.name.trimmed();
+    if (preset.name.isEmpty()) {
         if (error) {
             *error = QStringLiteral("Preset name cannot be empty.");
         }
@@ -95,7 +157,11 @@ bool PresetManager::savePreset(const Preset& preset, QString* error) const
         return false;
     }
 
-    QSaveFile file(filePathForName(preset.name));
+    if (!isStorageId(preset.id)) {
+        preset.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    }
+
+    QSaveFile file(filePathForId(preset.id));
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         if (error) {
             *error = QStringLiteral("Cannot open preset for writing: %1").arg(file.errorString());
@@ -112,42 +178,99 @@ bool PresetManager::savePreset(const Preset& preset, QString* error) const
     return true;
 }
 
-bool PresetManager::loadPreset(const QString& name, Preset* preset, QString* error) const
+bool PresetManager::loadPresetById(const QString& id, Preset* preset, QString* error) const
 {
-    QFile file(filePathForName(name));
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    if (!preset || !isStorageId(id)) {
         if (error) {
-            *error = QStringLiteral("Cannot open preset '%1': %2").arg(name, file.errorString());
+            *error = QStringLiteral("Preset storage ID is invalid.");
         }
         return false;
     }
-    QJsonParseError parseError;
-    const QJsonDocument json = QJsonDocument::fromJson(file.readAll(), &parseError);
-    if (parseError.error != QJsonParseError::NoError) {
-        if (error) {
-            *error = QStringLiteral("Preset JSON is invalid: %1").arg(parseError.errorString());
-        }
-        return false;
-    }
-    return Preset::fromJson(json, preset, error);
-}
-
-bool PresetManager::deletePreset(const QString& name, QString* error) const
-{
-    const QString filePath = filePathForName(name);
+    const QString filePath = filePathForId(id);
     if (!QFileInfo::exists(filePath)) {
         if (error) {
-            *error = QStringLiteral("Preset '%1' does not exist.").arg(name);
+            *error = QStringLiteral("Preset '%1' does not exist.").arg(id);
+        }
+        return false;
+    }
+    if (!readPresetFile(filePath, preset, error)) {
+        return false;
+    }
+    if (!preset->id.isEmpty() && preset->id.compare(id, Qt::CaseInsensitive) != 0) {
+        if (error) {
+            *error = QStringLiteral("Preset storage ID does not match its file.");
+        }
+        return false;
+    }
+    return true;
+}
+
+bool PresetManager::loadPreset(const QString& name, Preset* preset, QString* error) const
+{
+    const QVector<PresetRecord> records = readPresetRecords(error);
+    if (error && !error->isEmpty()) {
+        return false;
+    }
+    const QString requestedName = name.trimmed();
+    for (const PresetRecord& record : records) {
+        if (record.info.name != requestedName) {
+            continue;
+        }
+        return readPresetFile(record.filePath, preset, error);
+    }
+    if (error) {
+        *error = QStringLiteral("Preset '%1' does not exist.").arg(name);
+    }
+    return false;
+}
+
+bool PresetManager::deletePresetById(const QString& id, QString* error) const
+{
+    if (!isStorageId(id)) {
+        if (error) {
+            *error = QStringLiteral("Preset storage ID is invalid.");
+        }
+        return false;
+    }
+    const QString filePath = filePathForId(id);
+    if (!QFileInfo::exists(filePath)) {
+        if (error) {
+            *error = QStringLiteral("Preset '%1' does not exist.").arg(id);
         }
         return false;
     }
     if (!QFile::remove(filePath)) {
         if (error) {
-            *error = QStringLiteral("Could not delete preset '%1'.").arg(name);
+            *error = QStringLiteral("Could not delete preset '%1'.").arg(id);
         }
         return false;
     }
     return true;
+}
+
+bool PresetManager::deletePreset(const QString& name, QString* error) const
+{
+    const QVector<PresetRecord> records = readPresetRecords(error);
+    if (error && !error->isEmpty()) {
+        return false;
+    }
+    const QString requestedName = name.trimmed();
+    for (const PresetRecord& record : records) {
+        if (record.info.name != requestedName) {
+            continue;
+        }
+        if (!QFile::remove(record.filePath)) {
+            if (error) {
+                *error = QStringLiteral("Could not delete preset '%1'.").arg(name);
+            }
+            return false;
+        }
+        return true;
+    }
+    if (error) {
+        *error = QStringLiteral("Preset '%1' does not exist.").arg(name);
+    }
+    return false;
 }
 
 } // namespace vt

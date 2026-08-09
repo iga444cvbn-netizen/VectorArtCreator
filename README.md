@@ -3,8 +3,8 @@
 Vector Typography Editor is a focused C++20/Qt 6 desktop foundation for editable
 typography with nondestructive procedural effects. The current slice supports one
 primary text object, installed system fonts, Latin/Cyrillic shaping, vector glyph
-outlines, Wave/Glyph Jitter/Global Stretch effects, JSON projects and presets, undo/
-redo, and SVG path export.
+outlines, Wave/Glyph Jitter/Global Stretch effects, JSON projects and presets,
+command-based undo/redo, and SVG path export.
 
 ## Requirements
 
@@ -15,9 +15,9 @@ redo, and SVG path export.
 * Qt 6.4 or newer with the `Core`, `Gui`, `Widgets`, and `Test` components.
 
 The project does not bundle fonts. It enumerates fonts installed in the operating
-system through Qt's `QFontDatabase`. A missing project font is reported to the UI while
-Qt's fallback is used only for a clearly marked preview; the project still preserves
-the requested family/style/weight.
+system through Qt's `QFontDatabase`. A missing family or style is reported, and the
+shaper also inspects the actual `QRawFont` in each `QGlyphRun` to report glyph-level
+fallback while retaining Qt's useful fallback preview.
 
 ## Build on Windows
 
@@ -49,31 +49,57 @@ ctest --test-dir build-ninja --output-on-failure
 If Qt is installed in another location, use that location in `CMAKE_PREFIX_PATH` or
 pass `-DQt6_DIR=<Qt-prefix>/lib/cmake/Qt6`.
 
+## Windows GitHub Actions CI
+
+`.github/workflows/windows-ci.yml` is the authoritative hosted validation workflow.
+It runs on `windows-latest`, enables the x64 MSVC developer environment, installs
+Qt 6.8.3 through `jurplel/install-qt-action@v4` (the standard desktop/base package
+contains Core, Gui, Widgets, and Test), enables x64 MSVC, and then runs:
+
+```text
+cmake configure (Ninja, Release, x64 MSVC)
+cmake --build ...
+ctest ... --output-on-failure
+```
+
+The workflow runs for pushes to `main`, pull requests targeting `main`, and manual
+dispatches. A successful run also deploys the Qt runtime with `windeployqt` and
+uploads `VectorTypographyEditor-windows-x64.zip` as a workflow artifact. Download it
+from the run's **Artifacts** section; it is a runnable test build, not an installer.
+
 ## Workflow
 
 1. Enter text in the Typography panel.
-2. Choose any installed family, style, weight, size, tracking, and fill.
+2. Choose any installed family, style, weight, size, em-relative tracking, and fill.
+   For example, `0.05 em` means five percent of the current font em size.
 3. Add effects to the ordered stack and edit their parameters. Effect values are
    normalized to the unmodified vector bounds where the effect is relative to text
    size.
 4. Save the effect stack as a named JSON preset, then apply it to another text.
 5. Save/open a `.vtproj` JSON project.
-6. Use **File → Export SVG**. The SVG contains final `<path>` geometry and does not
+6. Use **File -> Export SVG**. The SVG contains final `<path>` geometry and does not
    depend on the original font being installed.
 
 Canvas navigation: mouse wheel zooms, middle-drag pans, and **F** fits the geometry.
 Text, typography, effect edits, reordering, toggling, removal, and preset application
-are undoable. Continuous text/slider edits are coalesced by Qt undo command IDs.
+are undoable. The controller stores only the fields relevant to each command, and
+continuous text/slider edits are coalesced by Qt undo command IDs.
+
+Preset display names remain Unicode, including Cyrillic names such as `Бездна` and
+`Паника`. New preset files use generated UUID storage IDs rather than sanitized names,
+so different names cannot collide. Version 1 name-based files remain readable and are
+migrated when saved.
 
 ## Repository structure
 
 ```text
 src/core/document       document and text-object ownership
-src/core/text           system-font descriptors and Qt shaping
+src/core/text           font descriptors, shaping, and fallback diagnostics
 src/core/geometry       positioned vector path pieces
 src/core/effects        effect interface, stack, and initial effects
 src/core/serialization  versioned project JSON
-src/core/presets        versioned preset JSON and storage
+src/core/presets        versioned preset JSON and UUID storage
+src/core/undo           reusable granular QUndoCommand implementations
 src/core/export         export interface and SVG backend
 src/ui                  controller, canvas, typography/effect panels, main window
 src/platform/windows    reserved boundary for future Win32 integrations
@@ -94,20 +120,22 @@ document, renderer, and serialization classes do not need effect-specific branch
 
 ## Versioning and future work
 
-Project and preset files contain explicit format identifiers and integer versions.
-Font descriptors already reserve fingerprint, embedded resource, and embedding
-permission fields. Documents reserve resources/future object data for embedded fonts,
-masks, cached previews, brush strokes, and multiple objects. The export interface is
-ready for future EMF and clipboard backends; this milestone intentionally implements
-SVG only.
+Project files are currently format version 2; they migrate version 1 absolute tracking
+values to the em-relative `trackingEm` field. Presets are currently format version 2;
+they carry a stable UUID `id` separately from the Unicode `name`. Font descriptors
+reserve fingerprint, embedded resource, and embedding permission fields for future
+font identity/resource work without implementing embedding now. Documents reserve
+resources/future object data for embedded fonts, masks, cached previews, brush strokes,
+and multiple objects. The export interface is ready for future EMF and clipboard
+backends; this milestone intentionally implements SVG only.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership, geometry, effect stages,
-normalization, cache invalidation, and the platform boundary.
+normalization, cache invalidation, undo/clean-state semantics, and the platform
+boundary.
 
 ## Current limitations
 
 This milestone intentionally does not include font embedding, EMF/Word clipboard,
 brush deformation, Zalgo, masks, raster/image tools, multi-page documents, or general
-vector drawing tools. The local environment used to prepare this repository did not
-contain a Qt SDK or C++ build toolchain, so the code should be built and tested on a
-Windows machine with the documented dependencies before the next milestone.
+vector drawing tools. Those remain Phase 2 work. Fonts and the Qt SDK are supplied by
+the developer or by the Windows CI workflow; they are not committed to this repository.

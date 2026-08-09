@@ -4,13 +4,13 @@
 #include "core/export/svg_exporter.h"
 #include "core/presets/preset_manager.h"
 #include "core/text/text_engine.h"
+#include "core/undo/document_commands.h"
 
 #include <QColor>
 #include <QObject>
 #include <QStringList>
 #include <QUndoStack>
 
-#include <functional>
 #include <memory>
 #include <optional>
 
@@ -63,12 +63,9 @@ signals:
     void fontsChanged(const QStringList& families);
 
 private:
-    void applySnapshot(const Document& snapshot);
+    void onCommandChanged();
     void rebuildScene();
     [[nodiscard]] QString geometryCacheKey(const TextObject& object) const;
-    void pushMutation(const QString& description,
-                      const std::function<void(Document&)>& mutation,
-                      int mergeId = 0);
     void publishError(const QString& message);
 
     Document m_document;
@@ -79,7 +76,6 @@ private:
     PresetManager m_presetManager;
     SvgExporter m_svgExporter;
     QUndoStack m_undoStack;
-    bool m_modified = false;
 };
 
 } // namespace vt

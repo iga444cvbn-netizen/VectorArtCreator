@@ -23,6 +23,7 @@ public:
     [[nodiscard]] const Effect* at(int index) const;
 
     void append(std::unique_ptr<Effect> effect);
+    void insert(int index, std::unique_ptr<Effect> effect);
     [[nodiscard]] std::unique_ptr<Effect> takeAt(int index);
     void removeAt(int index);
     void move(int from, int to);

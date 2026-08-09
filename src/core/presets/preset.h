@@ -8,9 +8,12 @@
 namespace vt {
 
 struct Preset {
-    static constexpr int CurrentFormatVersion = 1;
+    static constexpr int CurrentFormatVersion = 2;
 
     int formatVersion = CurrentFormatVersion;
+    // Stable storage identity. This is deliberately separate from the
+    // human-readable, Unicode display name.
+    QString id;
     QString name;
     EffectStack effects;
 

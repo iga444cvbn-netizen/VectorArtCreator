@@ -33,7 +33,7 @@ struct TextObject {
 
 class Document {
 public:
-    static constexpr int CurrentFormatVersion = 1;
+    static constexpr int CurrentFormatVersion = 2;
 
     int formatVersion = CurrentFormatVersion;
     QString title = QStringLiteral("Untitled Vector Typography Project");

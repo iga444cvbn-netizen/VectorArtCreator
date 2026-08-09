@@ -19,12 +19,30 @@ struct ShapedGlyph {
     QRawFont rawFont;
     QPointF position;
     int ordinal = -1;
+    bool usesFallback = false;
+};
+
+enum class FontResolutionStatus {
+    RequestedFont,
+    MissingFamily,
+    MissingStyle,
+    GlyphFallback,
+};
+
+struct FallbackFontUsage {
+    QRawFont rawFont;
+    QString family;
+    QString styleName;
+    int glyphCount = 0;
 };
 
 struct ShapedText {
     QVector<ShapedGlyph> glyphs;
     QRectF logicalBounds;
     bool requestedFontAvailable = true;
+    FontResolutionStatus fontResolutionStatus = FontResolutionStatus::RequestedFont;
+    QVector<FallbackFontUsage> fallbackFonts;
+    int fallbackGlyphCount = 0;
     QString warning;
     QString error;
 };

@@ -6,15 +6,12 @@
 #include <QFontDatabase>
 #include <QStandardPaths>
 
+#include <cmath>
 #include <utility>
 
 namespace vt {
 
 namespace {
-
-constexpr int TextMergeId = 100;
-constexpr int TypographyMergeBase = 200;
-constexpr int EffectParameterMergeBase = 1000;
 
 QString defaultPresetDirectory()
 {
@@ -22,55 +19,51 @@ QString defaultPresetDirectory()
         + QStringLiteral("/presets");
 }
 
-class SnapshotCommand final : public QUndoCommand {
-public:
-    SnapshotCommand(std::function<void(const Document&)> apply,
-                    Document before,
-                    Document after,
-                    QString description,
-                    int mergeId)
-        : QUndoCommand(std::move(description))
-        , m_apply(std::move(apply))
-        , m_before(std::move(before))
-        , m_after(std::move(after))
-        , m_mergeId(mergeId)
-    {
-    }
+bool nearlyEqual(double left, double right)
+{
+    return std::abs(left - right) < 1.0e-12;
+}
 
-    void undo() override
-    {
-        m_apply(m_before);
+bool effectStacksEqual(const EffectStack& left, const EffectStack& right)
+{
+    if (left.size() != right.size()) {
+        return false;
     }
-
-    void redo() override
-    {
-        m_apply(m_after);
-    }
-
-    [[nodiscard]] int id() const override
-    {
-        return m_mergeId;
-    }
-
-    bool mergeWith(const QUndoCommand* command) override
-    {
-        if (m_mergeId == 0) {
+    for (int index = 0; index < left.size(); ++index) {
+        const Effect* leftEffect = left.at(index);
+        const Effect* rightEffect = right.at(index);
+        if (!leftEffect || !rightEffect
+            || leftEffect->typeId() != rightEffect->typeId()
+            || leftEffect->enabled != rightEffect->enabled) {
             return false;
         }
-        const auto* other = dynamic_cast<const SnapshotCommand*>(command);
-        if (!other || other->m_mergeId != m_mergeId) {
+
+        const QVector<EffectParameter> leftParameters = leftEffect->parameterDefinitions();
+        const QVector<EffectParameter> rightParameters = rightEffect->parameterDefinitions();
+        if (leftParameters.size() != rightParameters.size()) {
             return false;
         }
-        m_after = other->m_after;
-        return true;
+        for (int parameterIndex = 0; parameterIndex < leftParameters.size(); ++parameterIndex) {
+            if (leftParameters[parameterIndex].id != rightParameters[parameterIndex].id
+                || !nearlyEqual(leftParameters[parameterIndex].value,
+                                rightParameters[parameterIndex].value)) {
+                return false;
+            }
+        }
     }
+    return true;
+}
 
-private:
-    std::function<void(const Document&)> m_apply;
-    Document m_before;
-    Document m_after;
-    int m_mergeId = 0;
-};
+std::optional<EffectParameter> findEffectParameter(const Effect& effect, const QString& id)
+{
+    const QVector<EffectParameter> parameters = effect.parameterDefinitions();
+    for (const EffectParameter& parameter : parameters) {
+        if (parameter.id == id) {
+            return parameter;
+        }
+    }
+    return std::nullopt;
+}
 
 } // namespace
 
@@ -78,6 +71,7 @@ EditorController::EditorController(QObject* parent)
     : QObject(parent)
     , m_presetManager(defaultPresetDirectory())
 {
+    m_undoStack.setClean();
     rebuildScene();
 }
 
@@ -103,7 +97,7 @@ QUndoStack* EditorController::undoStack()
 
 bool EditorController::isModified() const
 {
-    return m_modified;
+    return !m_undoStack.isClean();
 }
 
 QStringList EditorController::fontFamilies() const
@@ -143,10 +137,10 @@ void EditorController::newDocument()
 {
     m_document = Document();
     m_undoStack.clear();
+    m_undoStack.setClean();
     m_textEngine.clearCache();
     m_baseGeometry.reset();
     m_baseGeometryKey.clear();
-    m_modified = false;
     rebuildScene();
     emit documentChanged();
     emit statusMessageChanged(QStringLiteral("New project created."));
@@ -154,44 +148,82 @@ void EditorController::newDocument()
 
 void EditorController::setText(const QString& text)
 {
-    pushMutation(QStringLiteral("Change text"), [text](Document& document) {
-        document.primaryTextObject().sourceText = text;
-    }, TextMergeId);
+    const TextObject& object = m_document.primaryTextObject();
+    if (object.sourceText == text) {
+        return;
+    }
+    m_undoStack.push(new SetTextCommand(
+        m_document,
+        object.sourceText,
+        text,
+        [this] { onCommandChanged(); }));
 }
 
 void EditorController::setFontFamily(const QString& family)
 {
-    pushMutation(QStringLiteral("Change font family"), [family](Document& document) {
-        document.primaryTextObject().font.family = family;
-    }, TypographyMergeBase + 1);
+    const TextObject& object = m_document.primaryTextObject();
+    if (object.font.family == family) {
+        return;
+    }
+    m_undoStack.push(new SetFontFamilyCommand(
+        m_document,
+        object.font.family,
+        family,
+        [this] { onCommandChanged(); }));
 }
 
 void EditorController::setFontStyle(const QString& styleName)
 {
-    pushMutation(QStringLiteral("Change font style"), [styleName](Document& document) {
-        document.primaryTextObject().font.styleName = styleName;
-    }, TypographyMergeBase + 2);
+    const TextObject& object = m_document.primaryTextObject();
+    if (object.font.styleName == styleName) {
+        return;
+    }
+    m_undoStack.push(new SetFontStyleCommand(
+        m_document,
+        object.font.styleName,
+        styleName,
+        [this] { onCommandChanged(); }));
 }
 
 void EditorController::setFontWeight(int weight)
 {
-    pushMutation(QStringLiteral("Change font weight"), [weight](Document& document) {
-        document.primaryTextObject().font.weight = weight;
-    }, TypographyMergeBase + 3);
+    const TextObject& object = m_document.primaryTextObject();
+    if (object.font.weight == weight) {
+        return;
+    }
+    m_undoStack.push(new SetFontWeightCommand(
+        m_document,
+        object.font.weight,
+        weight,
+        [this] { onCommandChanged(); }));
 }
 
 void EditorController::setFontSize(qreal pointSize)
 {
-    pushMutation(QStringLiteral("Change font size"), [pointSize](Document& document) {
-        document.primaryTextObject().typography.fontSize = qBound<qreal>(1.0, pointSize, 2000.0);
-    }, TypographyMergeBase + 4);
+    const qreal boundedSize = qBound<qreal>(1.0, pointSize, 2000.0);
+    const qreal oldSize = m_document.primaryTextObject().typography.fontSize;
+    if (nearlyEqual(oldSize, boundedSize)) {
+        return;
+    }
+    m_undoStack.push(new SetFontSizeCommand(
+        m_document,
+        oldSize,
+        boundedSize,
+        [this] { onCommandChanged(); }));
 }
 
-void EditorController::setTracking(qreal tracking)
+void EditorController::setTracking(qreal trackingEm)
 {
-    pushMutation(QStringLiteral("Change tracking"), [tracking](Document& document) {
-        document.primaryTextObject().typography.tracking = qBound<qreal>(-500.0, tracking, 500.0);
-    }, TypographyMergeBase + 5);
+    const qreal boundedTracking = qBound<qreal>(-1.0, trackingEm, 1.0);
+    const qreal oldTracking = m_document.primaryTextObject().typography.trackingEm;
+    if (nearlyEqual(oldTracking, boundedTracking)) {
+        return;
+    }
+    m_undoStack.push(new SetTrackingCommand(
+        m_document,
+        oldTracking,
+        boundedTracking,
+        [this] { onCommandChanged(); }));
 }
 
 void EditorController::setFillColor(const QColor& color)
@@ -199,9 +231,15 @@ void EditorController::setFillColor(const QColor& color)
     if (!color.isValid()) {
         return;
     }
-    pushMutation(QStringLiteral("Change fill color"), [color](Document& document) {
-        document.primaryTextObject().fill = color;
-    });
+    const QColor oldColor = m_document.primaryTextObject().fill;
+    if (oldColor == color) {
+        return;
+    }
+    m_undoStack.push(new SetFillColorCommand(
+        m_document,
+        oldColor,
+        color,
+        [this] { onCommandChanged(); }));
 }
 
 void EditorController::addEffect(const QString& typeId)
@@ -211,45 +249,83 @@ void EditorController::addEffect(const QString& typeId)
         publishError(QStringLiteral("Cannot add unknown effect '%1'.").arg(typeId));
         return;
     }
-    pushMutation(QStringLiteral("Add %1 effect").arg(effect->displayName()),
-                 [typeId](Document& document) {
-                     document.primaryTextObject().effects.append(createEffect(typeId));
-                 });
+    const QString description = QStringLiteral("Add %1 effect").arg(effect->displayName());
+    const int index = m_document.primaryTextObject().effects.size();
+    m_undoStack.push(new AddEffectCommand(
+        m_document,
+        index,
+        std::move(effect),
+        [this] { onCommandChanged(); },
+        description));
 }
 
 void EditorController::removeEffect(int index)
 {
-    pushMutation(QStringLiteral("Remove effect"), [index](Document& document) {
-        document.primaryTextObject().effects.removeAt(index);
-    });
+    const Effect* effect = m_document.primaryTextObject().effects.at(index);
+    if (!effect) {
+        return;
+    }
+    m_undoStack.push(new RemoveEffectCommand(
+        m_document,
+        index,
+        effect->clone(),
+        [this] { onCommandChanged(); }));
 }
 
 void EditorController::moveEffect(int from, int to)
 {
-    pushMutation(QStringLiteral("Reorder effects"), [from, to](Document& document) {
-        document.primaryTextObject().effects.move(from, to);
-    });
+    const EffectStack& effects = m_document.primaryTextObject().effects;
+    if (from < 0 || from >= effects.size() || to < 0 || to >= effects.size() || from == to) {
+        return;
+    }
+    m_undoStack.push(new ReorderEffectCommand(
+        m_document,
+        from,
+        to,
+        [this] { onCommandChanged(); }));
 }
 
 void EditorController::setEffectEnabled(int index, bool enabled)
 {
-    pushMutation(QStringLiteral("Toggle effect"), [index, enabled](Document& document) {
-        if (Effect* effect = document.primaryTextObject().effects.at(index)) {
-            effect->enabled = enabled;
-        }
-    });
+    Effect* effect = m_document.primaryTextObject().effects.at(index);
+    if (!effect || effect->enabled == enabled) {
+        return;
+    }
+    m_undoStack.push(new SetEffectEnabledCommand(
+        m_document,
+        index,
+        effect->enabled,
+        enabled,
+        [this] { onCommandChanged(); }));
 }
 
 void EditorController::setEffectParameter(int index, const QString& parameterId, double value)
 {
-    const int mergeId = EffectParameterMergeBase
-        + index * 2048
-        + (qHash(parameterId) & 0x7ff);
-    pushMutation(QStringLiteral("Change effect parameter"), [index, parameterId, value](Document& document) {
-        if (Effect* effect = document.primaryTextObject().effects.at(index)) {
-            effect->setParameter(parameterId, value);
-        }
-    }, mergeId);
+    Effect* effect = m_document.primaryTextObject().effects.at(index);
+    if (!effect) {
+        return;
+    }
+    const std::optional<EffectParameter> oldParameter = findEffectParameter(*effect, parameterId);
+    if (!oldParameter.has_value()) {
+        return;
+    }
+
+    std::unique_ptr<Effect> candidate = effect->clone();
+    if (!candidate || !candidate->setParameter(parameterId, value)) {
+        return;
+    }
+    const std::optional<EffectParameter> newParameter = findEffectParameter(*candidate, parameterId);
+    if (!newParameter.has_value() || nearlyEqual(oldParameter->value, newParameter->value)) {
+        return;
+    }
+
+    m_undoStack.push(new SetEffectParameterCommand(
+        m_document,
+        index,
+        parameterId,
+        oldParameter->value,
+        newParameter->value,
+        [this] { onCommandChanged(); }));
 }
 
 bool EditorController::savePreset(const QString& name, QString* error)
@@ -271,9 +347,15 @@ bool EditorController::applyPreset(const QString& name, QString* error)
         return false;
     }
 
-    pushMutation(QStringLiteral("Apply preset '%1'").arg(name), [preset](Document& document) {
-        document.primaryTextObject().effects = preset.effects;
-    });
+    const EffectStack before = m_document.primaryTextObject().effects;
+    if (!effectStacksEqual(before, preset.effects)) {
+        m_undoStack.push(new ApplyPresetCommand(
+            m_document,
+            before,
+            preset.effects,
+            [this] { onCommandChanged(); },
+            QStringLiteral("Apply preset '%1'").arg(name)));
+    }
     emit statusMessageChanged(QStringLiteral("Preset '%1' applied.").arg(name));
     return true;
 }
@@ -292,7 +374,8 @@ bool EditorController::saveProject(const QString& filePath, QString* error)
     if (!ProjectSerializer::saveToFile(m_document, filePath, error)) {
         return false;
     }
-    m_modified = false;
+    m_undoStack.setClean();
+    emit documentChanged();
     emit statusMessageChanged(QStringLiteral("Project saved: %1").arg(filePath));
     return true;
 }
@@ -305,10 +388,10 @@ bool EditorController::openProject(const QString& filePath, QString* error)
     }
     m_document = std::move(loaded);
     m_undoStack.clear();
+    m_undoStack.setClean();
     m_textEngine.clearCache();
     m_baseGeometry.reset();
     m_baseGeometryKey.clear();
-    m_modified = false;
     rebuildScene();
     emit documentChanged();
     emit statusMessageChanged(QStringLiteral("Project opened: %1").arg(filePath));
@@ -320,11 +403,9 @@ bool EditorController::exportSvg(const QString& filePath, QString* error) const
     return m_svgExporter.exportGeometry(m_document, m_geometry, filePath, error);
 }
 
-void EditorController::applySnapshot(const Document& snapshot)
+void EditorController::onCommandChanged()
 {
-    m_document = snapshot;
     rebuildScene();
-    m_modified = true;
     emit documentChanged();
 }
 
@@ -366,28 +447,7 @@ QString EditorController::geometryCacheKey(const TextObject& object) const
         + QChar(0x1f)
         + QString::number(object.typography.fontSize, 'g', 16)
         + QChar(0x1f)
-        + QString::number(object.typography.tracking, 'g', 16);
-}
-
-void EditorController::pushMutation(const QString& description,
-                                     const std::function<void(Document&)>& mutation,
-                                     int mergeId)
-{
-    const Document before = m_document;
-    Document after = before;
-    mutation(after);
-
-    const QByteArray beforeJson = ProjectSerializer::toJson(before).toJson(QJsonDocument::Compact);
-    const QByteArray afterJson = ProjectSerializer::toJson(after).toJson(QJsonDocument::Compact);
-    if (beforeJson == afterJson) {
-        return;
-    }
-
-    after.touchModified();
-    auto apply = [this](const Document& snapshot) {
-        applySnapshot(snapshot);
-    };
-    m_undoStack.push(new SnapshotCommand(std::move(apply), before, std::move(after), description, mergeId));
+        + QString::number(object.typography.trackingEm, 'g', 16);
 }
 
 void EditorController::publishError(const QString& message)
