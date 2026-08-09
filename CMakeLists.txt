@@ -53,6 +53,8 @@ set(UI_SOURCES
     src/ui/typography_panel.cpp
     src/ui/effects_panel.h
     src/ui/effects_panel.cpp
+    src/ui/deformation_panel.h
+    src/ui/deformation_panel.cpp
     src/ui/main_window.h
     src/ui/main_window.cpp
 )

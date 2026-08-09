@@ -237,4 +237,65 @@ private:
     EffectStack m_after;
 };
 
+class AddDeformationStrokeCommand final : public DocumentCommand {
+public:
+    AddDeformationStrokeCommand(Document& document,
+                                int index,
+                                DeformationStroke stroke,
+                                DocumentChangeCallback onChanged);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    int m_index = -1;
+    DeformationStroke m_stroke;
+};
+
+class ClearDeformationCommand final : public DocumentCommand {
+public:
+    ClearDeformationCommand(Document& document,
+                            ManualDeformation before,
+                            DocumentChangeCallback onChanged);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    ManualDeformation m_before;
+    ManualDeformation m_after;
+};
+
+class SetDeformationEnabledCommand final : public DocumentCommand {
+public:
+    SetDeformationEnabledCommand(Document& document,
+                                 bool oldEnabled,
+                                 bool newEnabled,
+                                 DocumentChangeCallback onChanged);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    bool m_oldEnabled = true;
+    bool m_newEnabled = true;
+};
+
+class SetDeformationStrengthCommand final : public DocumentCommand {
+public:
+    SetDeformationStrengthCommand(Document& document,
+                                  qreal oldStrength,
+                                  qreal newStrength,
+                                  DocumentChangeCallback onChanged);
+
+    void undo() override;
+    void redo() override;
+    [[nodiscard]] int id() const override;
+    bool mergeWith(const QUndoCommand* other) override;
+
+private:
+    qreal m_oldStrength = 1.0;
+    qreal m_newStrength = 1.0;
+};
+
 } // namespace vt

@@ -177,6 +177,7 @@ private slots:
     void cyrillicShapeDeformationProducesGeometry();
     void controllerUndoRedoAndMerge();
     void controllerEffectCommandsAreGranular();
+    void controllerDeformationCommandsAreGranular();
     void controllerCleanStateFollowsUndoStack();
 };
 
@@ -876,6 +877,44 @@ void CoreTests::controllerEffectCommandsAreGranular()
     controller.undoStack()->undo();
     QCOMPARE(controller.document().primaryTextObject().effects.size(), 2);
     QCOMPARE(controller.document().primaryTextObject().effects.at(0)->typeId(), QStringLiteral("wave"));
+}
+
+void CoreTests::controllerDeformationCommandsAreGranular()
+{
+    EditorController controller;
+    const DeformationStroke stroke = pushStroke(BrushTarget::Shape);
+    controller.setDeformationPreview(stroke);
+    QVERIFY(!controller.isModified());
+    QVERIFY(controller.document().primaryTextObject().deformation.strokes.isEmpty());
+    controller.clearDeformationPreview();
+
+    const int initialCommandCount = controller.undoStack()->count();
+    controller.addDeformationStroke(stroke);
+    QCOMPARE(controller.undoStack()->count(), initialCommandCount + 1);
+    QCOMPARE(controller.document().primaryTextObject().deformation.strokes.size(), 1);
+
+    controller.undoStack()->undo();
+    QVERIFY(controller.document().primaryTextObject().deformation.strokes.isEmpty());
+    controller.undoStack()->redo();
+    QCOMPARE(controller.document().primaryTextObject().deformation.strokes.size(), 1);
+
+    const int beforeStrength = controller.undoStack()->count();
+    controller.setDeformationStrength(0.5);
+    controller.setDeformationStrength(0.75);
+    QCOMPARE(controller.undoStack()->count(), beforeStrength + 1);
+    QCOMPARE(controller.document().primaryTextObject().deformation.strength, 0.75);
+
+    controller.setDeformationEnabled(false);
+    QVERIFY(!controller.document().primaryTextObject().deformation.enabled);
+    controller.undoStack()->undo();
+    QVERIFY(controller.document().primaryTextObject().deformation.enabled);
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().primaryTextObject().deformation.strength, 1.0);
+
+    controller.clearDeformation();
+    QVERIFY(controller.document().primaryTextObject().deformation.strokes.isEmpty());
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().primaryTextObject().deformation.strokes.size(), 1);
 }
 
 void CoreTests::controllerCleanStateFollowsUndoStack()
