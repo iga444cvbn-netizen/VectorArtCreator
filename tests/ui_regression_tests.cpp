@@ -50,7 +50,7 @@ void EffectsPanelUiTests::valueRefreshKeepsEmittingControlsAlive()
             });
     connect(&panel, &EffectsPanel::effectParameterChanged, &panel,
             [&object, &panel, effectId](int, const QString& parameter, double value) {
-                object.effects.byInstanceId(effectId)->setParameter(parameter, value);
+                static_cast<void>(object.effects.byInstanceId(effectId)->setParameter(parameter, value));
                 panel.refresh(&object, {});
             });
     connect(&panel, &EffectsPanel::effectEnabledChanged, &panel,
@@ -122,7 +122,9 @@ void EffectsPanelUiTests::spinBoxArrowHitRegionsIncrementAndDecrement()
 
     QDoubleSpinBox* spinBox = control.spinBox();
     QStyleOptionSpinBox option;
-    spinBox->initStyleOption(&option);
+    option.rect = spinBox->rect();
+    option.state = QStyle::State_Enabled;
+    option.direction = spinBox->layoutDirection();
     const QRect up = spinBox->style()->subControlRect(QStyle::CC_SpinBox,
                                                        &option,
                                                        QStyle::SC_SpinBoxUp,

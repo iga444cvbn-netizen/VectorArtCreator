@@ -1369,7 +1369,9 @@ void CoreTests::controllerSceneCommandsMoveDuplicateAndDeleteObjects()
     EditorController controller;
     const QString firstId = controller.createTextObject(QPointF(80.0, 100.0), QStringLiteral("First"));
     QVERIFY(!firstId.isEmpty());
-    controller.createTextObject(QPointF(120.0, 160.0), QStringLiteral("Second"));
+    const QString createdSecondId = controller.createTextObject(QPointF(120.0, 160.0),
+                                                                 QStringLiteral("Second"));
+    QVERIFY(!createdSecondId.isEmpty());
     const QString secondId = controller.activeObject()->id;
     QCOMPARE(controller.document().objectsOnCurrentPage().size(), 2);
     controller.moveSelectedObjects(QPointF(8.0, 12.0));
