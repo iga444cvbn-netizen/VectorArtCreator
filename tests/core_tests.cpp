@@ -14,7 +14,9 @@
 #include "ui/deformation_tool_state.h"
 #include "ui/editor_controller.h"
 #include "ui/selection_model.h"
+#include "ui/shortcut_manager.h"
 
+#include <QAction>
 #include <QDir>
 #include <QFile>
 #include <QFont>
@@ -24,13 +26,13 @@
 #include <QJsonObject>
 #include <QPainterPath>
 #include <QSet>
+#include <QSettings>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QUuid>
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <limits>
 
 using namespace vt;
@@ -199,6 +201,8 @@ private slots:
     void selectionModelSupportsSingleAndRangeSelection();
     void controllerSceneCommandsMoveDuplicateAndDeleteObjects();
     void controllerPageAndLayerCommandsAreUndoable();
+    void shortcutManagerDetectsConflictsAndPersists();
+    void asyncEvaluationPublishesLatestGeneration();
 };
 
 void CoreTests::projectSerializationRoundTrip()
@@ -1153,35 +1157,11 @@ void CoreTests::legacyFlatProjectMigratesToPageAndLayer()
 
 void CoreTests::multilineShapingPreservesLinesAndClusters()
 {
-    std::fprintf(stderr, "MULTILINE diagnostic: start\n");
-    std::fflush(stderr);
     TextObject object = configuredText(QStringLiteral("СТРАХ\nНЕ СМОТРИ"));
-    std::fprintf(stderr, "MULTILINE diagnostic: before shape\n");
-    std::fflush(stderr);
     TextEngine engine;
     const ShapedText shaped = engine.shape(object);
-    std::fprintf(stderr,
-                 "MULTILINE diagnostic: after shape lines=%d bounds=%d glyphs=%d error=%s warning=%s\n",
-                 shaped.lineCount,
-                 shaped.lineBounds.size(),
-                 shaped.glyphs.size(),
-                 shaped.error.toUtf8().constData(),
-                 shaped.warning.toUtf8().constData());
-    for (const ShapedGlyph& glyph : shaped.glyphs) {
-        std::fprintf(stderr,
-                     "MULTILINE diagnostic: glyph ordinal=%d cluster=%d+%d line=%d\n",
-                     glyph.ordinal,
-                     glyph.clusterStart,
-                     glyph.clusterLength,
-                     glyph.lineIndex);
-    }
-    std::fflush(stderr);
     QVERIFY2(shaped.error.isEmpty(), qPrintable(shaped.error));
-    std::fprintf(stderr, "MULTILINE diagnostic: after error check\n");
-    std::fflush(stderr);
     QVERIFY(shaped.lineCount >= 2);
-    std::fprintf(stderr, "MULTILINE diagnostic: after line count\n");
-    std::fflush(stderr);
     QCOMPARE(shaped.lineBounds.size(), shaped.lineCount);
     QVERIFY(std::any_of(shaped.glyphs.cbegin(), shaped.glyphs.cend(), [](const ShapedGlyph& glyph) {
         return glyph.lineIndex > 0;
@@ -1190,8 +1170,6 @@ void CoreTests::multilineShapingPreservesLinesAndClusters()
         return glyph.clusterStart >= 0 && glyph.clusterLength > 0;
     }));
     const VectorGeometry geometry = GlyphGeometryBuilder::build(shaped, object.typography.fontSize);
-    std::fprintf(stderr, "MULTILINE diagnostic: geometry pieces=%d\n", geometry.pieces.size());
-    std::fflush(stderr);
     QVERIFY(geometry.hasVisibleGeometry());
 }
 
@@ -1295,6 +1273,53 @@ void CoreTests::controllerPageAndLayerCommandsAreUndoable()
     QVERIFY(controller.document().currentPageId != addedPageId);
     controller.undoStack()->redo();
     QCOMPARE(controller.document().pages.size(), size_t(2));
+}
+
+void CoreTests::shortcutManagerDetectsConflictsAndPersists()
+{
+    const QString suffix = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString firstId = QStringLiteral("test.open.%1").arg(suffix);
+    const QString secondId = QStringLiteral("test.close.%1").arg(suffix);
+    const QKeySequence firstSequence(QStringLiteral("Ctrl+Shift+9"));
+    const QKeySequence secondDefault(QStringLiteral("Ctrl+Shift+0"));
+    const QKeySequence secondCustom(QStringLiteral("Ctrl+Alt+9"));
+
+    QAction firstAction;
+    QAction secondAction;
+    ShortcutManager manager;
+    manager.registerAction(firstId, &firstAction, firstSequence);
+    manager.registerAction(secondId, &secondAction, secondDefault);
+
+    QString error;
+    QVERIFY(!manager.setShortcut(secondId, firstSequence, &error));
+    QVERIFY(error.contains(firstId));
+    QVERIFY(manager.setShortcut(secondId, secondCustom, &error));
+    QCOMPARE(secondAction.shortcut(), secondCustom);
+
+    QAction restoredAction;
+    ShortcutManager restored;
+    restored.registerAction(secondId, &restoredAction, secondDefault);
+    QCOMPARE(restored.shortcut(secondId), secondCustom);
+    restored.resetToDefaults();
+    QCOMPARE(restored.shortcut(secondId), secondDefault);
+
+    QSettings settings;
+    settings.remove(QStringLiteral("shortcuts/%1").arg(firstId));
+    settings.remove(QStringLiteral("shortcuts/%1").arg(secondId));
+    settings.sync();
+}
+
+void CoreTests::asyncEvaluationPublishesLatestGeneration()
+{
+    EditorController controller;
+    const QString objectId = controller.activeObject()->id;
+    controller.setText(QStringLiteral("stale generation"));
+    controller.setText(QStringLiteral("latest generation"));
+
+    QTRY_VERIFY_WITH_TIMEOUT(controller.sceneGeometry().objectById(objectId)
+                                 && controller.sceneGeometry().objectById(objectId)->sourceText
+                                        == QStringLiteral("latest generation"),
+                             5000);
 }
 
 int main(int argc, char* argv[])

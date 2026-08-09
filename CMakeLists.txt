@@ -99,6 +99,8 @@ add_executable(vector_typography_tests
     src/ui/editor_controller.cpp
     src/ui/selection_model.h
     src/ui/selection_model.cpp
+    src/ui/shortcut_manager.h
+    src/ui/shortcut_manager.cpp
 )
 target_include_directories(vector_typography_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vector_typography_tests PRIVATE

@@ -7,13 +7,15 @@ for portable desktop/UI services; the core has no Win32 dependency.
 ## Component boundaries
 
 ```text
-MainWindow / panels
-        |
-EditorController + QUndoStack
-        |
-Document -> TextObject -> FontDescriptor + TypographyProperties + EffectStack
-                                      + ManualDeformation
-        |
+MainWindow / canvas / panels
+              |
+EditorController + SelectionModel + QUndoStack
+              |
+Document -> Page -> Layer -> TextObject -> FontDescriptor + TypographyProperties
+                                                    + EffectStack + ManualDeformation
+              |
+immutable Page snapshot -> SceneEvaluator (QThreadPool) -> SceneGeometry
+              |
 TextEngine -> ShapedText -> GlyphGeometryBuilder -> VectorGeometry
                                                        |
                               EffectStack -> ManualDeformation -> final geometry
@@ -21,34 +23,68 @@ TextEngine -> ShapedText -> GlyphGeometryBuilder -> VectorGeometry
                                               EditorCanvas              SvgExporter
 ```
 
-* `Document` owns metadata and an extensible collection of text objects. The
-  current UI edits one primary `TextObject`, not a widget-owned copy.
-* `TextEngine` shapes the complete Unicode string with `QTextLayout`/
-  `QGlyphRun`, then `GlyphGeometryBuilder` obtains each glyph outline through
-  `QRawFont::pathForGlyph`. No glyph is rasterized.
+* `Document` owns metadata and the persistent `Page -> Layer -> TextObject`
+  hierarchy. Every page, layer, and object has a stable UUID-like identity;
+  selection and commands refer to those IDs rather than vector positions.
+  `primaryTextObject()` remains a compatibility adapter for older panels and
+  commands, not a second source of document state.
+* `TextEngine` shapes the complete Unicode source with paragraph-level
+  `QTextLayout`/`QGlyphRun` instances, then `GlyphGeometryBuilder` obtains each
+  glyph outline through `QRawFont::pathForGlyph`. No glyph is rasterized.
 * `Effect` is an ordered, cloneable, serializable interface. `EffectStack` applies
-  enabled Wave, Glyph Jitter, and Global Stretch effects to a fresh geometry copy.
+  enabled effects to a fresh geometry copy and supports whole-object or
+  source-cluster ranges. Wave, Glyph Jitter, Stretch, and the deterministic
+  procedural families currently provide the Phase 3 effect set.
 * `ManualDeformation` is a later nondestructive geometry stage. It stores spatial
   brush samples and reevaluates them after shaping and every effect-stack change.
 * `DeformationToolState` is UI interaction state, not document state. `Select` is
   an inactive canvas tool and never creates a `DeformationStroke`; brush tools are
   mapped to `BrushMode` only when a real stroke is started.
-* `EditorController` owns the document, undo stack, shaped/base geometry cache,
-  final geometry, and non-persistent preview stroke. `EditorCanvas` only handles
-  viewport/input and emits stroke previews or completed strokes.
+* `EditorController` owns the document, selection, undo stack, scene result,
+  evaluation generation, and non-persistent preview stroke. It copies the
+  current `Page` before dispatching evaluation to `QtConcurrent`; a watcher
+  publishes a result only if its generation is still current. `EditorCanvas`
+  only handles viewport/input, hit testing, selection/move previews, and stroke
+  previews or completed strokes.
 * `IExportBackend` keeps SVG and future platform exporters separate. `SvgExporter`
   writes only final path geometry.
 
+## Phase 3 workspace model
+
+The main window is canvas-first: a left tool palette, a central vector canvas,
+and a right page/layer/inspector area. Page tabs switch the current page; the
+layers panel supports active-layer selection, add/remove/rename, visibility, and
+lock state. Select and Move are separate tools from deformation brushes. The
+canvas supports object hit testing, additive selection, marquee selection,
+selection outlines, duplicate/delete, keyboard nudge, and text-object creation.
+Stable object IDs make these operations safe across asynchronous scene results.
+
+The current Text tool creates an object at the canvas point and routes editing
+to the Typography inspector. A full in-canvas caret/clipboard editor is a
+deliberately bounded follow-up; the document already stores multiline source
+text and source-cluster metadata independently of widgets.
+
+`ShortcutManager` registers commands independently of widgets, rejects duplicate
+key sequences, and persists accepted bindings through `QSettings`. The
+Preferences dialog currently covers the workspace-level settings exposed by the
+editor. Mask stroke data has a serializable place in the effect model and the
+evaluator boundary, but interactive mask painting/eraser UI is intentionally
+deferred until the mask semantics are finalized.
+
 ## Geometry pipeline
 
-1. `TextObject` retains source text and typography values.
-2. `TextEngine` shapes the Unicode string, including kerning, ligatures,
-   combining marks, bidirectional text, and Qt fallback behavior.
+1. `TextObject` retains editable source text and typography values.
+2. `TextEngine` lays out explicit source paragraphs with `QTextLayout`, including
+   line spacing, kerning, ligatures, combining marks, bidirectional text, and
+   Qt fallback behavior. Each `QGlyphRun` is requested with string indexes so
+   glyphs retain source-cluster and line metadata.
 3. `GlyphGeometryBuilder` creates positioned `GeometryPiece` paths from physical
    glyph outlines. A source glyph may produce zero, one, or multiple pieces.
-4. `EffectStack` applies enabled procedural effects in explicit user order.
+4. `EffectStack` applies enabled procedural effects in explicit user order and
+   filters text-range scopes by source-cluster metadata.
 5. `ManualDeformation` evaluates persistent strokes on the post-effect geometry.
-6. The resulting vector paths are drawn by the canvas or sent to SVG export.
+6. `SceneEvaluator` applies object transforms and layer visibility/lock state,
+   then returns immutable scene geometry for canvas or SVG use.
 
 The effect and deformation coordinate system is the document's vector coordinate
 system. Effect normalization uses the unmodified reference bounds. Brush radius,
@@ -122,10 +158,12 @@ enabled for a useful preview.
 
 ## Serialization and migration
 
-Projects are versioned JSON. The current project format is version 3. Version 1
-tracking is migrated to `trackingEm`; version 2 projects that have no `deformation`
-object receive the default enabled deformation model with no strokes. The next
-save writes version 3. Deformation JSON is validated for finite coordinates,
+Projects are versioned JSON. The current project format is version 4. Version 1
+tracking is migrated to `trackingEm`; versions 1-3 flat object arrays migrate to
+one page and one layer while preserving object order. Version 2/3 projects that
+have no `deformation` object receive the default enabled deformation model with
+no strokes. The next save writes version 4 with pages, layers, stable IDs, object
+transforms, and active IDs. Deformation JSON is validated for finite coordinates,
 bounded sample/stroke counts, and bounded radius/strength/hardness/pressure.
 
 Presets are version 2 JSON with a generated UUID `id`, Unicode `name`, and an
@@ -137,20 +175,24 @@ command and never changes manual deformation strokes.
 ## Cache and invalidation
 
 `TextEngine` caches the last shaping result by source text, font descriptor,
-font size, and `trackingEm`. The controller caches base glyph geometry by the same
-shaping key, copies it for a rebuild, applies the ordered effect stack, then applies
-manual deformation. A preview stroke is evaluated only on the final scene copy and
-is never serialized. This avoids document-wide JSON snapshots for ordinary edits;
-geometry copies remain the rendering-stage boundary rather than an undo mechanism.
+font size, line spacing, and `trackingEm`. The scene evaluator receives a copied
+`Page` snapshot and runs on `QThreadPool` workers with a fresh `TextEngine`; each
+result carries a generation number and stale generations are discarded before
+publication. A preview stroke is evaluated only on the final scene copy and is
+never serialized. Geometry copies remain the rendering-stage boundary rather
+than an undo mechanism.
 
 ## Undo/redo and clean state
 
-`src/core/undo/document_commands.*` contains focused `QUndoCommand` types. Text,
+`src/core/undo/document_commands.*` and `scene_commands.*` contain focused
+`QUndoCommand` types. Text,
 font fields, font size, tracking, fill, effect insertion/removal/reorder/toggle,
 effect parameters, preset application, deformation stroke insertion, deformation
-clear, deformation enabled state, and deformation overall strength are all
-represented by relevant old/new values or affected objects only. No ordinary edit
-serializes the complete `Document` merely to detect a change.
+clear, deformation enabled state, deformation overall strength, object moves,
+object insertion/removal/duplication, page/layer operations, and selection of the
+current page are all represented by relevant old/new values or affected objects
+only. No ordinary edit serializes the complete `Document` merely to detect a
+change.
 
 Typing, numeric effect parameters, font size, tracking, and deformation overall
 strength merge through command IDs. A completed canvas drag is one
