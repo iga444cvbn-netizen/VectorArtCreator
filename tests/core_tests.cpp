@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 
 using namespace vt;
@@ -1152,11 +1153,35 @@ void CoreTests::legacyFlatProjectMigratesToPageAndLayer()
 
 void CoreTests::multilineShapingPreservesLinesAndClusters()
 {
+    std::fprintf(stderr, "MULTILINE diagnostic: start\n");
+    std::fflush(stderr);
     TextObject object = configuredText(QStringLiteral("СТРАХ\nНЕ СМОТРИ"));
+    std::fprintf(stderr, "MULTILINE diagnostic: before shape\n");
+    std::fflush(stderr);
     TextEngine engine;
     const ShapedText shaped = engine.shape(object);
+    std::fprintf(stderr,
+                 "MULTILINE diagnostic: after shape lines=%d bounds=%d glyphs=%d error=%s warning=%s\n",
+                 shaped.lineCount,
+                 shaped.lineBounds.size(),
+                 shaped.glyphs.size(),
+                 shaped.error.toUtf8().constData(),
+                 shaped.warning.toUtf8().constData());
+    for (const ShapedGlyph& glyph : shaped.glyphs) {
+        std::fprintf(stderr,
+                     "MULTILINE diagnostic: glyph ordinal=%d cluster=%d+%d line=%d\n",
+                     glyph.ordinal,
+                     glyph.clusterStart,
+                     glyph.clusterLength,
+                     glyph.lineIndex);
+    }
+    std::fflush(stderr);
     QVERIFY2(shaped.error.isEmpty(), qPrintable(shaped.error));
+    std::fprintf(stderr, "MULTILINE diagnostic: after error check\n");
+    std::fflush(stderr);
     QVERIFY(shaped.lineCount >= 2);
+    std::fprintf(stderr, "MULTILINE diagnostic: after line count\n");
+    std::fflush(stderr);
     QCOMPARE(shaped.lineBounds.size(), shaped.lineCount);
     QVERIFY(std::any_of(shaped.glyphs.cbegin(), shaped.glyphs.cend(), [](const ShapedGlyph& glyph) {
         return glyph.lineIndex > 0;
@@ -1165,6 +1190,8 @@ void CoreTests::multilineShapingPreservesLinesAndClusters()
         return glyph.clusterStart >= 0 && glyph.clusterLength > 0;
     }));
     const VectorGeometry geometry = GlyphGeometryBuilder::build(shaped, object.typography.fontSize);
+    std::fprintf(stderr, "MULTILINE diagnostic: geometry pieces=%d\n", geometry.pieces.size());
+    std::fflush(stderr);
     QVERIFY(geometry.hasVisibleGeometry());
 }
 

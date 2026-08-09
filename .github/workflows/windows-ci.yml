@@ -77,8 +77,12 @@ jobs:
           if ($ctestExit -ne 0) {
             Write-Host "CTest failed; replaying the Qt Test executable with verbose output."
             $testExecutable = Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_tests.exe'
-            & $testExecutable -vs
+            $fullReplayLog = Join-Path $env:RUNNER_TEMP 'vector-typography-full-replay.txt'
+            & $testExecutable -vs -o "$fullReplayLog,txt"
             Write-Host "Full Qt Test replay exit code: $LASTEXITCODE"
+            if (Test-Path -LiteralPath $fullReplayLog) {
+              Get-Content -LiteralPath $fullReplayLog
+            }
             $diagnosticCases = @(
               'documentHierarchyHasStableIds',
               'legacyFlatProjectMigratesToPageAndLayer',
@@ -90,8 +94,13 @@ jobs:
               'controllerPageAndLayerCommandsAreUndoable'
             )
             foreach ($diagnosticCase in $diagnosticCases) {
-              & $testExecutable $diagnosticCase
-              Write-Host "Diagnostic case $diagnosticCase exit code: $LASTEXITCODE"
+              $caseLog = Join-Path $env:RUNNER_TEMP ("vector-typography-$diagnosticCase.txt")
+              & $testExecutable $diagnosticCase -o "$caseLog,txt"
+              $caseExit = $LASTEXITCODE
+              Write-Host "Diagnostic case $diagnosticCase exit code: $caseExit"
+              if (Test-Path -LiteralPath $caseLog) {
+                Get-Content -LiteralPath $caseLog
+              }
             }
             exit $ctestExit
           }
