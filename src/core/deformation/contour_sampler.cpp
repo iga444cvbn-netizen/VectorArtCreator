@@ -47,6 +47,21 @@ void appendDistinct(QVector<QPointF>* points, const QPointF& point)
     }
 }
 
+void appendBounded(QVector<QPointF>* points, const QPointF& point, int maxPoints)
+{
+    if (!points || !std::isfinite(point.x()) || !std::isfinite(point.y())) {
+        return;
+    }
+    if (points->size() < maxPoints) {
+        appendDistinct(points, point);
+    } else if (!points->isEmpty()) {
+        // Keep the contour endpoint even when adaptive subdivision reaches
+        // its safety cap. This preserves an open path's endpoint without
+        // allowing the cap to be exceeded.
+        points->last() = point;
+    }
+}
+
 void flattenCubic(const QPointF& p0,
                   const QPointF& p1,
                   const QPointF& p2,
@@ -56,15 +71,18 @@ void flattenCubic(const QPointF& p0,
                   int maxPoints,
                   QVector<QPointF>* points)
 {
-    if (!points || points->size() >= maxPoints) {
-        appendDistinct(points, p3);
+    if (!points) {
+        return;
+    }
+    if (points->size() >= maxPoints) {
+        appendBounded(points, p3, maxPoints);
         return;
     }
 
     const qreal flatness = qMax(pointLineDistanceSquared(p1, p0, p3),
                                 pointLineDistanceSquared(p2, p0, p3));
     if (depth >= MaximumSubdivisionDepth || flatness <= toleranceSquared) {
-        appendDistinct(points, p3);
+        appendBounded(points, p3, maxPoints);
         return;
     }
 
@@ -149,8 +167,12 @@ QVector<SampledContour> ContourSampler::samplePath(const QPainterPath& path,
             points.clear();
             return;
         }
-        bool closed = points.size() >= 3;
-        if (closed && distanceSquared(points.first(), points.last()) <= boundedTolerance * boundedTolerance) {
+        // QPainterPath represents a closed subpath by making its final
+        // element coincide with its first element (the same closure test Qt
+        // uses internally). Point count alone must never turn an open
+        // polyline into a closed contour.
+        const bool closed = points.size() >= 3 && points.first() == points.last();
+        if (closed) {
             points.removeLast();
         }
         SampledContour contour;

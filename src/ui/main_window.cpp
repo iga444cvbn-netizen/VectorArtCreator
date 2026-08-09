@@ -128,6 +128,10 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     connect(m_deformationPanel,
+            &DeformationPanel::toolChanged,
+            m_canvas,
+            &EditorCanvas::setTool);
+    connect(m_deformationPanel,
             &DeformationPanel::brushSettingsChanged,
             m_canvas,
             &EditorCanvas::setBrushSettings);

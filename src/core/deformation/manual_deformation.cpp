@@ -286,6 +286,11 @@ bool ManualDeformation::fromJson(const QJsonObject& object,
             }
             return false;
         }
+        if (stroke.mode == BrushMode::Smooth) {
+            // Smooth has always been shape-only. Normalize older or external
+            // data at the serialization boundary as well as at evaluation.
+            stroke.target = BrushTarget::Shape;
+        }
         stroke.radius = serializedStroke.value(QStringLiteral("radius")).toDouble(stroke.radius);
         stroke.strength = serializedStroke.value(QStringLiteral("strength")).toDouble(stroke.strength);
         stroke.hardness = serializedStroke.value(QStringLiteral("hardness")).toDouble(stroke.hardness);

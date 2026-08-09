@@ -35,7 +35,7 @@ void VectorGeometry::translatePiece(int index, const QPointF& delta)
         return;
     }
     QTransform transform;
-    transform.translate(delta.x(), delta.y());
+    Q_UNUSED(transform.translate(delta.x(), delta.y()));
     transformPiece(index, transform);
 }
 

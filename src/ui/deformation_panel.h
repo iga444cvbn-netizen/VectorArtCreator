@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/deformation/manual_deformation.h"
+#include "ui/deformation_tool_state.h"
 
 #include <QWidget>
 
@@ -19,6 +20,7 @@ public:
     void refresh(const ManualDeformation& deformation);
 
 signals:
+    void toolChanged(EditorTool tool);
     void brushSettingsChanged(BrushMode mode,
                               BrushTarget target,
                               qreal radius,
@@ -29,7 +31,9 @@ signals:
     void clearRequested();
 
 private:
+    void handleToolChanged(int index);
     void emitBrushSettings();
+    void updateTargetUi();
 
     QComboBox* m_modeCombo = nullptr;
     QComboBox* m_targetCombo = nullptr;
@@ -38,6 +42,7 @@ private:
     QDoubleSpinBox* m_hardnessSpin = nullptr;
     QCheckBox* m_enabledCheck = nullptr;
     QDoubleSpinBox* m_overallStrengthSpin = nullptr;
+    DeformationToolState m_toolState;
 };
 
 } // namespace vt

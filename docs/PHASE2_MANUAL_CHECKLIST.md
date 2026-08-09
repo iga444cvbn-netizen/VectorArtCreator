@@ -7,8 +7,13 @@ machine. The machine does not need a Qt SDK.
 - [ ] Enter Latin and Cyrillic text and confirm both render as vector outlines.
 - [ ] Select a font family/style and confirm missing family/style diagnostics are
       visible in the status bar when an invalid value is loaded.
+- [ ] Choose `Select` in the Manual deformation panel. Confirm left-click/drag
+      does not create a stroke, the brush circle is hidden, and the cursor is
+      normal. Confirm middle-drag, Space-drag, and wheel zoom still work.
 - [ ] Use `Push`, `Pull`, `Inflate`, `Pinch`, and `Smooth` in `Shape` mode. Confirm
       the canvas shows a circular cursor and the result remains vector geometry.
+- [ ] Select `Glyphs`, then choose `Smooth`. Confirm the target becomes disabled
+      and `Shape`; switch to another brush and confirm `Glyphs` is restored.
 - [ ] Repeat a short stroke in `Glyphs` mode and confirm each affected glyph moves
       rigidly rather than being rasterized.
 - [ ] Zoom and pan before brushing. Confirm the radius stays in document units.

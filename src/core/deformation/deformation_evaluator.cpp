@@ -216,6 +216,12 @@ void DeformationEvaluator::apply(const ManualDeformation& deformation, VectorGeo
         boundedStroke.radius = boundedRadius;
         boundedStroke.strength = qBound<qreal>(0.0, stroke.strength, 4.0);
         boundedStroke.hardness = qBound<qreal>(0.0, stroke.hardness, 1.0);
+        if (boundedStroke.mode == BrushMode::Smooth) {
+            // Smooth is a contour operation. Normalize invalid legacy or
+            // programmatic Glyphs strokes instead of silently dropping them
+            // in applyGlyphStroke().
+            boundedStroke.target = BrushTarget::Shape;
+        }
         if (boundedStroke.target == BrushTarget::Glyphs) {
             applyGlyphStroke(boundedStroke, globalStrength, geometry);
         } else {

@@ -3,11 +3,14 @@
 #include "core/document/document.h"
 
 #include <QFontDatabase>
+#include <QFontInfo>
+#include <QFontMetricsF>
 #include <QList>
 #include <QStringList>
 #include <QTextLayout>
 #include <QTextOption>
 
+#include <cmath>
 #include <limits>
 
 namespace vt {
@@ -23,6 +26,49 @@ bool samePhysicalFont(const QRawFont& left, const QRawFont& right)
     // the Windows font backend to materialize its name table. That name-table
     // accessor is not reliable for every DirectWrite glyph run on Qt 6.8.
     return left == right;
+}
+
+qreal resolvedRawFontPixelSize(const QRawFont& rawFont, const QFont& font)
+{
+    if (!rawFont.isValid()) {
+        return 0.0;
+    }
+    if (std::isfinite(rawFont.pixelSize()) && rawFont.pixelSize() > 0.0) {
+        return rawFont.pixelSize();
+    }
+
+    // Some Qt Windows/offscreen combinations return a valid glyph-run raw
+    // font whose stored pixel size is zero when the QFont query was expressed
+    // in points. QFontInfo still reports the size Qt resolved for the actual
+    // screen font. Re-materializing this same physical raw font at that
+    // resolved size preserves the raw-font metric source without falling back
+    // to a hard-coded DPI or document font size.
+    const int resolvedPixelSize = QFontInfo(font).pixelSize();
+    if (resolvedPixelSize > 0) {
+        QRawFont scaledRawFont = rawFont;
+        scaledRawFont.setPixelSize(resolvedPixelSize);
+        if (scaledRawFont.isValid() && std::isfinite(scaledRawFont.pixelSize())
+            && scaledRawFont.pixelSize() > 0.0) {
+            return scaledRawFont.pixelSize();
+        }
+    }
+
+    // If the platform font database cannot report a pixel size (the Qt
+    // offscreen plugin does this on some Windows runners), normalize the same
+    // physical raw font to one pixel and recover the current em scale from
+    // Qt's resolved screen-font ascent. This remains a raw-font metric
+    // calculation: the normalized raw ascent supplies the font's design
+    // ratio, while QFontMetricsF supplies the backend's resolved logical size.
+    QRawFont normalizedRawFont = rawFont;
+    normalizedRawFont.setPixelSize(1.0);
+    const qreal normalizedAscent = normalizedRawFont.ascent();
+    const qreal resolvedAscent = QFontMetricsF(font).ascent();
+    if (normalizedRawFont.isValid() && std::isfinite(normalizedAscent)
+        && normalizedAscent > 0.0 && std::isfinite(resolvedAscent)
+        && resolvedAscent > 0.0) {
+        return resolvedAscent / normalizedAscent;
+    }
+    return 0.0;
 }
 
 void recordFallbackFont(ShapedText* result, const QRawFont& rawFont, int glyphCount)
@@ -109,11 +155,10 @@ ShapedText TextEngine::shape(const TextObject& object)
 
     const QFont font = object.font.toQFont(object.typography.fontSize);
     const QRawFont requestedRawFont = QRawFont::fromFont(font);
-    // Qt's PercentageSpacing is relative to the shaped glyph advances. The
+    // Qt's PercentageSpacing is relative to shaped glyph advances. The
     // project model needs true em-relative tracking, so shape normally and
-    // add a fixed font-size-derived offset between shaped glyph positions.
+    // add a fixed offset based on the resolved raw font's pixel em size.
     const QFont shapedFont = font;
-    const qreal trackingDistance = object.typography.trackingEm * object.typography.fontSize;
 
     QTextLayout layout(object.sourceText, shapedFont);
     QTextOption option;
@@ -131,6 +176,17 @@ ShapedText TextEngine::shape(const TextObject& object)
     int ordinal = 0;
     int shapedGlyphCount = 0;
     const QList<QGlyphRun> runs = layout.glyphRuns();
+    result.resolvedEmSize = resolvedRawFontPixelSize(requestedRawFont, font);
+    if (result.resolvedEmSize <= 0.0) {
+        for (const QGlyphRun& run : runs) {
+            const QRawFont rawFont = run.rawFont();
+            result.resolvedEmSize = resolvedRawFontPixelSize(rawFont, font);
+            if (result.resolvedEmSize > 0.0) {
+                break;
+            }
+        }
+    }
+    const qreal trackingDistance = object.typography.trackingEm * result.resolvedEmSize;
     for (const QGlyphRun& run : runs) {
         const QList<quint32> glyphIndexes = run.glyphIndexes();
         const QList<QPointF> positions = run.positions();
@@ -200,7 +256,7 @@ VectorGeometry GlyphGeometryBuilder::build(const ShapedText& shaped, qreal fallb
 
         QPainterPath glyphPath = glyph.rawFont.pathForGlyph(glyph.glyphIndex);
         QTransform placement;
-        placement.translate(glyph.position.x(), glyph.position.y());
+        Q_UNUSED(placement.translate(glyph.position.x(), glyph.position.y()));
         piece.path = placement.map(glyphPath);
         geometry.pieces.push_back(piece);
 

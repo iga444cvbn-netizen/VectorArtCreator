@@ -63,10 +63,18 @@ QJsonObject WaveEffect::parametersToJson() const
 
 bool WaveEffect::parametersFromJson(const QJsonObject& object, QString* error)
 {
-    Q_UNUSED(error);
-    setParameter(QStringLiteral("amplitude"), object.value(QStringLiteral("amplitude")).toDouble(amplitude));
-    setParameter(QStringLiteral("frequency"), object.value(QStringLiteral("frequency")).toDouble(frequency));
-    setParameter(QStringLiteral("phase"), object.value(QStringLiteral("phase")).toDouble(phase));
+    const bool amplitudeSet = setParameter(
+        QStringLiteral("amplitude"), object.value(QStringLiteral("amplitude")).toDouble(amplitude));
+    const bool frequencySet = setParameter(
+        QStringLiteral("frequency"), object.value(QStringLiteral("frequency")).toDouble(frequency));
+    const bool phaseSet = setParameter(
+        QStringLiteral("phase"), object.value(QStringLiteral("phase")).toDouble(phase));
+    if (!amplitudeSet || !frequencySet || !phaseSet) {
+        if (error) {
+            *error = QStringLiteral("Wave effect contains an unknown parameter.");
+        }
+        return false;
+    }
     return true;
 }
 
