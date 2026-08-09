@@ -1034,9 +1034,13 @@ void EditorController::moveObjectToLayer(const QString& objectId,
         return;
     }
 
-    const QString oldActiveLayerId = m_document.activeLayerId;
     m_selectionModel->selectSingle(objectId);
+    // Moving an object through the Layers tree selects its source object
+    // first. Keep the same invariant for direct callers so undo returns to
+    // the layer containing the selected object.
+    m_document.activeLayerId = sourceLayer->id;
     m_document.activeObjectId = objectId;
+    const QString oldActiveLayerId = m_document.activeLayerId;
     m_undoStack.push(new MoveObjectToLayerCommand(
         m_document,
         objectId,
