@@ -162,113 +162,132 @@ ShapedText TextEngine::shape(const TextObject& object)
     // add a fixed offset based on the resolved raw font's pixel em size.
     const QFont shapedFont = font;
 
-    QTextLayout layout(object.sourceText, shapedFont);
     QTextOption option;
     option.setWrapMode(QTextOption::NoWrap);
-    layout.setTextOption(option);
-    layout.beginLayout();
+    const QFontMetricsF fontMetrics(font);
+    const qreal lineSpacing = qMax<qreal>(0.1, object.typography.lineSpacing);
+    result.resolvedEmSize = resolvedRawFontPixelSize(requestedRawFont, font);
+
+    int ordinal = 0;
+    QVector<int> lineGlyphCounts;
     qreal lineTop = 0.0;
-    while (true) {
-        QTextLine line = layout.createLine();
-        if (!line.isValid()) {
-            break;
+    auto appendLine = [&](const QString& lineText, int sourceStart) {
+        const int lineIndex = result.lineBounds.size();
+        QTextLayout lineLayout(lineText, shapedFont);
+        lineLayout.setTextOption(option);
+        lineLayout.setCacheEnabled(true);
+        lineLayout.beginLayout();
+        QTextLine line = lineLayout.createLine();
+        qreal lineHeight = fontMetrics.lineSpacing();
+        qreal lineWidth = 0.0;
+        if (line.isValid()) {
+            line.setLineWidth(1.0e9);
+            line.setPosition(QPointF(0.0, 0.0));
+            lineWidth = line.naturalTextWidth();
+            lineHeight = line.height();
         }
-        line.setLineWidth(1.0e9);
-        line.setPosition(QPointF(0.0, lineTop));
+        lineLayout.endLayout();
+        lineHeight = qMax<qreal>(1.0, lineHeight);
         result.lineBounds.push_back(QRectF(0.0,
                                            lineTop,
-                                           line.naturalTextWidth(),
-                                           line.height()));
-        lineTop += line.height() * qMax<qreal>(0.1, object.typography.lineSpacing);
-    }
-    layout.endLayout();
+                                           lineWidth,
+                                           lineHeight));
+        lineGlyphCounts.push_back(0);
 
-    result.lineCount = result.lineBounds.size();
-    result.logicalBounds = layout.boundingRect();
-    if (!result.lineBounds.isEmpty()) {
-        QRectF multilineBounds;
-        bool hasLineBounds = false;
-        for (const QRectF& lineBounds : result.lineBounds) {
-            if (!hasLineBounds) {
-                multilineBounds = lineBounds;
-                hasLineBounds = true;
-            } else {
-                multilineBounds = multilineBounds.united(lineBounds);
-            }
+        QList<QGlyphRun> runs;
+        if (line.isValid()) {
+            // The default glyphRuns() overload intentionally omits string
+            // indexes. Request all data because cluster ownership is part of
+            // the vector geometry contract.
+            runs = line.glyphRuns(-1, -1, QTextLayout::RetrieveAll);
         }
-        result.logicalBounds = result.logicalBounds.united(multilineBounds);
-    }
-    int ordinal = 0;
-    int shapedGlyphCount = 0;
-    QVector<int> lineGlyphCounts(result.lineCount, 0);
-    const QList<QGlyphRun> runs = layout.glyphRuns();
-    result.resolvedEmSize = resolvedRawFontPixelSize(requestedRawFont, font);
-    if (result.resolvedEmSize <= 0.0) {
-        for (const QGlyphRun& run : runs) {
-            const QRawFont rawFont = run.rawFont();
-            result.resolvedEmSize = resolvedRawFontPixelSize(rawFont, font);
-            if (result.resolvedEmSize > 0.0) {
-                break;
-            }
-        }
-    }
-    const qreal trackingDistance = object.typography.trackingEm * result.resolvedEmSize;
-    for (const QGlyphRun& run : runs) {
-        const QList<quint32> glyphIndexes = run.glyphIndexes();
-        const QList<QPointF> positions = run.positions();
-        const QList<qsizetype> stringIndexes = run.stringIndexes();
-        const QRawFont rawFont = run.rawFont();
-        if (!rawFont.isValid()) {
-            continue;
-        }
-        const bool canDetectGlyphFallback = requestedRawFont.isValid();
-        const bool usesFallback = result.fontResolutionStatus == FontResolutionStatus::RequestedFont
-            && canDetectGlyphFallback
-            && !samePhysicalFont(rawFont, requestedRawFont);
-        if (usesFallback) {
-            recordFallbackFont(&result, rawFont, glyphIndexes.size());
-        }
-        for (int i = 0; i < glyphIndexes.size(); ++i) {
-            const QPointF rawPosition = positions.value(i, QPointF());
-            int lineIndex = 0;
-            for (int candidate = 0; candidate < result.lineBounds.size(); ++candidate) {
-                if (rawPosition.y() >= result.lineBounds[candidate].top() - 0.5
-                    && rawPosition.y() <= result.lineBounds[candidate].bottom() + 0.5) {
-                    lineIndex = candidate;
+        if (result.resolvedEmSize <= 0.0) {
+            for (const QGlyphRun& run : runs) {
+                result.resolvedEmSize = resolvedRawFontPixelSize(run.rawFont(), font);
+                if (result.resolvedEmSize > 0.0) {
                     break;
                 }
             }
-            if (lineIndex >= lineGlyphCounts.size()) {
-                lineGlyphCounts.resize(lineIndex + 1);
+        }
+        const qreal trackingDistance = object.typography.trackingEm * result.resolvedEmSize;
+        for (const QGlyphRun& run : runs) {
+            const QList<quint32> glyphIndexes = run.glyphIndexes();
+            const QList<QPointF> positions = run.positions();
+            const QList<qsizetype> stringIndexes = run.stringIndexes();
+            const QRawFont rawFont = run.rawFont();
+            if (!rawFont.isValid()) {
+                continue;
             }
-            const int lineOrdinal = lineGlyphCounts[lineIndex]++;
-            const int clusterStart = stringIndexes.size() == glyphIndexes.size()
-                ? qBound<qsizetype>(0, stringIndexes.at(i), object.sourceText.size())
-                : -1;
-            int clusterLength = 1;
-            if (clusterStart >= 0 && i + 1 < stringIndexes.size()) {
-                const qsizetype nextStart = stringIndexes.at(i + 1);
-                if (nextStart > clusterStart) {
-                    clusterLength = qMax(1, static_cast<int>(nextStart - clusterStart));
+            const bool canDetectGlyphFallback = requestedRawFont.isValid();
+            const bool usesFallback = result.fontResolutionStatus == FontResolutionStatus::RequestedFont
+                && canDetectGlyphFallback
+                && !samePhysicalFont(rawFont, requestedRawFont);
+            if (usesFallback) {
+                recordFallbackFont(&result, rawFont, glyphIndexes.size());
+            }
+            for (int i = 0; i < glyphIndexes.size(); ++i) {
+                const QPointF rawPosition = positions.value(i, QPointF());
+                const int lineOrdinal = lineGlyphCounts[lineIndex]++;
+                const bool hasClusterIndexes = stringIndexes.size() == glyphIndexes.size();
+                const qsizetype localClusterStart = hasClusterIndexes
+                    ? qBound<qsizetype>(0, stringIndexes.at(i), lineText.size())
+                    : -1;
+                const int clusterStart = localClusterStart >= 0
+                    ? sourceStart + static_cast<int>(localClusterStart)
+                    : -1;
+                int clusterLength = 1;
+                if (localClusterStart >= 0 && i + 1 < stringIndexes.size()) {
+                    const qsizetype nextStart = stringIndexes.at(i + 1);
+                    if (nextStart > localClusterStart) {
+                        clusterLength = qMax(1, static_cast<int>(nextStart - localClusterStart));
+                    }
+                } else if (localClusterStart >= 0) {
+                    clusterLength = qMax(1, lineText.size() - static_cast<int>(localClusterStart));
                 }
-            } else if (clusterStart >= 0) {
-                clusterLength = qMax(1, object.sourceText.size() - clusterStart);
+                ShapedGlyph glyph;
+                glyph.glyphIndex = glyphIndexes[i];
+                glyph.rawFont = rawFont;
+                const qreal direction = run.isRightToLeft() ? -1.0 : 1.0;
+                glyph.position = rawPosition
+                    + QPointF(direction * trackingDistance * lineOrdinal, lineTop);
+                glyph.ordinal = ordinal++;
+                glyph.clusterStart = clusterStart;
+                glyph.clusterLength = clusterLength;
+                glyph.lineIndex = lineIndex;
+                glyph.usesFallback = usesFallback;
+                result.glyphs.push_back(glyph);
             }
-            ShapedGlyph glyph;
-            glyph.glyphIndex = glyphIndexes[i];
-            glyph.rawFont = rawFont;
-            const qreal direction = run.isRightToLeft() ? -1.0 : 1.0;
-            glyph.position = rawPosition
-                + QPointF(direction * trackingDistance * lineOrdinal, 0.0);
-            glyph.ordinal = ordinal++;
-            glyph.clusterStart = clusterStart;
-            glyph.clusterLength = clusterLength;
-            glyph.lineIndex = lineIndex;
-            glyph.usesFallback = usesFallback;
-            result.glyphs.push_back(glyph);
-            ++shapedGlyphCount;
+        }
+        lineTop += lineHeight * lineSpacing;
+    };
+
+    int sourceStart = 0;
+    if (!object.sourceText.isEmpty()) {
+        while (sourceStart <= object.sourceText.size()) {
+            const int newline = object.sourceText.indexOf(QChar('\n'), sourceStart);
+            const int sourceLength = newline >= 0
+                ? newline - sourceStart
+                : object.sourceText.size() - sourceStart;
+            QString lineText = object.sourceText.mid(sourceStart, sourceLength);
+            if (lineText.endsWith(QChar('\r'))) {
+                lineText.chop(1);
+            }
+            appendLine(lineText, sourceStart);
+            if (newline < 0) {
+                break;
+            }
+            sourceStart = newline + 1;
         }
     }
+
+    result.lineCount = result.lineBounds.size();
+    if (!result.lineBounds.isEmpty()) {
+        result.logicalBounds = result.lineBounds.front();
+        for (int index = 1; index < result.lineBounds.size(); ++index) {
+            result.logicalBounds = result.logicalBounds.united(result.lineBounds.at(index));
+        }
+    }
+    const qreal trackingDistance = object.typography.trackingEm * result.resolvedEmSize;
 
     int trackingPairs = 0;
     for (const int lineGlyphCount : lineGlyphCounts) {
