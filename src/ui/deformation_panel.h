@@ -59,7 +59,6 @@ private:
     qreal m_maskRadius = 40.0;
     qreal m_maskOpacity = 0.7 / 4.0;
     qreal m_maskHardness = 0.5;
-    BrushTarget m_targetBeforeSmooth = BrushTarget::Shape;
 };
 
 } // namespace vt

@@ -28,6 +28,7 @@ signals:
     void fontFamilyChanged(const QString& family);
     void fontStyleChanged(const QString& styleName);
     void fontWeightChanged(int weight);
+    void fontItalicChanged(bool italic);
     void fontSizeChanged(qreal size);
     void trackingChanged(qreal tracking);
     void lineSpacingChanged(qreal lineSpacing);
@@ -44,6 +45,8 @@ private:
     QComboBox* m_familyCombo = nullptr;
     QComboBox* m_styleCombo = nullptr;
     QComboBox* m_weightCombo = nullptr;
+    QPushButton* m_boldButton = nullptr;
+    QPushButton* m_italicButton = nullptr;
     SliderSpinBox* m_fontSizeSlider = nullptr;
     SliderSpinBox* m_trackingSlider = nullptr;
     SliderSpinBox* m_lineSpacingSlider = nullptr;

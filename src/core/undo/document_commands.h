@@ -90,6 +90,20 @@ private:
     int m_newWeight = 0;
 };
 
+class SetFontItalicCommand final : public DocumentCommand {
+public:
+    SetFontItalicCommand(Document& document,
+                         bool oldItalic,
+                         bool newItalic,
+                         DocumentChangeCallback onChanged);
+    void undo() override;
+    void redo() override;
+
+private:
+    bool m_oldItalic = false;
+    bool m_newItalic = false;
+};
+
 class SetFontSizeCommand final : public DocumentCommand {
 public:
     SetFontSizeCommand(Document& document,

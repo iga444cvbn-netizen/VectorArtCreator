@@ -41,7 +41,12 @@ TextObject& DocumentCommand::targetObject()
             return *object;
         }
     }
-    return m_document.primaryTextObject();
+    // Commands are bound to the object ID selected when they were created.
+    // A missing target must never be redirected to whichever object is active
+    // now.  The inert sink keeps legacy reference-returning commands harmless
+    // until they can be retired in favour of pointer-returning commands.
+    static TextObject missingTargetSink;
+    return missingTargetSink;
 }
 
 SetTextCommand::SetTextCommand(Document& document,
@@ -144,6 +149,28 @@ void SetFontWeightCommand::undo()
 void SetFontWeightCommand::redo()
 {
     targetObject().font.weight = m_newWeight;
+    notifyChanged();
+}
+
+SetFontItalicCommand::SetFontItalicCommand(Document& document,
+                                           bool oldItalic,
+                                           bool newItalic,
+                                           DocumentChangeCallback onChanged)
+    : DocumentCommand(document, std::move(onChanged), QStringLiteral("Toggle italic"))
+    , m_oldItalic(oldItalic)
+    , m_newItalic(newItalic)
+{
+}
+
+void SetFontItalicCommand::undo()
+{
+    targetObject().font.italic = m_oldItalic;
+    notifyChanged();
+}
+
+void SetFontItalicCommand::redo()
+{
+    targetObject().font.italic = m_newItalic;
     notifyChanged();
 }
 

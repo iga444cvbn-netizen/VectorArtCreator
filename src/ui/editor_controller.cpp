@@ -432,6 +432,16 @@ void EditorController::setFontWeight(int weight)
         [this] { onCommandChanged(); }));
 }
 
+void EditorController::setFontItalic(bool italic)
+{
+    const TextObject* object = editableActiveObject();
+    if (!object || object->font.italic == italic) {
+        return;
+    }
+    m_undoStack.push(new SetFontItalicCommand(
+        m_document, object->font.italic, italic, [this] { onCommandChanged(); }));
+}
+
 void EditorController::setFontSize(qreal pointSize)
 {
     const qreal boundedSize = qBound<qreal>(1.0, pointSize, 2000.0);

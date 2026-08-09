@@ -4,6 +4,7 @@
 #include <QEvent>
 #include <QFrame>
 #include <QKeyEvent>
+#include <QLineF>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPalette>
@@ -344,6 +345,12 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
                 painter.drawRect(QRectF(handleCenter - QPointF(handle / 2.0, handle / 2.0),
                                         QSizeF(handle, handle)));
             }
+            const QPointF rotationCenter = rotationHandleCenter(*object);
+            const QPointF topCenter = (quad.value(0) + quad.value(1)) * 0.5;
+            painter.setPen(QPen(QColor(90, 176, 255), 1.3 / qMax<qreal>(0.01, m_zoom)));
+            painter.drawLine(topCenter, rotationCenter);
+            painter.setBrush(QColor(32, 52, 72));
+            painter.drawEllipse(rotationCenter, handle * 0.62, handle * 0.62);
         }
     }
     if (m_marqueeSelecting) {
@@ -419,6 +426,11 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
     if (event->button() == Qt::LeftButton
         && (m_tool == EditorTool::Select || m_tool == EditorTool::Move || m_tool == EditorTool::Text)) {
         const QPointF documentPoint = documentPosition(event->position());
+        if (m_tool == EditorTool::Select && beginTransform(documentPoint)) {
+            grabMouse();
+            event->accept();
+            return;
+        }
         const QString hitObjectId = hitTestObject(documentPoint);
         const bool additive = event->modifiers().testFlag(Qt::ShiftModifier);
         if (m_tool == EditorTool::Text) {
@@ -548,6 +560,11 @@ void EditorCanvas::mouseMoveEvent(QMouseEvent* event)
         event->accept();
         return;
     }
+    if (m_transforming) {
+        updateTransformPreview(documentPosition(event->position()));
+        event->accept();
+        return;
+    }
     if (m_brushing) {
         const QPointF position = documentPosition(event->position());
         if (m_brushPositions.isEmpty() || m_brushPositions.last() != position) {
@@ -598,6 +615,20 @@ void EditorCanvas::mouseReleaseEvent(QMouseEvent* event)
         event->accept();
         return;
     }
+    if (m_transforming && event->button() == Qt::LeftButton) {
+        m_transforming = false;
+        releaseMouse();
+        m_sceneGeometry = m_sceneBeforeTransform;
+        if (m_transformPreview.position != m_transformBefore.position
+            || !qFuzzyCompare(m_transformPreview.rotation, m_transformBefore.rotation)
+            || m_transformPreview.scale != m_transformBefore.scale) {
+            emit objectTransformCommitted(m_transformObjectId, m_transformPreview);
+        }
+        m_transformObjectId.clear();
+        update();
+        event->accept();
+        return;
+    }
     if (m_brushing && event->button() == Qt::LeftButton) {
         const QString targetId = m_brushTargetId;
         const DeformationStroke stroke = currentStroke();
@@ -626,10 +657,12 @@ void EditorCanvas::keyPressEvent(QKeyEvent* event)
 {
     if (event->key() == Qt::Key_Escape && !event->isAutoRepeat()) {
         cancelBrushStroke();
-        if (m_marqueeSelecting || m_movingObjects) {
+        if (m_marqueeSelecting || m_movingObjects || m_transforming) {
+            const bool cancelTransform = m_transforming;
             m_marqueeSelecting = false;
             m_movingObjects = false;
-            m_sceneGeometry = m_sceneBeforeMove;
+            m_transforming = false;
+            m_sceneGeometry = cancelTransform ? m_sceneBeforeTransform : m_sceneBeforeMove;
             releaseMouse();
             update();
         }
@@ -864,6 +897,111 @@ QString EditorCanvas::hitTestObject(const QPointF& documentPoint) const
         }
     }
     return {};
+}
+
+QPointF EditorCanvas::rotationHandleCenter(const SceneObjectGeometry& object) const
+{
+    const QPolygonF quad = object.frame.orientedPageQuad();
+    const QPointF topCenter = (quad.value(0) + quad.value(1)) * 0.5;
+    QPointF direction = topCenter - object.frame.localPointToPage(object.frame.pivotLocal);
+    const qreal length = QLineF(QPointF(), direction).length();
+    if (length <= 1.0e-6) {
+        direction = QPointF(0.0, -1.0);
+    } else {
+        direction /= length;
+    }
+    return topCenter + direction * (26.0 / qMax<qreal>(0.01, m_zoom));
+}
+
+int EditorCanvas::scaleHandleAt(const QPointF& documentPoint) const
+{
+    const SceneObjectGeometry* object = m_sceneGeometry.objectById(m_activeObjectId);
+    if (!object || object->locked || !m_selectedObjectIds.contains(m_activeObjectId)) {
+        return -1;
+    }
+    const qreal tolerance = 9.0 / qMax<qreal>(0.01, m_zoom);
+    const QPolygonF quad = object->frame.orientedPageQuad();
+    for (int index = 0; index < quad.size(); ++index) {
+        if (QLineF(documentPoint, quad.at(index)).length() <= tolerance) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+bool EditorCanvas::rotationHandleContains(const QPointF& documentPoint) const
+{
+    const SceneObjectGeometry* object = m_sceneGeometry.objectById(m_activeObjectId);
+    return object && !object->locked && m_selectedObjectIds.contains(m_activeObjectId)
+        && QLineF(documentPoint, rotationHandleCenter(*object)).length()
+            <= 10.0 / qMax<qreal>(0.01, m_zoom);
+}
+
+bool EditorCanvas::beginTransform(const QPointF& documentPoint)
+{
+    const bool rotation = rotationHandleContains(documentPoint);
+    const int handle = rotation ? -1 : scaleHandleAt(documentPoint);
+    if (!rotation && handle < 0) {
+        return false;
+    }
+    const SceneObjectGeometry* object = m_sceneGeometry.objectById(m_activeObjectId);
+    if (!object) {
+        return false;
+    }
+    m_transforming = true;
+    m_rotatingObject = rotation;
+    m_scaleHandle = handle;
+    m_transformObjectId = object->objectId;
+    m_sceneBeforeTransform = m_sceneGeometry;
+    m_transformBefore = object->transform;
+    m_transformPreview = m_transformBefore;
+    m_transformPivotPage = object->frame.localPointToPage(object->frame.pivotLocal);
+    m_transformStartLocal = object->frame.pagePointToLocal(documentPoint);
+    const QPointF vector = documentPoint - m_transformPivotPage;
+    m_transformStartAngle = std::atan2(vector.y(), vector.x());
+    return true;
+}
+
+void EditorCanvas::updateTransformPreview(const QPointF& documentPoint)
+{
+    const SceneObjectGeometry* before = m_sceneBeforeTransform.objectById(m_transformObjectId);
+    if (!before) {
+        return;
+    }
+    ObjectTransform transform = m_transformBefore;
+    if (m_rotatingObject) {
+        const QPointF vector = documentPoint - m_transformPivotPage;
+        const qreal angle = std::atan2(vector.y(), vector.x());
+        constexpr qreal Pi = 3.14159265358979323846;
+        transform.rotation += (angle - m_transformStartAngle) * 180.0 / Pi;
+    } else {
+        const QPointF currentLocal = before->frame.pagePointToLocal(documentPoint);
+        const QPointF pivot = before->frame.pivotLocal;
+        const QPointF initial = m_transformStartLocal - pivot;
+        const QPointF current = currentLocal - pivot;
+        if (std::abs(initial.x()) > 1.0e-5) {
+            transform.scale.setX(m_transformBefore.scale.x() * current.x() / initial.x());
+        }
+        if (std::abs(initial.y()) > 1.0e-5) {
+            transform.scale.setY(m_transformBefore.scale.y() * current.y() / initial.y());
+        }
+        if (qFuzzyIsNull(transform.scale.x())) transform.scale.setX(0.01);
+        if (qFuzzyIsNull(transform.scale.y())) transform.scale.setY(0.01);
+    }
+    m_transformPreview = transform;
+    m_sceneGeometry = m_sceneBeforeTransform;
+    if (SceneObjectGeometry* preview = m_sceneGeometry.objectById(m_transformObjectId)) {
+        const ObjectFrame frame = ObjectFrame::fromTransform(transform,
+                                                              before->frame.baseLocalBounds,
+                                                              before->frame.currentLocalBounds);
+        const QTransform pageDelta = frame.localToPage * before->frame.pageToLocal;
+        preview->geometry.transformAll(pageDelta);
+        preview->frame = frame;
+        preview->visualBounds = frame.pageAabb();
+        preview->transform = transform;
+    }
+    m_sceneGeometry.recomputeBounds();
+    update();
 }
 
 } // namespace vt

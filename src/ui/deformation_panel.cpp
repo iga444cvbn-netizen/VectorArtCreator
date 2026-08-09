@@ -135,11 +135,6 @@ DeformationPanel::DeformationPanel(QWidget* parent)
 void DeformationPanel::setTool(EditorTool tool)
 {
     saveCurrentSettings();
-    const bool leavingSmooth = m_tool == EditorTool::Smooth && tool != EditorTool::Smooth;
-    if (m_tool != EditorTool::Smooth && tool == EditorTool::Smooth) {
-        m_targetBeforeSmooth = m_targetCombo->currentIndex() == 0
-            ? BrushTarget::Glyphs : BrushTarget::Shape;
-    }
     m_tool = tool;
     loadSettingsForCurrentTool();
     m_toolLabel->setText(toolName(tool));
@@ -148,13 +143,6 @@ void DeformationPanel::setTool(EditorTool tool)
     m_targetCombo->setEnabled(brush && tool != EditorTool::Smooth);
     m_maskModeCombo->setVisible(mask);
     m_maskModeCombo->setEnabled(mask);
-    if (tool == EditorTool::Smooth) {
-        const QSignalBlocker blocker(m_targetCombo);
-        m_targetCombo->setCurrentIndex(1);
-    } else if (leavingSmooth) {
-        const QSignalBlocker blocker(m_targetCombo);
-        m_targetCombo->setCurrentIndex(m_targetBeforeSmooth == BrushTarget::Glyphs ? 0 : 1);
-    }
     updateTargetUi();
     emit toolChanged(tool);
     if (m_tool == EditorTool::EffectMask) {
@@ -172,13 +160,10 @@ void DeformationPanel::setNormalBrushSettings(BrushTarget target,
     m_normalRadius = radius;
     m_normalStrength = strength;
     m_normalHardness = hardness;
-    m_targetBeforeSmooth = target;
     if (m_tool != EditorTool::EffectMask) {
         loadSettingsForCurrentTool();
-        if (m_tool != EditorTool::Smooth) {
-            const QSignalBlocker blocker(m_targetCombo);
-            m_targetCombo->setCurrentIndex(target == BrushTarget::Glyphs ? 0 : 1);
-        }
+        const QSignalBlocker blocker(m_targetCombo);
+        m_targetCombo->setCurrentIndex(target == BrushTarget::Glyphs ? 0 : 1);
     }
 }
 
@@ -214,10 +199,6 @@ void DeformationPanel::refresh(const ManualDeformation* deformation)
 
 void DeformationPanel::updateTargetUi()
 {
-    if (m_tool == EditorTool::Smooth) {
-        const QSignalBlocker blocker(m_targetCombo);
-        m_targetCombo->setCurrentIndex(1);
-    }
     m_targetCombo->setEnabled(brushModeFor(m_tool).has_value() && m_tool != EditorTool::Smooth);
 }
 

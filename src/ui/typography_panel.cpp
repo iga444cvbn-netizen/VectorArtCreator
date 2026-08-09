@@ -4,6 +4,7 @@
 #include <QCompleter>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QSignalBlocker>
@@ -43,7 +44,27 @@ TypographyPanel::TypographyPanel(QWidget* parent)
 
     m_weightCombo = new QComboBox(group);
     populateWeights();
-    layout->addRow(QStringLiteral("Weight"), m_weightCombo);
+    m_weightCombo->setToolTip(QStringLiteral("Advanced font weight"));
+    auto* formatting = new QWidget(group);
+    auto* formattingLayout = new QHBoxLayout(formatting);
+    formattingLayout->setContentsMargins(0, 0, 0, 0);
+    m_boldButton = new QPushButton(QStringLiteral("B"), formatting);
+    m_boldButton->setCheckable(true);
+    m_boldButton->setToolTip(QStringLiteral("Bold"));
+    m_italicButton = new QPushButton(QStringLiteral("I"), formatting);
+    m_italicButton->setCheckable(true);
+    m_italicButton->setToolTip(QStringLiteral("Italic"));
+    QFont boldFont = m_boldButton->font();
+    boldFont.setBold(true);
+    m_boldButton->setFont(boldFont);
+    QFont italicFont = m_italicButton->font();
+    italicFont.setItalic(true);
+    m_italicButton->setFont(italicFont);
+    formattingLayout->addWidget(m_boldButton);
+    formattingLayout->addWidget(m_italicButton);
+    formattingLayout->addStretch(1);
+    layout->addRow(QStringLiteral("Format"), formatting);
+    layout->addRow(QStringLiteral("Advanced weight"), m_weightCombo);
 
     m_fontSizeSlider = new SliderSpinBox(group);
     m_fontSizeSlider->setRange(1.0, 2000.0);
@@ -93,6 +114,10 @@ TypographyPanel::TypographyPanel(QWidget* parent)
             emit fontWeightChanged(m_weightCombo->itemData(index).toInt());
         }
     });
+    connect(m_boldButton, &QPushButton::toggled, this, [this](bool enabled) {
+        emit fontWeightChanged(enabled ? static_cast<int>(QFont::Bold) : static_cast<int>(QFont::Normal));
+    });
+    connect(m_italicButton, &QPushButton::toggled, this, &TypographyPanel::fontItalicChanged);
     connect(m_fontSizeSlider, &SliderSpinBox::valueChanged, this,
             [this](double value) { emit fontSizeChanged(value); });
     connect(m_trackingSlider, &SliderSpinBox::valueChanged, this,
@@ -161,6 +186,14 @@ void TypographyPanel::refresh(const TextObject* object)
         }
     }
     {
+        const QSignalBlocker blocker(m_boldButton);
+        m_boldButton->setChecked(object->font.weight >= static_cast<int>(QFont::Bold));
+    }
+    {
+        const QSignalBlocker blocker(m_italicButton);
+        m_italicButton->setChecked(object->font.italic);
+    }
+    {
         const QSignalBlocker blocker(m_fontSizeSlider);
         m_fontSizeSlider->setValue(object->typography.fontSize);
     }
@@ -172,6 +205,9 @@ void TypographyPanel::refresh(const TextObject* object)
         const QSignalBlocker blocker(m_lineSpacingSlider);
         m_lineSpacingSlider->setValue(object->typography.lineSpacing);
     }
+    const bool multiline = object->sourceText.contains(QLatin1Char('\n'));
+    m_lineSpacingSlider->setEnabled(multiline);
+    m_lineSpacingSlider->setToolTip(QStringLiteral("Affects spacing between multiple lines."));
 
     m_fill = object->fill;
     m_fillButton->setStyleSheet(QStringLiteral("QPushButton { background-color: %1; }")

@@ -13,6 +13,7 @@ QFont FontDescriptor::toQFont(qreal pointSize) const
     }
     const int boundedWeight = qBound(0, weight, 1000);
     font.setWeight(static_cast<QFont::Weight>(boundedWeight));
+    font.setItalic(italic);
     return font;
 }
 
@@ -22,6 +23,7 @@ QJsonObject FontDescriptor::toJson() const
     object.insert(QStringLiteral("family"), family);
     object.insert(QStringLiteral("styleName"), styleName);
     object.insert(QStringLiteral("weight"), weight);
+    object.insert(QStringLiteral("italic"), italic);
     object.insert(QStringLiteral("fingerprint"), fingerprint);
     object.insert(QStringLiteral("embeddedResourceId"), embeddedResourceId);
     object.insert(QStringLiteral("embeddingPermission"), embeddingPermission);
@@ -35,6 +37,7 @@ FontDescriptor FontDescriptor::fromJson(const QJsonObject& object)
     descriptor.styleName = object.value(QStringLiteral("styleName")).toString();
     descriptor.weight = object.value(QStringLiteral("weight"))
                             .toInt(static_cast<int>(QFont::Normal));
+    descriptor.italic = object.value(QStringLiteral("italic")).toBool(false);
     descriptor.fingerprint = object.value(QStringLiteral("fingerprint")).toString();
     descriptor.embeddedResourceId = object.value(QStringLiteral("embeddedResourceId")).toString();
     descriptor.embeddingPermission = object.value(QStringLiteral("embeddingPermission")).toString();
@@ -46,6 +49,7 @@ bool FontDescriptor::operator==(const FontDescriptor& other) const
     return family == other.family
         && styleName == other.styleName
         && weight == other.weight
+        && italic == other.italic
         && fingerprint == other.fingerprint
         && embeddedResourceId == other.embeddedResourceId
         && embeddingPermission == other.embeddingPermission;

@@ -15,12 +15,16 @@ struct GeometryPiece {
     int sourceClusterLength = 1;
     int sourceLineIndex = 0;
     QPointF anchor;
+    // Immutable source-layout anchor. Effects may move anchor, but never this
+    // reference used by later effect normalization/order semantics.
     QPointF originalAnchor;
 };
 
 class VectorGeometry {
 public:
     QVector<GeometryPiece> pieces;
+    // Immutable base-local normalization bounds; current geometry bounds are
+    // tracked separately in bounds.
     QRectF referenceBounds;
     QRectF bounds;
     qreal referenceHeight = 1.0;

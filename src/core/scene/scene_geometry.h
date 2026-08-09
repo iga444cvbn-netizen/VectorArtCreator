@@ -17,6 +17,7 @@ struct SceneObjectGeometry {
     QString pageId;
     QString layerId;
     QString sourceText;
+    ObjectTransform transform;
     VectorGeometry geometry;
     QColor fill;
     QRectF visualBounds;

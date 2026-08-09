@@ -59,6 +59,9 @@ QByteArray shapingKey(const TextObject& object)
     key += QByteArrayLiteral("weight=");
     key += QByteArray::number(object.font.weight);
     key += '\0';
+    key += QByteArrayLiteral("italic=");
+    key += object.font.italic ? '1' : '0';
+    key += '\0';
     key += QByteArrayLiteral("fontSize=");
     key += QByteArray::number(object.typography.fontSize, 'g', 16);
     key += '\0';
@@ -90,6 +93,7 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
     evaluated.pageId = pageId;
     evaluated.layerId = layerId;
     evaluated.sourceText = object.sourceText;
+    evaluated.transform = object.transform;
     evaluated.fill = object.fill;
     evaluated.visible = object.visible;
     evaluated.locked = locked;

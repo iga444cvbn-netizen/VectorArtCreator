@@ -64,6 +64,7 @@ public:
     void setFontFamily(const QString& family);
     void setFontStyle(const QString& styleName);
     void setFontWeight(int weight);
+    void setFontItalic(bool italic);
     void setFontSize(qreal pointSize);
     void setTracking(qreal tracking);
     void setLineSpacing(qreal lineSpacing);

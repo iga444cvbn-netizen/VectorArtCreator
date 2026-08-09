@@ -12,6 +12,7 @@
 #include "core/scene/scene_evaluator.h"
 #include "core/scene/object_frame.h"
 #include "core/text/text_engine.h"
+#include "core/undo/document_commands.h"
 #include "ui/deformation_tool_state.h"
 #include "ui/editor_controller.h"
 #include "ui/selection_model.h"
@@ -31,6 +32,7 @@
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTransform>
 #include <QUuid>
 
 #include <algorithm>
@@ -214,6 +216,9 @@ private slots:
     void asyncEvaluationPublishesLatestGeneration();
     void objectFrameRoundTripsPointsAndVectors();
     void deformationBrushModesProduceDistinctGeometry();
+    void geometrySourceMetadataStaysImmutableUnderEffectsAndTransforms();
+    void missingUndoTargetDoesNotRedirectToAnotherObject();
+    void ambiguousLegacyDeformationStrokeIsSkipped();
 };
 
 void CoreTests::projectSerializationRoundTrip()
@@ -453,6 +458,74 @@ void CoreTests::effectOrderingIsDeterministic()
     VectorGeometry changed = baseGeometry(object);
     reordered.apply(changed);
     QVERIFY(geometrySignature(first) != geometrySignature(changed));
+}
+
+void CoreTests::geometrySourceMetadataStaysImmutableUnderEffectsAndTransforms()
+{
+    const VectorGeometry original = rectangleGeometry();
+    VectorGeometry geometry = original;
+    StretchEffect stretch;
+    stretch.horizontal = 1.7;
+    stretch.vertical = 0.6;
+    stretch.apply(geometry, {geometry.referenceBounds, geometry.referenceHeight});
+
+    QTransform pageTransform;
+    pageTransform.translate(80.0, -35.0);
+    pageTransform.rotate(23.0);
+    geometry.transformAll(pageTransform);
+
+    QCOMPARE(geometry.referenceBounds, original.referenceBounds);
+    for (int index = 0; index < geometry.pieces.size(); ++index) {
+        QCOMPARE(geometry.pieces.at(index).originalAnchor,
+                 original.pieces.at(index).originalAnchor);
+    }
+
+    WaveEffect wave;
+    wave.amplitude = 0.2;
+    wave.apply(geometry, {geometry.referenceBounds, geometry.referenceHeight});
+    QCOMPARE(geometry.referenceBounds, original.referenceBounds);
+    for (int index = 0; index < geometry.pieces.size(); ++index) {
+        QCOMPARE(geometry.pieces.at(index).originalAnchor,
+                 original.pieces.at(index).originalAnchor);
+    }
+}
+
+void CoreTests::missingUndoTargetDoesNotRedirectToAnotherObject()
+{
+    Document document;
+    Layer* layer = document.activeLayer();
+    QVERIFY(layer);
+    auto first = std::make_unique<TextObject>();
+    first->id = QStringLiteral("first");
+    first->sourceText = QStringLiteral("A stays unchanged");
+    auto second = std::make_unique<TextObject>();
+    second->id = QStringLiteral("second");
+    second->sourceText = QStringLiteral("B");
+    layer->objects.push_back(std::move(first));
+    layer->objects.push_back(std::move(second));
+    document.activeObjectId = QStringLiteral("second");
+
+    SetTextCommand command(document, QStringLiteral("B"), QStringLiteral("changed"), {});
+    command.redo();
+    QCOMPARE(document.objectById(QStringLiteral("second"))->sourceText, QStringLiteral("changed"));
+    layer->objects.erase(layer->objects.begin() + 1);
+    document.activeObjectId = QStringLiteral("first");
+    command.undo();
+
+    QCOMPARE(document.objectById(QStringLiteral("first"))->sourceText,
+             QStringLiteral("A stays unchanged"));
+}
+
+void CoreTests::ambiguousLegacyDeformationStrokeIsSkipped()
+{
+    const VectorGeometry original = rectangleGeometry();
+    VectorGeometry geometry = original;
+    ManualDeformation deformation;
+    DeformationStroke stroke = pushStroke();
+    stroke.coordinateSpace = DeformationCoordinateSpace::LegacyPageAmbiguous;
+    deformation.strokes.push_back(stroke);
+    deformation.apply(geometry);
+    QCOMPARE(geometrySignature(geometry), geometrySignature(original));
 }
 
 void CoreTests::effectMasksAttenuateGeometry()
