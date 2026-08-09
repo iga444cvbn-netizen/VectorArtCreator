@@ -2,6 +2,7 @@
 
 #include "core/deformation/manual_deformation.h"
 #include "core/geometry/vector_geometry.h"
+#include "ui/deformation_tool_state.h"
 
 #include <QColor>
 #include <QEnterEvent>
@@ -18,6 +19,7 @@ public:
     explicit EditorCanvas(QWidget* parent = nullptr);
 
     void setScene(const VectorGeometry& geometry, const QColor& fill);
+    void setTool(EditorTool tool);
     void setBrushSettings(BrushMode mode,
                           BrushTarget target,
                           qreal radius,
@@ -63,6 +65,7 @@ private:
     QPoint m_lastMousePosition;
     QPoint m_cursorPosition;
     QVector<QPointF> m_brushPositions;
+    EditorTool m_tool = EditorTool::Select;
     BrushMode m_brushMode = BrushMode::Push;
     BrushTarget m_brushTarget = BrushTarget::Shape;
     qreal m_brushRadius = 40.0;

@@ -55,9 +55,16 @@ QJsonObject StretchEffect::parametersToJson() const
 
 bool StretchEffect::parametersFromJson(const QJsonObject& object, QString* error)
 {
-    Q_UNUSED(error);
-    setParameter(QStringLiteral("horizontal"), object.value(QStringLiteral("horizontal")).toDouble(horizontal));
-    setParameter(QStringLiteral("vertical"), object.value(QStringLiteral("vertical")).toDouble(vertical));
+    const bool horizontalSet = setParameter(
+        QStringLiteral("horizontal"), object.value(QStringLiteral("horizontal")).toDouble(horizontal));
+    const bool verticalSet = setParameter(
+        QStringLiteral("vertical"), object.value(QStringLiteral("vertical")).toDouble(vertical));
+    if (!horizontalSet || !verticalSet) {
+        if (error) {
+            *error = QStringLiteral("Stretch effect contains an unknown parameter.");
+        }
+        return false;
+    }
     return true;
 }
 

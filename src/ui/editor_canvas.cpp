@@ -33,6 +33,21 @@ void EditorCanvas::setScene(const VectorGeometry& geometry, const QColor& fill)
     update();
 }
 
+void EditorCanvas::setTool(EditorTool tool)
+{
+    if (m_tool == tool) {
+        updateCursorShape();
+        return;
+    }
+    cancelBrushStroke();
+    m_tool = tool;
+    if (m_tool == EditorTool::Smooth) {
+        m_brushTarget = BrushTarget::Shape;
+    }
+    updateCursorShape();
+    update();
+}
+
 void EditorCanvas::setBrushSettings(BrushMode mode,
                                     BrushTarget target,
                                     qreal radius,
@@ -40,7 +55,7 @@ void EditorCanvas::setBrushSettings(BrushMode mode,
                                     qreal hardness)
 {
     m_brushMode = mode;
-    m_brushTarget = target;
+    m_brushTarget = mode == BrushMode::Smooth ? BrushTarget::Shape : target;
     m_brushRadius = qBound<qreal>(1.0, radius, 100000.0);
     m_brushStrength = qBound<qreal>(0.0, strength, 4.0);
     m_brushHardness = qBound<qreal>(0.0, hardness, 1.0);
@@ -102,7 +117,7 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
                     height() - 12,
                     QStringLiteral("Zoom %1%   •   Wheel to zoom   •   Middle-drag to pan")
                         .arg(qRound(m_zoom * 100.0)));
-    if (m_hasCursorPosition && !m_panning && !m_spacePressed) {
+    if (m_tool != EditorTool::Select && m_hasCursorPosition && !m_panning && !m_spacePressed) {
         const qreal screenRadius = qMax<qreal>(3.0, m_brushRadius * m_zoom);
         painter.setPen(QPen(QColor(55, 85, 150, 210), 1.0));
         painter.setBrush(Qt::NoBrush);
@@ -137,7 +152,7 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
         event->accept();
         return;
     }
-    if (event->button() == Qt::LeftButton) {
+    if (event->button() == Qt::LeftButton && m_tool != EditorTool::Select) {
         m_cursorPosition = event->position().toPoint();
         m_hasCursorPosition = true;
         m_brushing = true;
@@ -266,9 +281,9 @@ QTransform EditorCanvas::viewTransform() const
     const QRectF bounds = m_geometry.bounds.isEmpty() ? m_geometry.referenceBounds : m_geometry.bounds;
     const QPointF center = m_hasViewCenter ? m_viewCenter : bounds.center();
     QTransform transform;
-    transform.translate(width() * 0.5 + m_panOffset.x(), height() * 0.5 + m_panOffset.y());
-    transform.scale(m_zoom, m_zoom);
-    transform.translate(-center.x(), -center.y());
+    Q_UNUSED(transform.translate(width() * 0.5 + m_panOffset.x(), height() * 0.5 + m_panOffset.y()));
+    Q_UNUSED(transform.scale(m_zoom, m_zoom));
+    Q_UNUSED(transform.translate(-center.x(), -center.y()));
     return transform;
 }
 
@@ -319,6 +334,8 @@ void EditorCanvas::updateCursorShape()
         setCursor(Qt::ClosedHandCursor);
     } else if (m_spacePressed) {
         setCursor(Qt::OpenHandCursor);
+    } else if (m_tool == EditorTool::Select) {
+        setCursor(Qt::ArrowCursor);
     } else {
         setCursor(Qt::CrossCursor);
     }

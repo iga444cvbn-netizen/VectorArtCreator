@@ -78,9 +78,16 @@ QJsonObject GlyphJitterEffect::parametersToJson() const
 
 bool GlyphJitterEffect::parametersFromJson(const QJsonObject& object, QString* error)
 {
-    Q_UNUSED(error);
-    setParameter(QStringLiteral("amount"), object.value(QStringLiteral("amount")).toDouble(amount));
-    setParameter(QStringLiteral("seed"), object.value(QStringLiteral("seed")).toDouble(seed));
+    const bool amountSet = setParameter(
+        QStringLiteral("amount"), object.value(QStringLiteral("amount")).toDouble(amount));
+    const bool seedSet = setParameter(
+        QStringLiteral("seed"), object.value(QStringLiteral("seed")).toDouble(seed));
+    if (!amountSet || !seedSet) {
+        if (error) {
+            *error = QStringLiteral("Glyph jitter effect contains an unknown parameter.");
+        }
+        return false;
+    }
     return true;
 }
 

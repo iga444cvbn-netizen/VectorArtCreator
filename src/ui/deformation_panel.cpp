@@ -33,11 +33,12 @@ DeformationPanel::DeformationPanel(QWidget* parent)
     layout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
 
     m_modeCombo = new QComboBox(group);
-    m_modeCombo->addItem(QStringLiteral("Push"));
-    m_modeCombo->addItem(QStringLiteral("Pull"));
-    m_modeCombo->addItem(QStringLiteral("Inflate"));
-    m_modeCombo->addItem(QStringLiteral("Pinch"));
-    m_modeCombo->addItem(QStringLiteral("Smooth"));
+    m_modeCombo->addItem(QStringLiteral("Select"), static_cast<int>(EditorTool::Select));
+    m_modeCombo->addItem(QStringLiteral("Push"), static_cast<int>(EditorTool::Push));
+    m_modeCombo->addItem(QStringLiteral("Pull"), static_cast<int>(EditorTool::Pull));
+    m_modeCombo->addItem(QStringLiteral("Inflate"), static_cast<int>(EditorTool::Inflate));
+    m_modeCombo->addItem(QStringLiteral("Pinch"), static_cast<int>(EditorTool::Pinch));
+    m_modeCombo->addItem(QStringLiteral("Smooth"), static_cast<int>(EditorTool::Smooth));
     layout->addRow(QStringLiteral("Tool"), m_modeCombo);
 
     m_targetCombo = new QComboBox(group);
@@ -45,6 +46,7 @@ DeformationPanel::DeformationPanel(QWidget* parent)
     m_targetCombo->addItem(QStringLiteral("Shape"));
     m_targetCombo->setCurrentIndex(1);
     layout->addRow(QStringLiteral("Target"), m_targetCombo);
+    updateTargetUi();
 
     m_radiusSpin = makeSpin(1.0, 100000.0, 1.0, group);
     m_radiusSpin->setValue(40.0);
@@ -77,11 +79,14 @@ DeformationPanel::DeformationPanel(QWidget* parent)
     connect(m_modeCombo,
             qOverload<int>(&QComboBox::currentIndexChanged),
             this,
-            [this](int) { emitBrushSettings(); });
+            &DeformationPanel::handleToolChanged);
     connect(m_targetCombo,
             qOverload<int>(&QComboBox::currentIndexChanged),
             this,
-            [this](int) { emitBrushSettings(); });
+            [this](int index) {
+                m_toolState.setTarget(index == 0 ? BrushTarget::Glyphs : BrushTarget::Shape);
+                emitBrushSettings();
+            });
     connect(m_radiusSpin, &QDoubleSpinBox::valueChanged, this, [this] { emitBrushSettings(); });
     connect(m_strengthSpin, &QDoubleSpinBox::valueChanged, this, [this] { emitBrushSettings(); });
     connect(m_hardnessSpin, &QDoubleSpinBox::valueChanged, this, [this] { emitBrushSettings(); });
@@ -101,30 +106,35 @@ void DeformationPanel::refresh(const ManualDeformation& deformation)
     m_overallStrengthSpin->setValue(deformation.strength);
 }
 
+void DeformationPanel::handleToolChanged(int index)
+{
+    const EditorTool tool = static_cast<EditorTool>(
+        m_modeCombo->itemData(index).toInt());
+    m_toolState.setTool(tool);
+    {
+        const QSignalBlocker blocker(m_targetCombo);
+        m_targetCombo->setCurrentIndex(m_toolState.target() == BrushTarget::Glyphs ? 0 : 1);
+    }
+    updateTargetUi();
+    emit toolChanged(tool);
+    emitBrushSettings();
+}
+
+void DeformationPanel::updateTargetUi()
+{
+    const QSignalBlocker blocker(m_targetCombo);
+    m_targetCombo->setCurrentIndex(m_toolState.target() == BrushTarget::Glyphs ? 0 : 1);
+    m_targetCombo->setEnabled(m_toolState.targetSelectionEnabled());
+}
+
 void DeformationPanel::emitBrushSettings()
 {
-    BrushMode mode = BrushMode::Push;
-    switch (m_modeCombo->currentIndex()) {
-    case 1:
-        mode = BrushMode::Pull;
-        break;
-    case 2:
-        mode = BrushMode::Inflate;
-        break;
-    case 3:
-        mode = BrushMode::Pinch;
-        break;
-    case 4:
-        mode = BrushMode::Smooth;
-        break;
-    default:
-        break;
+    const std::optional<BrushMode> mode = m_toolState.brushMode();
+    if (!mode.has_value()) {
+        return;
     }
-    const BrushTarget target = m_targetCombo->currentIndex() == 0
-        ? BrushTarget::Glyphs
-        : BrushTarget::Shape;
-    emit brushSettingsChanged(mode,
-                              target,
+    emit brushSettingsChanged(*mode,
+                              m_toolState.target(),
                               m_radiusSpin->value(),
                               m_strengthSpin->value(),
                               m_hardnessSpin->value());

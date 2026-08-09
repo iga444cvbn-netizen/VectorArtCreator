@@ -3,8 +3,8 @@
 Vector Typography Editor is a C++20/Qt 6 desktop editor for editable text,
 vector glyph outlines, nondestructive procedural effects, and persistent vector
 deformation strokes. The current application supports one primary text object,
-Latin/Cyrillic shaping, Wave/Glyph Jitter/Global Stretch, Push/Pull/Inflate/
-Pinch/Smooth deformation, JSON projects and presets, command-based undo/redo,
+Latin/Cyrillic shaping, Wave/Glyph Jitter/Global Stretch, Select/Push/Pull/
+Inflate/Pinch/Smooth deformation, JSON projects and presets, command-based undo/redo,
 and SVG path export.
 
 ## Requirements
@@ -52,11 +52,14 @@ dispatches. After tests pass, `windeployqt` creates and uploads
    em size between shaped glyphs. The UI labels this unit explicitly.
 2. Add effects to the ordered stack and edit their parameters. Effects are
    nondestructive and are reapplied after source text, font, or typography edits.
-3. Use the Manual deformation panel to choose Push, Pull, Inflate, Pinch, or
-   Smooth, select the Glyphs or Shape target, and set radius, strength, and
-   hardness. Drag on the canvas to create one persistent spatial stroke. The
-   radius is in document coordinates, so zoom does not change the affected size.
-   Middle-drag or Space-drag pans safely; Escape cancels an active stroke.
+3. Use the Manual deformation panel to choose `Select`, Push, Pull, Inflate,
+   Pinch, or Smooth. `Select` is an inactive canvas mode: left-click/drag does
+   not create a deformation stroke, the brush cursor is hidden, and middle-drag,
+   Space-drag, and wheel zoom remain available. For brush tools, choose Glyphs or
+   Shape and set radius, strength, and hardness. Smooth is Shape-only and restores
+   the previous target when you switch back to another brush. The radius is in
+   document coordinates, so zoom does not change the affected size. Escape cancels
+   an active stroke.
 4. Toggle stored deformation or adjust Overall strength. Clear removes all
    stored strokes as one undoable operation.
 5. Save the effect stack as a named JSON preset, then apply it to another text.
@@ -65,6 +68,12 @@ dispatches. After tests pass, `windeployqt` creates and uploads
 6. Save/open a `.vtproj` JSON project.
 7. Use **File -> Export SVG**. The SVG contains final `<path>` geometry and does
    not depend on the original font being installed.
+
+Tracking is stored as `trackingEm`. The shaper converts it using the resolved
+`QRawFont::pixelSize()` em metric in the same logical coordinates as the shaped
+glyph positions; the project does not assume that a point size is one layout unit.
+Shape deformation preserves open versus closed QPainterPath subpaths during
+sampling and reconstruction.
 
 All ordinary document edits use focused `QUndoCommand` objects. Text and slider
 updates merge where appropriate, a completed deformation drag is one command,

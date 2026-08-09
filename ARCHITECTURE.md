@@ -30,6 +30,9 @@ TextEngine -> ShapedText -> GlyphGeometryBuilder -> VectorGeometry
   enabled Wave, Glyph Jitter, and Global Stretch effects to a fresh geometry copy.
 * `ManualDeformation` is a later nondestructive geometry stage. It stores spatial
   brush samples and reevaluates them after shaping and every effect-stack change.
+* `DeformationToolState` is UI interaction state, not document state. `Select` is
+  an inactive canvas tool and never creates a `DeformationStroke`; brush tools are
+  mapped to `BrushMode` only when a real stroke is started.
 * `EditorController` owns the document, undo stack, shaped/base geometry cache,
   final geometry, and non-persistent preview stroke. `EditorCanvas` only handles
   viewport/input and emits stroke previews or completed strokes.
@@ -70,10 +73,17 @@ caps serialized work at 4096 samples per stroke.
 `DeformationEvaluator` owns the shared smooth/hard falloff and applies strokes in
 document order. Glyphs mode computes a rigid displacement per geometry piece,
 while Shape mode adaptively flattens each path's line/cubic contours, moves the
-sampled points, and reconstructs separate closed subpaths. Multiple contours and
-holes therefore remain separate vector paths; no raster or bitmap intermediate is
-introduced. The current reconstruction is intentionally conservative polyline
-geometry, with tolerance tied to the vector reference height.
+sampled points, and reconstructs each subpath with its original QPainterPath
+closure semantics. Open polylines stay open; multiple contours and holes remain
+separate vector paths. No raster or bitmap intermediate is introduced. The current
+reconstruction is intentionally conservative polyline geometry, with tolerance
+tied to the vector reference height.
+
+The deformation panel also offers an explicit `Select` tool. In that state the
+canvas keeps normal selection-style interaction and viewport navigation but does
+not show a brush cursor or create a stroke. `Smooth` is shape-only: selecting it
+temporarily forces `BrushTarget::Shape` and restores the previous Glyphs/Shape
+choice when another brush tool is selected.
 
 The editor previews a current stroke by applying it to the already-built scene
 without changing the document. On release, the canvas emits one completed
@@ -86,9 +96,13 @@ overall strength therefore remains nondestructive.
 
 `TypographyProperties::trackingEm` is additional spacing in true em-relative units.
 The shaper first performs normal Qt shaping, then offsets successive shaped glyph
-positions by `trackingEm * fontSize` and adjusts logical width. This avoids treating
-Qt's advance-relative percentage spacing as an em unit and makes tracking scale
-with font size. Projects serialize `trackingEm` plus `trackingUnit: "em"`.
+positions by `trackingEm * resolvedEmSize` and adjusts logical width. The resolved
+em size comes from the selected `QRawFont::pixelSize()` (or the first actual glyph
+run raw font when necessary), so it is in the same logical coordinate system as
+the shaped positions rather than assuming a point size is one layout unit. This
+avoids treating Qt's advance-relative percentage spacing as an em unit and makes
+tracking scale with the resolved font metrics. Projects serialize `trackingEm`
+plus `trackingUnit: "em"`.
 Version 1 absolute `tracking` values are migrated by dividing by the stored font
 size.
 

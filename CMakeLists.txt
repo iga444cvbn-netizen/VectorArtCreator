@@ -47,6 +47,7 @@ endif()
 set(UI_SOURCES
     src/ui/editor_controller.h
     src/ui/editor_controller.cpp
+    src/ui/deformation_tool_state.h
     src/ui/editor_canvas.h
     src/ui/editor_canvas.cpp
     src/ui/typography_panel.h

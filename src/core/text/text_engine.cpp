@@ -8,6 +8,7 @@
 #include <QTextLayout>
 #include <QTextOption>
 
+#include <cmath>
 #include <limits>
 
 namespace vt {
@@ -109,11 +110,10 @@ ShapedText TextEngine::shape(const TextObject& object)
 
     const QFont font = object.font.toQFont(object.typography.fontSize);
     const QRawFont requestedRawFont = QRawFont::fromFont(font);
-    // Qt's PercentageSpacing is relative to the shaped glyph advances. The
+    // Qt's PercentageSpacing is relative to shaped glyph advances. The
     // project model needs true em-relative tracking, so shape normally and
-    // add a fixed font-size-derived offset between shaped glyph positions.
+    // add a fixed offset based on the resolved raw font's pixel em size.
     const QFont shapedFont = font;
-    const qreal trackingDistance = object.typography.trackingEm * object.typography.fontSize;
 
     QTextLayout layout(object.sourceText, shapedFont);
     QTextOption option;
@@ -131,6 +131,20 @@ ShapedText TextEngine::shape(const TextObject& object)
     int ordinal = 0;
     int shapedGlyphCount = 0;
     const QList<QGlyphRun> runs = layout.glyphRuns();
+    if (requestedRawFont.isValid() && std::isfinite(requestedRawFont.pixelSize())
+        && requestedRawFont.pixelSize() > 0.0) {
+        result.resolvedEmSize = requestedRawFont.pixelSize();
+    } else {
+        for (const QGlyphRun& run : runs) {
+            const QRawFont rawFont = run.rawFont();
+            if (rawFont.isValid() && std::isfinite(rawFont.pixelSize())
+                && rawFont.pixelSize() > 0.0) {
+                result.resolvedEmSize = rawFont.pixelSize();
+                break;
+            }
+        }
+    }
+    const qreal trackingDistance = object.typography.trackingEm * result.resolvedEmSize;
     for (const QGlyphRun& run : runs) {
         const QList<quint32> glyphIndexes = run.glyphIndexes();
         const QList<QPointF> positions = run.positions();
@@ -200,7 +214,7 @@ VectorGeometry GlyphGeometryBuilder::build(const ShapedText& shaped, qreal fallb
 
         QPainterPath glyphPath = glyph.rawFont.pathForGlyph(glyph.glyphIndex);
         QTransform placement;
-        placement.translate(glyph.position.x(), glyph.position.y());
+        Q_UNUSED(placement.translate(glyph.position.x(), glyph.position.y()));
         piece.path = placement.map(glyphPath);
         geometry.pieces.push_back(piece);
 

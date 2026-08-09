@@ -9,6 +9,7 @@
 #include "core/presets/preset_manager.h"
 #include "core/serialization/project_serializer.h"
 #include "core/text/text_engine.h"
+#include "ui/deformation_tool_state.h"
 #include "ui/editor_controller.h"
 
 #include <QDir>
@@ -174,7 +175,14 @@ private slots:
     void smoothBrushReducesLocalIrregularity();
     void deformationStrengthAndToggleAreNondestructive();
     void deformationPreservesMultipleContours();
+    void openContourWithSeveralPointsStaysOpen();
+    void closedContourStaysClosed();
+    void mixedContourClosureSurvivesReconstruction();
+    void shapeDeformationPreservesOpenContours();
     void cyrillicShapeDeformationProducesGeometry();
+    void selectToolIsNotADeformationStroke();
+    void smoothToolForcesShapeAndRestoresTarget();
+    void smoothGlyphTargetIsNormalized();
     void controllerUndoRedoAndMerge();
     void controllerEffectCommandsAreGranular();
     void controllerDeformationCommandsAreGranular();
@@ -308,11 +316,13 @@ void CoreTests::unicodePresetStorageIsCollisionSafe()
     PresetManager manager(directory.path());
 
     const QStringList names = {
-        QStringLiteral("Бездна"),
-        QStringLiteral("Паника"),
-        QStringLiteral("Туман"),
-        QStringLiteral("Шёпот"),
+        QStringLiteral("\u0411\u0435\u0437\u0434\u043d\u0430"),
+        QStringLiteral("\u041f\u0430\u043d\u0438\u043a\u0430"),
+        QStringLiteral("\u0422\u0443\u043c\u0430\u043d"),
+        QStringLiteral("\u0428\u0451\u043f\u043e\u0442"),
+        QStringLiteral("\u0418\u0441\u043a\u0430\u0436\u0435\u043d\u0438\u0435 \u0440\u0435\u0430\u043b\u044c\u043d\u043e\u0441\u0442\u0438"),
     };
+    QCOMPARE(names.at(2).size(), names.at(3).size());
     for (const QString& name : names) {
         Preset preset;
         preset.name = name;
@@ -345,14 +355,15 @@ void CoreTests::unicodePresetStorageIsCollisionSafe()
 
     Preset loadedByName;
     QString error;
-    QVERIFY2(manager.loadPreset(QStringLiteral("Бездна"), &loadedByName, &error), qPrintable(error));
-    QCOMPARE(loadedByName.name, QStringLiteral("Бездна"));
-    QVERIFY2(manager.deletePreset(QStringLiteral("Паника"), &error), qPrintable(error));
+    QVERIFY2(manager.loadPreset(names.at(0), &loadedByName, &error), qPrintable(error));
+    QCOMPARE(loadedByName.name, names.at(0));
+    QVERIFY2(manager.deletePreset(names.at(1), &error), qPrintable(error));
     QVERIFY2(manager.deletePresetById(loadedByName.id, &error), qPrintable(error));
-    QVERIFY(!manager.listPresetNames().contains(QStringLiteral("Паника")));
-    QVERIFY(!manager.listPresetNames().contains(QStringLiteral("Бездна")));
-    QVERIFY(manager.listPresetNames().contains(QStringLiteral("Туман")));
-    QVERIFY(manager.listPresetNames().contains(QStringLiteral("Шёпот")));
+    QVERIFY(!manager.listPresetNames().contains(names.at(0)));
+    QVERIFY(!manager.listPresetNames().contains(names.at(1)));
+    QVERIFY(manager.listPresetNames().contains(names.at(2)));
+    QVERIFY(manager.listPresetNames().contains(names.at(3)));
+    QVERIFY(manager.listPresetNames().contains(names.at(4)));
 }
 
 void CoreTests::deterministicJitter()
@@ -471,6 +482,7 @@ void CoreTests::cyrillicTextProducesGeometry()
     }
 
     TextObject object = configuredText(QStringLiteral("Привет мир"));
+    object.sourceText = QStringLiteral("\u041f\u0440\u0438\u0432\u0435\u0442 \u043c\u0438\u0440");
     object.font.family = family;
     object.font.styleName = QFontDatabase::styles(family).value(0);
     TextEngine engine;
@@ -496,6 +508,7 @@ void CoreTests::glyphFallbackIsReportedWhenAvailable()
     }
 
     TextObject object = configuredText(QStringLiteral("Привет мир"));
+    object.sourceText = QStringLiteral("\u041f\u0440\u0438\u0432\u0435\u0442 \u043c\u0438\u0440");
     object.font.family = fallbackFamily;
     object.font.styleName = QFontDatabase::styles(fallbackFamily).value(0);
     TextEngine engine;
@@ -548,8 +561,25 @@ void CoreTests::trackingScalesWithFontSize()
     const ShapedText largeShape = engine.shape(large);
     QVERIFY(smallShape.logicalBounds.width() > 0.0);
     QVERIFY(largeShape.logicalBounds.width() > smallShape.logicalBounds.width());
+    QVERIFY(smallShape.resolvedEmSize > 0.0);
+    QVERIFY(largeShape.resolvedEmSize > smallShape.resolvedEmSize);
     const qreal ratio = largeShape.logicalBounds.width() / smallShape.logicalBounds.width();
     QVERIFY2(std::abs(ratio - 2.0) < 0.15, qPrintable(QStringLiteral("tracking ratio was %1").arg(ratio)));
+
+    TextObject smallUntracked = small;
+    smallUntracked.typography.trackingEm = 0.0;
+    TextObject largeUntracked = large;
+    largeUntracked.typography.trackingEm = 0.0;
+    const qreal smallDelta = smallShape.logicalBounds.width()
+        - engine.shape(smallUntracked).logicalBounds.width();
+    const qreal largeDelta = largeShape.logicalBounds.width()
+        - engine.shape(largeUntracked).logicalBounds.width();
+    const qreal emRatio = largeShape.resolvedEmSize / smallShape.resolvedEmSize;
+    QVERIFY(smallDelta > 0.0);
+    QVERIFY2(std::abs((largeDelta / smallDelta) - emRatio) < 0.02,
+             qPrintable(QStringLiteral("tracking/em ratio was %1/%2")
+                            .arg(largeDelta / smallDelta)
+                            .arg(emRatio)));
 }
 
 void CoreTests::trackingUsesTrueEmDistance()
@@ -565,15 +595,22 @@ void CoreTests::trackingUsesTrueEmDistance()
     wideUntracked.typography.trackingEm = 0.0;
 
     TextEngine engine;
-    const qreal narrowDelta = engine.shape(narrow).logicalBounds.width()
-        - engine.shape(narrowUntracked).logicalBounds.width();
-    const qreal wideDelta = engine.shape(wide).logicalBounds.width()
-        - engine.shape(wideUntracked).logicalBounds.width();
+    const ShapedText narrowShape = engine.shape(narrow);
+    const ShapedText narrowUntrackedShape = engine.shape(narrowUntracked);
+    const ShapedText wideShape = engine.shape(wide);
+    const ShapedText wideUntrackedShape = engine.shape(wideUntracked);
+    QVERIFY(narrowShape.resolvedEmSize > 0.0);
+    QVERIFY(wideShape.resolvedEmSize > 0.0);
+    const qreal narrowDelta = narrowShape.logicalBounds.width()
+        - narrowUntrackedShape.logicalBounds.width();
+    const qreal wideDelta = wideShape.logicalBounds.width()
+        - wideUntrackedShape.logicalBounds.width();
 
-    const qreal expected = 3.0 * narrow.typography.fontSize * narrow.typography.trackingEm;
-    QVERIFY2(std::abs(narrowDelta - expected) < 0.01,
+    const qreal expectedNarrow = 3.0 * narrowShape.resolvedEmSize * narrow.typography.trackingEm;
+    const qreal expectedWide = 3.0 * wideShape.resolvedEmSize * wide.typography.trackingEm;
+    QVERIFY2(std::abs(narrowDelta - expectedNarrow) < 0.01,
              qPrintable(QStringLiteral("narrow tracking delta was %1").arg(narrowDelta)));
-    QVERIFY2(std::abs(wideDelta - expected) < 0.01,
+    QVERIFY2(std::abs(wideDelta - expectedWide) < 0.01,
              qPrintable(QStringLiteral("wide tracking delta was %1").arg(wideDelta)));
     QVERIFY(std::abs(narrowDelta - wideDelta) < 0.01);
 }
@@ -802,6 +839,129 @@ void CoreTests::deformationPreservesMultipleContours()
     deformation.strokes.push_back(pushStroke());
     deformation.apply(geometry);
     QCOMPARE(ContourSampler::samplePath(geometry.pieces.first().path, 0.1).size(), 2);
+}
+
+void CoreTests::openContourWithSeveralPointsStaysOpen()
+{
+    QPainterPath path;
+    path.moveTo(0.0, 0.0);
+    path.lineTo(20.0, 0.0);
+    path.lineTo(25.0, 10.0);
+    path.lineTo(40.0, 7.0);
+
+    const QVector<SampledContour> sampled = ContourSampler::samplePath(path, 0.1);
+    QCOMPARE(sampled.size(), 1);
+    QVERIFY(!sampled.first().closed);
+
+    const QPainterPath rebuilt = ContourSampler::reconstructPath(sampled, path.fillRule(), 0.05);
+    const QVector<SampledContour> rebuiltContours = ContourSampler::samplePath(rebuilt, 0.1);
+    QCOMPARE(rebuiltContours.size(), 1);
+    QVERIFY(!rebuiltContours.first().closed);
+}
+
+void CoreTests::closedContourStaysClosed()
+{
+    QPainterPath path;
+    path.addRect(QRectF(0.0, 0.0, 40.0, 30.0));
+
+    const QVector<SampledContour> sampled = ContourSampler::samplePath(path, 0.1);
+    QCOMPARE(sampled.size(), 1);
+    QVERIFY(sampled.first().closed);
+
+    const QPainterPath rebuilt = ContourSampler::reconstructPath(sampled, path.fillRule(), 0.05);
+    const QVector<SampledContour> rebuiltContours = ContourSampler::samplePath(rebuilt, 0.1);
+    QCOMPARE(rebuiltContours.size(), 1);
+    QVERIFY(rebuiltContours.first().closed);
+}
+
+void CoreTests::mixedContourClosureSurvivesReconstruction()
+{
+    QPainterPath path;
+    path.addRect(QRectF(0.0, 0.0, 40.0, 30.0));
+    path.moveTo(70.0, 0.0);
+    path.lineTo(90.0, 12.0);
+    path.lineTo(105.0, 4.0);
+    path.lineTo(125.0, 18.0);
+
+    const QVector<SampledContour> sampled = ContourSampler::samplePath(path, 0.1);
+    QCOMPARE(sampled.size(), 2);
+    QVERIFY(sampled.at(0).closed);
+    QVERIFY(!sampled.at(1).closed);
+
+    const QPainterPath rebuilt = ContourSampler::reconstructPath(sampled, path.fillRule(), 0.05);
+    const QVector<SampledContour> rebuiltContours = ContourSampler::samplePath(rebuilt, 0.1);
+    QCOMPARE(rebuiltContours.size(), 2);
+    QVERIFY(rebuiltContours.at(0).closed);
+    QVERIFY(!rebuiltContours.at(1).closed);
+}
+
+void CoreTests::shapeDeformationPreservesOpenContours()
+{
+    QPainterPath path;
+    path.moveTo(0.0, 0.0);
+    path.lineTo(20.0, 0.0);
+    path.lineTo(25.0, 10.0);
+    path.lineTo(40.0, 7.0);
+
+    VectorGeometry geometry;
+    GeometryPiece piece;
+    piece.path = path;
+    piece.anchor = QPointF(20.0, 5.0);
+    piece.originalAnchor = piece.anchor;
+    geometry.pieces.push_back(piece);
+    geometry.setReferenceBounds(path.boundingRect());
+    geometry.recomputeBounds();
+
+    ManualDeformation deformation;
+    deformation.strokes.push_back(pushStroke(BrushTarget::Shape));
+    deformation.apply(geometry);
+
+    const QVector<SampledContour> contours = ContourSampler::samplePath(
+        geometry.pieces.first().path, 0.1);
+    QCOMPARE(contours.size(), 1);
+    QVERIFY(!contours.first().closed);
+}
+
+void CoreTests::selectToolIsNotADeformationStroke()
+{
+    DeformationToolState state;
+    QCOMPARE(static_cast<int>(state.tool()), static_cast<int>(EditorTool::Select));
+    QVERIFY(!state.acceptsCanvasStroke());
+    QVERIFY(!state.brushMode().has_value());
+    QVERIFY(!state.targetSelectionEnabled());
+
+    state.setTool(EditorTool::Push);
+    QVERIFY(state.acceptsCanvasStroke());
+    QVERIFY(state.brushMode().has_value());
+}
+
+void CoreTests::smoothToolForcesShapeAndRestoresTarget()
+{
+    DeformationToolState state;
+    state.setTool(EditorTool::Push);
+    state.setTarget(BrushTarget::Glyphs);
+    state.setTool(EditorTool::Smooth);
+
+    QCOMPARE(static_cast<int>(state.target()), static_cast<int>(BrushTarget::Shape));
+    QVERIFY(!state.targetSelectionEnabled());
+    QCOMPARE(static_cast<int>(state.brushMode().value()), static_cast<int>(BrushMode::Smooth));
+
+    state.setTool(EditorTool::Push);
+    QCOMPARE(static_cast<int>(state.target()), static_cast<int>(BrushTarget::Glyphs));
+    QVERIFY(state.targetSelectionEnabled());
+}
+
+void CoreTests::smoothGlyphTargetIsNormalized()
+{
+    ManualDeformation source;
+    DeformationStroke stroke = pushStroke(BrushTarget::Glyphs);
+    stroke.mode = BrushMode::Smooth;
+    source.strokes.push_back(stroke);
+
+    ManualDeformation restored;
+    QString error;
+    QVERIFY2(ManualDeformation::fromJson(source.toJson(), &restored, &error), qPrintable(error));
+    QCOMPARE(static_cast<int>(restored.strokes.first().target), static_cast<int>(BrushTarget::Shape));
 }
 
 void CoreTests::cyrillicShapeDeformationProducesGeometry()

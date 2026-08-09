@@ -39,6 +39,10 @@ struct FallbackFontUsage {
 struct ShapedText {
     QVector<ShapedGlyph> glyphs;
     QRectF logicalBounds;
+    // The resolved em size in the same logical pixel coordinates used by
+    // QTextLayout/QGlyphRun positions. It is exposed for diagnostics and
+    // deterministic tests of relative tracking.
+    qreal resolvedEmSize = 0.0;
     bool requestedFontAvailable = true;
     FontResolutionStatus fontResolutionStatus = FontResolutionStatus::RequestedFont;
     QVector<FallbackFontUsage> fallbackFonts;
