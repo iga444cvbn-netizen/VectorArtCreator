@@ -712,8 +712,9 @@ void CoreTests::pullMovesPointsTowardCenter()
     ManualDeformation pull;
     pull.strokes.push_back(stroke);
     VectorGeometry pulled = rectangleGeometry();
+    const qreal originalLeft = pulled.pieces.at(0).path.boundingRect().left();
     pull.apply(pulled);
-    QVERIFY(pulled.pieces.at(0).anchor.x() > 10.0);
+    QVERIFY(pulled.pieces.at(0).path.boundingRect().left() > originalLeft);
 }
 
 void CoreTests::smoothBrushReducesLocalIrregularity()
