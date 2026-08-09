@@ -144,12 +144,10 @@ void DeformationPanel::setTool(EditorTool tool)
     m_maskModeCombo->setVisible(mask);
     m_maskModeCombo->setEnabled(mask);
     updateTargetUi();
-    emit toolChanged(tool);
-    if (m_tool == EditorTool::EffectMask) {
-        emitMaskBrushSettings();
-    } else {
-        emitBrushSettings();
-    }
+    // Tool selection is owned by EditorController.  Do not echo a panel
+    // refresh back as brush settings: while entering Smooth the combo still
+    // displays its old value, which would overwrite the controller's saved
+    // pre-Smooth target before it publishes the authoritative Shape target.
 }
 
 void DeformationPanel::setNormalBrushSettings(BrushTarget target,
