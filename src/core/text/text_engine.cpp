@@ -37,10 +37,16 @@ void recordFallbackFont(ShapedText* result, const QRawFont& rawFont, int glyphCo
             return;
         }
     }
-    // Keep the actual physical font on the diagnostic record. The UI can
-    // resolve/display its name in a context where the platform backend allows
-    // that query; shaping itself must remain safe on Windows CI.
-    result->fallbackFonts.push_back({rawFont, QStringLiteral("Qt fallback font"), {}, glyphCount});
+    // Keep the actual physical raw-font handle and glyph count. Some Qt 6
+    // DirectWrite builds crash while asking a glyph-run raw font for its name,
+    // so the UI-facing label is deliberately conservative here. A later
+    // diagnostic layer can resolve the handle through a safe font database
+    // query without making the shaping path depend on a platform name-table
+    // accessor.
+    result->fallbackFonts.push_back({rawFont,
+                                     QStringLiteral("Qt fallback font"),
+                                     {},
+                                     glyphCount});
 }
 
 QString fallbackWarning(const ShapedText& result)
@@ -103,8 +109,11 @@ ShapedText TextEngine::shape(const TextObject& object)
 
     const QFont font = object.font.toQFont(object.typography.fontSize);
     const QRawFont requestedRawFont = QRawFont::fromFont(font);
-    QFont shapedFont = font;
-    shapedFont.setLetterSpacing(QFont::PercentageSpacing, 100.0 + object.typography.trackingEm * 100.0);
+    // Qt's PercentageSpacing is relative to the shaped glyph advances. The
+    // project model needs true em-relative tracking, so shape normally and
+    // add a fixed font-size-derived offset between shaped glyph positions.
+    const QFont shapedFont = font;
+    const qreal trackingDistance = object.typography.trackingEm * object.typography.fontSize;
 
     QTextLayout layout(object.sourceText, shapedFont);
     QTextOption option;
@@ -120,6 +129,7 @@ ShapedText TextEngine::shape(const TextObject& object)
 
     result.logicalBounds = layout.boundingRect();
     int ordinal = 0;
+    int shapedGlyphCount = 0;
     const QList<QGlyphRun> runs = layout.glyphRuns();
     for (const QGlyphRun& run : runs) {
         const QList<quint32> glyphIndexes = run.glyphIndexes();
@@ -139,11 +149,20 @@ ShapedText TextEngine::shape(const TextObject& object)
             ShapedGlyph glyph;
             glyph.glyphIndex = glyphIndexes[i];
             glyph.rawFont = rawFont;
-            glyph.position = positions.value(i, QPointF());
+            const qreal direction = run.isRightToLeft() ? -1.0 : 1.0;
+            glyph.position = positions.value(i, QPointF())
+                + QPointF(direction * trackingDistance * shapedGlyphCount, 0.0);
             glyph.ordinal = ordinal++;
             glyph.usesFallback = usesFallback;
             result.glyphs.push_back(glyph);
+            ++shapedGlyphCount;
         }
+    }
+
+    if (shapedGlyphCount > 1 && !qFuzzyIsNull(trackingDistance)) {
+        const qreal adjustedWidth = result.logicalBounds.width()
+            + trackingDistance * (shapedGlyphCount - 1);
+        result.logicalBounds.setWidth(qMax<qreal>(0.0, adjustedWidth));
     }
 
     if (result.fontResolutionStatus == FontResolutionStatus::RequestedFont

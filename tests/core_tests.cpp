@@ -1,4 +1,6 @@
 #include "core/document/document.h"
+#include "core/deformation/contour_sampler.h"
+#include "core/deformation/manual_deformation.h"
 #include "core/effects/glyph_jitter_effect.h"
 #include "core/effects/stretch_effect.h"
 #include "core/effects/wave_effect.h"
@@ -16,6 +18,7 @@
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QPainterPath>
 #include <QSet>
 #include <QTemporaryDir>
 #include <QTest>
@@ -93,6 +96,52 @@ double effectParameterValue(const Effect& effect, const QString& id)
     return std::numeric_limits<double>::quiet_NaN();
 }
 
+VectorGeometry rectangleGeometry()
+{
+    VectorGeometry geometry;
+    GeometryPiece first;
+    first.path.addRect(QRectF(0.0, 0.0, 20.0, 20.0));
+    first.anchor = QPointF(10.0, 10.0);
+    first.originalAnchor = first.anchor;
+    first.sourceGlyphIndex = 0;
+    geometry.pieces.push_back(first);
+
+    GeometryPiece second;
+    second.path.addRect(QRectF(40.0, 0.0, 20.0, 20.0));
+    second.anchor = QPointF(50.0, 10.0);
+    second.originalAnchor = second.anchor;
+    second.sourceGlyphIndex = 1;
+    geometry.pieces.push_back(second);
+    geometry.setReferenceBounds(QRectF(0.0, 0.0, 60.0, 20.0));
+    geometry.recomputeBounds();
+    return geometry;
+}
+
+DeformationStroke pushStroke(BrushTarget target = BrushTarget::Shape)
+{
+    DeformationStroke stroke;
+    stroke.mode = BrushMode::Push;
+    stroke.target = target;
+    stroke.radius = 32.0;
+    stroke.strength = 0.8;
+    stroke.hardness = 0.5;
+    stroke.samples = {
+        {QPointF(2.0, 10.0), QPointF(), 1.0},
+        {QPointF(12.0, 10.0), QPointF(10.0, 0.0), 1.0},
+        {QPointF(22.0, 10.0), QPointF(10.0, 0.0), 1.0},
+    };
+    return stroke;
+}
+
+QPointF firstPathElement(const QPainterPath& path)
+{
+    if (path.elementCount() == 0) {
+        return {};
+    }
+    const QPainterPath::Element element = path.elementAt(0);
+    return QPointF(element.x, element.y);
+}
+
 } // namespace
 
 class CoreTests final : public QObject {
@@ -101,6 +150,7 @@ class CoreTests final : public QObject {
 private slots:
     void projectSerializationRoundTrip();
     void projectV1TrackingMigrates();
+    void projectV2DeformationDefaults();
     void presetSerializationRoundTrip();
     void unicodePresetStorageIsCollisionSafe();
     void deterministicJitter();
@@ -112,8 +162,22 @@ private slots:
     void glyphFallbackIsReportedWhenAvailable();
     void missingFontStatesAreDistinguished();
     void trackingScalesWithFontSize();
+    void trackingUsesTrueEmDistance();
+    void deformationSerializationRoundTrip();
+    void deformationResamplingIsBoundedAndDeterministic();
+    void pushStrokeIsDeterministic();
+    void glyphPushMovesRigidUnits();
+    void shapePushBendsContours();
+    void inflateMovesPointsOutward();
+    void pinchMovesPointsInward();
+    void pullMovesPointsTowardCenter();
+    void smoothBrushReducesLocalIrregularity();
+    void deformationStrengthAndToggleAreNondestructive();
+    void deformationPreservesMultipleContours();
+    void cyrillicShapeDeformationProducesGeometry();
     void controllerUndoRedoAndMerge();
     void controllerEffectCommandsAreGranular();
+    void controllerDeformationCommandsAreGranular();
     void controllerCleanStateFollowsUndoStack();
 };
 
@@ -189,6 +253,27 @@ void CoreTests::projectV1TrackingMigrates()
     QVERIFY2(error.isEmpty(), qPrintable(error));
     QCOMPARE(migrated.formatVersion, Document::CurrentFormatVersion);
     QCOMPARE(migrated.primaryTextObject().typography.trackingEm, 0.1);
+}
+
+void CoreTests::projectV2DeformationDefaults()
+{
+    Document original;
+    original.primaryTextObject() = configuredText(QStringLiteral("Phase 1"));
+    QJsonObject root = ProjectSerializer::toJson(original).object();
+    root.insert(QStringLiteral("formatVersion"), 2);
+    QJsonArray objects = root.value(QStringLiteral("objects")).toArray();
+    QJsonObject textObject = objects.at(0).toObject();
+    textObject.remove(QStringLiteral("deformation"));
+    objects.replace(0, textObject);
+    root.insert(QStringLiteral("objects"), objects);
+
+    Document migrated;
+    QString error;
+    QVERIFY2(ProjectSerializer::fromJson(QJsonDocument(root), &migrated, &error), qPrintable(error));
+    QCOMPARE(migrated.formatVersion, Document::CurrentFormatVersion);
+    QVERIFY(migrated.primaryTextObject().deformation.enabled);
+    QCOMPARE(migrated.primaryTextObject().deformation.strength, 1.0);
+    QVERIFY(migrated.primaryTextObject().deformation.strokes.isEmpty());
 }
 
 void CoreTests::presetSerializationRoundTrip()
@@ -328,9 +413,11 @@ void CoreTests::textReplacementPreservesEffects()
     Document document;
     document.primaryTextObject().effects.append(std::make_unique<WaveEffect>());
     document.primaryTextObject().effects.append(std::make_unique<GlyphJitterEffect>());
+    document.primaryTextObject().deformation.strokes.push_back(pushStroke());
     const QJsonArray before = document.primaryTextObject().effects.toJson();
     document.primaryTextObject().sourceText = QStringLiteral("Другой текст");
     QCOMPARE(document.primaryTextObject().effects.toJson(), before);
+    QCOMPARE(document.primaryTextObject().deformation.strokes.size(), 1);
 }
 
 void CoreTests::presetApplicationClonesEffects()
@@ -355,6 +442,9 @@ void CoreTests::svgExportContainsPaths()
     Document document;
     document.primaryTextObject() = object;
     VectorGeometry geometry = baseGeometry(object);
+    ManualDeformation deformation;
+    deformation.strokes.push_back(pushStroke());
+    deformation.apply(geometry);
     SvgExporter exporter;
 
     QTemporaryDir directory;
@@ -462,6 +552,281 @@ void CoreTests::trackingScalesWithFontSize()
     QVERIFY2(std::abs(ratio - 2.0) < 0.15, qPrintable(QStringLiteral("tracking ratio was %1").arg(ratio)));
 }
 
+void CoreTests::trackingUsesTrueEmDistance()
+{
+    TextObject narrow = configuredText(QStringLiteral("iiii"));
+    narrow.typography.trackingEm = 0.1;
+    TextObject narrowUntracked = narrow;
+    narrowUntracked.typography.trackingEm = 0.0;
+
+    TextObject wide = configuredText(QStringLiteral("WWWW"));
+    wide.typography.trackingEm = 0.1;
+    TextObject wideUntracked = wide;
+    wideUntracked.typography.trackingEm = 0.0;
+
+    TextEngine engine;
+    const qreal narrowDelta = engine.shape(narrow).logicalBounds.width()
+        - engine.shape(narrowUntracked).logicalBounds.width();
+    const qreal wideDelta = engine.shape(wide).logicalBounds.width()
+        - engine.shape(wideUntracked).logicalBounds.width();
+
+    const qreal expected = 3.0 * narrow.typography.fontSize * narrow.typography.trackingEm;
+    QVERIFY2(std::abs(narrowDelta - expected) < 0.01,
+             qPrintable(QStringLiteral("narrow tracking delta was %1").arg(narrowDelta)));
+    QVERIFY2(std::abs(wideDelta - expected) < 0.01,
+             qPrintable(QStringLiteral("wide tracking delta was %1").arg(wideDelta)));
+    QVERIFY(std::abs(narrowDelta - wideDelta) < 0.01);
+}
+
+void CoreTests::deformationSerializationRoundTrip()
+{
+    Document original;
+    original.primaryTextObject() = configuredText(QStringLiteral("Deform me"));
+    original.primaryTextObject().deformation.enabled = false;
+    original.primaryTextObject().deformation.strength = 1.35;
+    original.primaryTextObject().deformation.strokes.push_back(pushStroke(BrushTarget::Shape));
+
+    const QJsonObject textObject = ProjectSerializer::toJson(original)
+                                       .object()
+                                       .value(QStringLiteral("objects"))
+                                       .toArray()
+                                       .at(0)
+                                       .toObject();
+    QVERIFY(textObject.value(QStringLiteral("deformation")).isObject());
+    QCOMPARE(ProjectSerializer::toJson(original).object().value(QStringLiteral("formatVersion")).toInt(), 3);
+
+    Document restored;
+    QString error;
+    QVERIFY2(ProjectSerializer::fromJson(ProjectSerializer::toJson(original), &restored, &error),
+             qPrintable(error));
+    const ManualDeformation& deformation = restored.primaryTextObject().deformation;
+    QCOMPARE(deformation.enabled, false);
+    QCOMPARE(deformation.strength, 1.35);
+    QCOMPARE(deformation.strokes.size(), 1);
+    QCOMPARE(deformation.strokes.first().mode, BrushMode::Push);
+    QCOMPARE(deformation.strokes.first().target, BrushTarget::Shape);
+    QCOMPARE(deformation.strokes.first().samples.size(), 3);
+    QCOMPARE(deformation.strokes.first().samples.at(1).delta, QPointF(10.0, 0.0));
+}
+
+void CoreTests::deformationResamplingIsBoundedAndDeterministic()
+{
+    QVector<QPointF> positions;
+    positions.reserve(10000);
+    for (int index = 0; index < 10000; ++index) {
+        positions.push_back(QPointF(index * 0.25, std::sin(index * 0.05)));
+    }
+
+    const QVector<BrushSample> first = resampleBrushStroke(positions, 0.5, 1.0, 64);
+    const QVector<BrushSample> second = resampleBrushStroke(positions, 0.5, 1.0, 64);
+    QVERIFY(!first.isEmpty());
+    QVERIFY(first.size() <= 64);
+    QCOMPARE(first, second);
+    QCOMPARE(first.first().position, positions.first());
+    QCOMPARE(first.last().position, positions.last());
+}
+
+void CoreTests::pushStrokeIsDeterministic()
+{
+    const VectorGeometry original = rectangleGeometry();
+    ManualDeformation deformation;
+    deformation.strokes.push_back(pushStroke());
+
+    VectorGeometry first = original;
+    VectorGeometry second = original;
+    deformation.apply(first);
+    deformation.apply(second);
+    QVERIFY(geometrySignature(first) != geometrySignature(original));
+    QCOMPARE(geometrySignature(first), geometrySignature(second));
+}
+
+void CoreTests::glyphPushMovesRigidUnits()
+{
+    const VectorGeometry original = rectangleGeometry();
+    ManualDeformation deformation;
+    deformation.strokes.push_back(pushStroke(BrushTarget::Glyphs));
+
+    VectorGeometry deformed = original;
+    deformation.apply(deformed);
+    const QPointF shift = deformed.pieces.at(0).anchor - original.pieces.at(0).anchor;
+    QVERIFY(QLineF(QPointF(), shift).length() > 0.01);
+
+    const QPainterPath& beforePath = original.pieces.at(0).path;
+    const QPainterPath& afterPath = deformed.pieces.at(0).path;
+    QCOMPARE(beforePath.elementCount(), afterPath.elementCount());
+    for (int index = 0; index < beforePath.elementCount(); ++index) {
+        const QPainterPath::Element before = beforePath.elementAt(index);
+        const QPainterPath::Element after = afterPath.elementAt(index);
+        QCOMPARE(QPointF(after.x - before.x, after.y - before.y), shift);
+    }
+}
+
+void CoreTests::shapePushBendsContours()
+{
+    VectorGeometry original = rectangleGeometry();
+    DeformationStroke stroke = pushStroke();
+    stroke.samples = {{QPointF(2.0, 0.0), QPointF(0.0, 8.0), 1.0}};
+    stroke.radius = 14.0;
+    ManualDeformation deformation;
+    deformation.strokes.push_back(stroke);
+
+    VectorGeometry deformed = original;
+    deformation.apply(deformed);
+    QCOMPARE(deformed.pieces.at(0).anchor, original.pieces.at(0).anchor);
+    QVERIFY(geometrySignature(deformed) != geometrySignature(original));
+    const QPointF firstDelta = firstPathElement(deformed.pieces.at(0).path)
+        - firstPathElement(original.pieces.at(0).path);
+    const QPointF secondDelta = QPointF(
+        deformed.pieces.at(0).path.elementAt(1).x - original.pieces.at(0).path.elementAt(1).x,
+        deformed.pieces.at(0).path.elementAt(1).y - original.pieces.at(0).path.elementAt(1).y);
+    QVERIFY(firstDelta != secondDelta);
+}
+
+void CoreTests::inflateMovesPointsOutward()
+{
+    DeformationStroke stroke = pushStroke();
+    stroke.samples = {{QPointF(10.0, 10.0), QPointF(), 1.0}};
+    stroke.radius = 30.0;
+    stroke.mode = BrushMode::Inflate;
+    ManualDeformation inflate;
+    inflate.strokes.push_back(stroke);
+    VectorGeometry inflated = rectangleGeometry();
+    const QRectF originalBounds = inflated.pieces.first().path.boundingRect();
+    inflate.apply(inflated);
+    QVERIFY(inflated.pieces.first().path.boundingRect().width() > originalBounds.width());
+}
+
+void CoreTests::pinchMovesPointsInward()
+{
+    DeformationStroke stroke = pushStroke();
+    stroke.samples = {{QPointF(10.0, 10.0), QPointF(), 1.0}};
+    stroke.radius = 30.0;
+    ManualDeformation pinch;
+    stroke.mode = BrushMode::Pinch;
+    pinch.strokes.push_back(stroke);
+    VectorGeometry pinched = rectangleGeometry();
+    const QRectF originalBounds = pinched.pieces.first().path.boundingRect();
+    pinch.apply(pinched);
+    QVERIFY(pinched.pieces.first().path.boundingRect().width() < originalBounds.width());
+}
+
+void CoreTests::pullMovesPointsTowardCenter()
+{
+    DeformationStroke stroke = pushStroke();
+    stroke.mode = BrushMode::Pull;
+    stroke.samples = {{QPointF(30.0, 10.0), QPointF(), 1.0}};
+    ManualDeformation pull;
+    pull.strokes.push_back(stroke);
+    VectorGeometry pulled = rectangleGeometry();
+    const qreal originalLeft = pulled.pieces.at(0).path.boundingRect().left();
+    pull.apply(pulled);
+    QVERIFY(pulled.pieces.at(0).path.boundingRect().left() > originalLeft);
+}
+
+void CoreTests::smoothBrushReducesLocalIrregularity()
+{
+    VectorGeometry geometry;
+    GeometryPiece piece;
+    piece.path.moveTo(0.0, 0.0);
+    piece.path.lineTo(10.0, 0.0);
+    piece.path.lineTo(20.0, 12.0);
+    piece.path.lineTo(30.0, 0.0);
+    piece.path.lineTo(40.0, 0.0);
+    piece.path.closeSubpath();
+    piece.anchor = QPointF(20.0, 6.0);
+    piece.originalAnchor = piece.anchor;
+    geometry.pieces.push_back(piece);
+    geometry.setReferenceBounds(QRectF(0.0, 0.0, 40.0, 12.0));
+    geometry.recomputeBounds();
+    const qreal beforeHeight = geometry.bounds.height();
+
+    DeformationStroke stroke;
+    stroke.mode = BrushMode::Smooth;
+    stroke.target = BrushTarget::Shape;
+    stroke.radius = 24.0;
+    stroke.strength = 1.0;
+    stroke.hardness = 1.0;
+    stroke.samples = {{QPointF(20.0, 12.0), QPointF(), 1.0}};
+    ManualDeformation deformation;
+    deformation.strokes.push_back(stroke);
+    deformation.apply(geometry);
+    QVERIFY(geometry.bounds.height() < beforeHeight);
+}
+
+void CoreTests::deformationStrengthAndToggleAreNondestructive()
+{
+    const VectorGeometry original = rectangleGeometry();
+    ManualDeformation deformation;
+    deformation.strokes.push_back(pushStroke());
+
+    VectorGeometry zeroStrength = original;
+    deformation.strength = 0.0;
+    deformation.apply(zeroStrength);
+    QCOMPARE(geometrySignature(zeroStrength), geometrySignature(original));
+
+    VectorGeometry disabled = original;
+    deformation.strength = 1.0;
+    deformation.enabled = false;
+    deformation.apply(disabled);
+    QCOMPARE(geometrySignature(disabled), geometrySignature(original));
+
+    deformation.enabled = true;
+    VectorGeometry normal = original;
+    deformation.apply(normal);
+    QVERIFY(geometrySignature(normal) != geometrySignature(original));
+    VectorGeometry reapplied = original;
+    deformation.apply(reapplied);
+    QCOMPARE(geometrySignature(normal), geometrySignature(reapplied));
+}
+
+void CoreTests::deformationPreservesMultipleContours()
+{
+    QPainterPath path;
+    path.setFillRule(Qt::WindingFill);
+    path.addEllipse(QRectF(0.0, 0.0, 60.0, 60.0));
+    path.addEllipse(QRectF(20.0, 20.0, 20.0, 20.0));
+    const QVector<SampledContour> sampled = ContourSampler::samplePath(path, 0.1);
+    QCOMPARE(sampled.size(), 2);
+    const QPainterPath rebuilt = ContourSampler::reconstructPath(sampled, path.fillRule(), 0.05);
+    QCOMPARE(ContourSampler::samplePath(rebuilt, 0.1).size(), 2);
+
+    VectorGeometry geometry;
+    GeometryPiece piece;
+    piece.path = path;
+    piece.anchor = QPointF(30.0, 30.0);
+    piece.originalAnchor = piece.anchor;
+    geometry.pieces.push_back(piece);
+    geometry.setReferenceBounds(path.boundingRect());
+    geometry.recomputeBounds();
+    ManualDeformation deformation;
+    deformation.strokes.push_back(pushStroke());
+    deformation.apply(geometry);
+    QCOMPARE(ContourSampler::samplePath(geometry.pieces.first().path, 0.1).size(), 2);
+}
+
+void CoreTests::cyrillicShapeDeformationProducesGeometry()
+{
+    const QString family = cyrillicFamily();
+    if (family.isEmpty()) {
+        QSKIP("No installed font advertises Cyrillic support in this environment.");
+    }
+    TextObject object = configuredText(QStringLiteral("НЕ СМОТРИ"));
+    object.font.family = family;
+    object.font.styleName = QFontDatabase::styles(family).value(0);
+    TextEngine engine;
+    const ShapedText shaped = engine.shape(object);
+    VectorGeometry original = GlyphGeometryBuilder::build(shaped, object.typography.fontSize);
+    QVERIFY(original.hasVisibleGeometry());
+    ManualDeformation deformation;
+    DeformationStroke stroke = pushStroke();
+    stroke.radius = original.referenceHeight;
+    deformation.strokes.push_back(stroke);
+    VectorGeometry deformed = original;
+    deformation.apply(deformed);
+    QVERIFY(deformed.hasVisibleGeometry());
+    QVERIFY(geometrySignature(deformed) != geometrySignature(original));
+}
+
 void CoreTests::controllerUndoRedoAndMerge()
 {
     EditorController controller;
@@ -517,6 +882,44 @@ void CoreTests::controllerEffectCommandsAreGranular()
     controller.undoStack()->undo();
     QCOMPARE(controller.document().primaryTextObject().effects.size(), 2);
     QCOMPARE(controller.document().primaryTextObject().effects.at(0)->typeId(), QStringLiteral("wave"));
+}
+
+void CoreTests::controllerDeformationCommandsAreGranular()
+{
+    EditorController controller;
+    const DeformationStroke stroke = pushStroke(BrushTarget::Shape);
+    controller.setDeformationPreview(stroke);
+    QVERIFY(!controller.isModified());
+    QVERIFY(controller.document().primaryTextObject().deformation.strokes.isEmpty());
+    controller.clearDeformationPreview();
+
+    const int initialCommandCount = controller.undoStack()->count();
+    controller.addDeformationStroke(stroke);
+    QCOMPARE(controller.undoStack()->count(), initialCommandCount + 1);
+    QCOMPARE(controller.document().primaryTextObject().deformation.strokes.size(), 1);
+
+    controller.undoStack()->undo();
+    QVERIFY(controller.document().primaryTextObject().deformation.strokes.isEmpty());
+    controller.undoStack()->redo();
+    QCOMPARE(controller.document().primaryTextObject().deformation.strokes.size(), 1);
+
+    const int beforeStrength = controller.undoStack()->count();
+    controller.setDeformationStrength(0.5);
+    controller.setDeformationStrength(0.75);
+    QCOMPARE(controller.undoStack()->count(), beforeStrength + 1);
+    QCOMPARE(controller.document().primaryTextObject().deformation.strength, 0.75);
+
+    controller.setDeformationEnabled(false);
+    QVERIFY(!controller.document().primaryTextObject().deformation.enabled);
+    controller.undoStack()->undo();
+    QVERIFY(controller.document().primaryTextObject().deformation.enabled);
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().primaryTextObject().deformation.strength, 1.0);
+
+    controller.clearDeformation();
+    QVERIFY(controller.document().primaryTextObject().deformation.strokes.isEmpty());
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().primaryTextObject().deformation.strokes.size(), 1);
 }
 
 void CoreTests::controllerCleanStateFollowsUndoStack()

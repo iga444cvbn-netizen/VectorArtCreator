@@ -136,6 +136,7 @@ void EditorController::refreshFonts()
 void EditorController::newDocument()
 {
     m_document = Document();
+    m_previewStroke.reset();
     m_undoStack.clear();
     m_undoStack.setClean();
     m_textEngine.clearCache();
@@ -328,6 +329,79 @@ void EditorController::setEffectParameter(int index, const QString& parameterId,
         [this] { onCommandChanged(); }));
 }
 
+void EditorController::addDeformationStroke(const DeformationStroke& stroke)
+{
+    if (stroke.samples.isEmpty() || !std::isfinite(stroke.radius) || stroke.radius <= 0.0) {
+        return;
+    }
+    m_previewStroke.reset();
+    const int index = m_document.primaryTextObject().deformation.strokes.size();
+    m_undoStack.push(new AddDeformationStrokeCommand(
+        m_document,
+        index,
+        stroke,
+        [this] { onCommandChanged(); }));
+}
+
+void EditorController::setDeformationPreview(const DeformationStroke& stroke)
+{
+    if (stroke.samples.isEmpty()) {
+        clearDeformationPreview();
+        return;
+    }
+    m_previewStroke = stroke;
+    rebuildScene();
+}
+
+void EditorController::clearDeformationPreview()
+{
+    if (!m_previewStroke.has_value()) {
+        return;
+    }
+    m_previewStroke.reset();
+    rebuildScene();
+}
+
+void EditorController::clearDeformation()
+{
+    const ManualDeformation before = m_document.primaryTextObject().deformation;
+    if (before.strokes.isEmpty()) {
+        return;
+    }
+    m_previewStroke.reset();
+    m_undoStack.push(new ClearDeformationCommand(
+        m_document,
+        before,
+        [this] { onCommandChanged(); }));
+}
+
+void EditorController::setDeformationEnabled(bool enabled)
+{
+    const bool oldEnabled = m_document.primaryTextObject().deformation.enabled;
+    if (oldEnabled == enabled) {
+        return;
+    }
+    m_undoStack.push(new SetDeformationEnabledCommand(
+        m_document,
+        oldEnabled,
+        enabled,
+        [this] { onCommandChanged(); }));
+}
+
+void EditorController::setDeformationStrength(qreal strength)
+{
+    const qreal boundedStrength = qBound<qreal>(0.0, strength, 4.0);
+    const qreal oldStrength = m_document.primaryTextObject().deformation.strength;
+    if (nearlyEqual(oldStrength, boundedStrength)) {
+        return;
+    }
+    m_undoStack.push(new SetDeformationStrengthCommand(
+        m_document,
+        oldStrength,
+        boundedStrength,
+        [this] { onCommandChanged(); }));
+}
+
 bool EditorController::savePreset(const QString& name, QString* error)
 {
     Preset preset;
@@ -387,6 +461,7 @@ bool EditorController::openProject(const QString& filePath, QString* error)
         return false;
     }
     m_document = std::move(loaded);
+    m_previewStroke.reset();
     m_undoStack.clear();
     m_undoStack.setClean();
     m_textEngine.clearCache();
@@ -424,6 +499,13 @@ void EditorController::rebuildScene()
 
     m_geometry = *m_baseGeometry;
     textObject.effects.apply(m_geometry);
+    textObject.deformation.apply(m_geometry);
+    if (m_previewStroke.has_value()) {
+        ManualDeformation preview;
+        preview.strength = textObject.deformation.strength;
+        preview.strokes.push_back(*m_previewStroke);
+        preview.apply(m_geometry);
+    }
 
     if (!shaped.error.isEmpty()) {
         publishError(shaped.error);

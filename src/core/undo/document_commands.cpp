@@ -10,6 +10,7 @@ constexpr int TextCommandId = 100;
 constexpr int FontSizeCommandId = 101;
 constexpr int TrackingCommandId = 102;
 constexpr int EffectParameterCommandId = 103;
+constexpr int DeformationStrengthCommandId = 104;
 
 } // namespace
 
@@ -396,6 +397,118 @@ void ApplyPresetCommand::redo()
 {
     m_document.primaryTextObject().effects = m_after;
     notifyChanged();
+}
+
+AddDeformationStrokeCommand::AddDeformationStrokeCommand(Document& document,
+                                                         int index,
+                                                         DeformationStroke stroke,
+                                                         DocumentChangeCallback onChanged)
+    : DocumentCommand(document, std::move(onChanged), QStringLiteral("Add deformation stroke"))
+    , m_index(index)
+    , m_stroke(std::move(stroke))
+{
+}
+
+void AddDeformationStrokeCommand::undo()
+{
+    auto& strokes = m_document.primaryTextObject().deformation.strokes;
+    if (m_index >= 0 && m_index < strokes.size()) {
+        strokes.removeAt(m_index);
+        notifyChanged();
+    }
+}
+
+void AddDeformationStrokeCommand::redo()
+{
+    auto& strokes = m_document.primaryTextObject().deformation.strokes;
+    if (m_index < 0) {
+        m_index = strokes.size();
+    }
+    if (m_index <= strokes.size()) {
+        strokes.insert(m_index, m_stroke);
+        notifyChanged();
+    }
+}
+
+ClearDeformationCommand::ClearDeformationCommand(Document& document,
+                                                 ManualDeformation before,
+                                                 DocumentChangeCallback onChanged)
+    : DocumentCommand(document, std::move(onChanged), QStringLiteral("Clear deformation"))
+    , m_before(std::move(before))
+    , m_after(m_before)
+{
+    m_after.strokes.clear();
+}
+
+void ClearDeformationCommand::undo()
+{
+    m_document.primaryTextObject().deformation = m_before;
+    notifyChanged();
+}
+
+void ClearDeformationCommand::redo()
+{
+    m_document.primaryTextObject().deformation = m_after;
+    notifyChanged();
+}
+
+SetDeformationEnabledCommand::SetDeformationEnabledCommand(Document& document,
+                                                           bool oldEnabled,
+                                                           bool newEnabled,
+                                                           DocumentChangeCallback onChanged)
+    : DocumentCommand(document, std::move(onChanged), QStringLiteral("Toggle deformation"))
+    , m_oldEnabled(oldEnabled)
+    , m_newEnabled(newEnabled)
+{
+}
+
+void SetDeformationEnabledCommand::undo()
+{
+    m_document.primaryTextObject().deformation.enabled = m_oldEnabled;
+    notifyChanged();
+}
+
+void SetDeformationEnabledCommand::redo()
+{
+    m_document.primaryTextObject().deformation.enabled = m_newEnabled;
+    notifyChanged();
+}
+
+SetDeformationStrengthCommand::SetDeformationStrengthCommand(Document& document,
+                                                             qreal oldStrength,
+                                                             qreal newStrength,
+                                                             DocumentChangeCallback onChanged)
+    : DocumentCommand(document, std::move(onChanged), QStringLiteral("Change deformation strength"))
+    , m_oldStrength(oldStrength)
+    , m_newStrength(newStrength)
+{
+}
+
+void SetDeformationStrengthCommand::undo()
+{
+    m_document.primaryTextObject().deformation.strength = m_oldStrength;
+    notifyChanged();
+}
+
+void SetDeformationStrengthCommand::redo()
+{
+    m_document.primaryTextObject().deformation.strength = m_newStrength;
+    notifyChanged();
+}
+
+int SetDeformationStrengthCommand::id() const
+{
+    return DeformationStrengthCommandId;
+}
+
+bool SetDeformationStrengthCommand::mergeWith(const QUndoCommand* other)
+{
+    const auto* command = dynamic_cast<const SetDeformationStrengthCommand*>(other);
+    if (!command) {
+        return false;
+    }
+    m_newStrength = command->m_newStrength;
+    return true;
 }
 
 } // namespace vt

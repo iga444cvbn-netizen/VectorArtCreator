@@ -48,6 +48,13 @@ public:
     void setEffectEnabled(int index, bool enabled);
     void setEffectParameter(int index, const QString& parameterId, double value);
 
+    void addDeformationStroke(const DeformationStroke& stroke);
+    void setDeformationPreview(const DeformationStroke& stroke);
+    void clearDeformationPreview();
+    void clearDeformation();
+    void setDeformationEnabled(bool enabled);
+    void setDeformationStrength(qreal strength);
+
     [[nodiscard]] bool savePreset(const QString& name, QString* error = nullptr);
     [[nodiscard]] bool applyPreset(const QString& name, QString* error = nullptr);
     [[nodiscard]] bool deletePreset(const QString& name, QString* error = nullptr);
@@ -76,6 +83,7 @@ private:
     PresetManager m_presetManager;
     SvgExporter m_svgExporter;
     QUndoStack m_undoStack;
+    std::optional<DeformationStroke> m_previewStroke;
 };
 
 } // namespace vt

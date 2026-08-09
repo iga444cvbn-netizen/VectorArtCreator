@@ -33,8 +33,10 @@ MainWindow::MainWindow(QWidget* parent)
     sidebarLayout->setContentsMargins(10, 10, 10, 10);
     m_typographyPanel = new TypographyPanel(sidebar);
     m_effectsPanel = new EffectsPanel(sidebar);
+    m_deformationPanel = new DeformationPanel(sidebar);
     sidebarLayout->addWidget(m_typographyPanel);
     sidebarLayout->addWidget(m_effectsPanel);
+    sidebarLayout->addWidget(m_deformationPanel);
 
     auto* scrollArea = new QScrollArea(splitter);
     scrollArea->setWidget(sidebar);
@@ -125,6 +127,35 @@ MainWindow::MainWindow(QWidget* parent)
         refreshUi();
     });
 
+    connect(m_deformationPanel,
+            &DeformationPanel::brushSettingsChanged,
+            m_canvas,
+            &EditorCanvas::setBrushSettings);
+    connect(m_deformationPanel,
+            &DeformationPanel::enabledChanged,
+            m_controller,
+            &EditorController::setDeformationEnabled);
+    connect(m_deformationPanel,
+            &DeformationPanel::overallStrengthChanged,
+            m_controller,
+            &EditorController::setDeformationStrength);
+    connect(m_deformationPanel,
+            &DeformationPanel::clearRequested,
+            m_controller,
+            &EditorController::clearDeformation);
+    connect(m_canvas,
+            &EditorCanvas::deformationPreviewChanged,
+            m_controller,
+            &EditorController::setDeformationPreview);
+    connect(m_canvas,
+            &EditorCanvas::deformationPreviewCleared,
+            m_controller,
+            &EditorController::clearDeformationPreview);
+    connect(m_canvas,
+            &EditorCanvas::deformationStrokeReady,
+            m_controller,
+            &EditorController::addDeformationStroke);
+
     createActions();
     createMenus();
     refreshUi();
@@ -145,6 +176,7 @@ void MainWindow::refreshUi()
     m_canvas->setScene(m_controller->geometry(), object.fill);
     m_typographyPanel->refresh(object);
     m_effectsPanel->refresh(object, m_presetNames);
+    m_deformationPanel->refresh(object.deformation);
     if (m_saveAction) {
         m_saveAction->setEnabled(true);
     }

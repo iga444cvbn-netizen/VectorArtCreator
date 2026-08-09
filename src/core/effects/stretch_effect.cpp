@@ -71,9 +71,9 @@ void StretchEffect::apply(VectorGeometry& geometry, const EffectContext& context
     geometry.recomputeBounds();
     const QPointF center = geometry.bounds.center();
     QTransform transform;
-    transform.translate(center.x(), center.y());
-    transform.scale(horizontal, vertical);
-    transform.translate(-center.x(), -center.y());
+    Q_UNUSED(transform.translate(center.x(), center.y()));
+    Q_UNUSED(transform.scale(horizontal, vertical));
+    Q_UNUSED(transform.translate(-center.x(), -center.y()));
     geometry.transformAll(transform);
 }
 

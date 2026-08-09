@@ -100,9 +100,9 @@ void GlyphJitterEffect::apply(VectorGeometry& geometry, const EffectContext& con
             ? piece.anchor
             : piece.path.boundingRect().center();
         QTransform transform;
-        transform.translate(center.x() + xOffset, center.y() + yOffset);
-        transform.rotate(angle);
-        transform.translate(-center.x(), -center.y());
+        Q_UNUSED(transform.translate(center.x() + xOffset, center.y() + yOffset));
+        Q_UNUSED(transform.rotate(angle));
+        Q_UNUSED(transform.translate(-center.x(), -center.y()));
         geometry.transformPiece(index, transform);
     }
     geometry.recomputeBounds();

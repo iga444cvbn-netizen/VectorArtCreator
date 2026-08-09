@@ -22,6 +22,7 @@ TextObject::TextObject(const TextObject& other)
     , typography(other.typography)
     , fill(other.fill)
     , effects(other.effects)
+    , deformation(other.deformation)
     , futureData(other.futureData)
 {
 }
@@ -37,6 +38,7 @@ TextObject& TextObject::operator=(const TextObject& other)
     typography = other.typography;
     fill = other.fill;
     effects = other.effects;
+    deformation = other.deformation;
     futureData = other.futureData;
     return *this;
 }
