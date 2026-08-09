@@ -73,6 +73,12 @@ jobs:
           Write-Host "Running tests with Qt runtime PATH: $env:Path"
           Write-Host "Running tests with Qt platform plugin path: $env:QT_QPA_PLATFORM_PLUGIN_PATH"
           ctest --test-dir build --output-on-failure -VV
+          $ctestExit = $LASTEXITCODE
+          if ($ctestExit -ne 0) {
+            Write-Host "CTest failed; replaying the Qt Test executable with verbose output."
+            & (Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_tests.exe') -vs
+            exit $ctestExit
+          }
 
       - name: Package runnable Windows build
         shell: pwsh
