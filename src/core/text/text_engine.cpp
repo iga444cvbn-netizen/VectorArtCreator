@@ -3,6 +3,7 @@
 #include "core/document/document.h"
 
 #include <QFontDatabase>
+#include <QFontInfo>
 #include <QList>
 #include <QStringList>
 #include <QTextLayout>
@@ -24,6 +25,34 @@ bool samePhysicalFont(const QRawFont& left, const QRawFont& right)
     // the Windows font backend to materialize its name table. That name-table
     // accessor is not reliable for every DirectWrite glyph run on Qt 6.8.
     return left == right;
+}
+
+qreal resolvedRawFontPixelSize(const QRawFont& rawFont, const QFont& font)
+{
+    if (!rawFont.isValid()) {
+        return 0.0;
+    }
+    if (std::isfinite(rawFont.pixelSize()) && rawFont.pixelSize() > 0.0) {
+        return rawFont.pixelSize();
+    }
+
+    // Some Qt Windows/offscreen combinations return a valid glyph-run raw
+    // font whose stored pixel size is zero when the QFont query was expressed
+    // in points. QFontInfo still reports the size Qt resolved for the actual
+    // screen font. Re-materializing this same physical raw font at that
+    // resolved size preserves the raw-font metric source without falling back
+    // to a hard-coded DPI or document font size.
+    const int resolvedPixelSize = QFontInfo(font).pixelSize();
+    if (resolvedPixelSize <= 0) {
+        return 0.0;
+    }
+    QRawFont scaledRawFont = rawFont;
+    scaledRawFont.setPixelSize(resolvedPixelSize);
+    if (!scaledRawFont.isValid() || !std::isfinite(scaledRawFont.pixelSize())
+        || scaledRawFont.pixelSize() <= 0.0) {
+        return 0.0;
+    }
+    return scaledRawFont.pixelSize();
 }
 
 void recordFallbackFont(ShapedText* result, const QRawFont& rawFont, int glyphCount)
@@ -131,15 +160,12 @@ ShapedText TextEngine::shape(const TextObject& object)
     int ordinal = 0;
     int shapedGlyphCount = 0;
     const QList<QGlyphRun> runs = layout.glyphRuns();
-    if (requestedRawFont.isValid() && std::isfinite(requestedRawFont.pixelSize())
-        && requestedRawFont.pixelSize() > 0.0) {
-        result.resolvedEmSize = requestedRawFont.pixelSize();
-    } else {
+    result.resolvedEmSize = resolvedRawFontPixelSize(requestedRawFont, font);
+    if (result.resolvedEmSize <= 0.0) {
         for (const QGlyphRun& run : runs) {
             const QRawFont rawFont = run.rawFont();
-            if (rawFont.isValid() && std::isfinite(rawFont.pixelSize())
-                && rawFont.pixelSize() > 0.0) {
-                result.resolvedEmSize = rawFont.pixelSize();
+            result.resolvedEmSize = resolvedRawFontPixelSize(rawFont, font);
+            if (result.resolvedEmSize > 0.0) {
                 break;
             }
         }
