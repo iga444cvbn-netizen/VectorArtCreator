@@ -158,6 +158,9 @@ void EffectsPanelUiTests::selectingAnotherLayerObjectEndsNativeEditorSession()
     const QString second = controller->createTextObject(QPointF(160.0, 20.0), QStringLiteral("B"));
     QVERIFY(!first.isEmpty());
     QVERIFY(!second.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(first)
+                                 && controller->sceneGeometry().objectById(second),
+                             5000);
     controller->selectObject(first);
     const TextObject* object = controller->activeObject();
     QVERIFY(object);
