@@ -1,6 +1,7 @@
 #include "core/effects/effect_stack.h"
 
 #include <QLineF>
+#include <QSet>
 
 #include <cmath>
 #include <utility>
@@ -240,6 +241,16 @@ void EffectStack::clear()
     m_effects.clear();
 }
 
+bool EffectStack::hasUniqueInstanceIds() const
+{
+    QSet<QString> ids;
+    for (const auto& effect : m_effects) {
+        if (!effect || effect->instanceId.isEmpty() || ids.contains(effect->instanceId)) return false;
+        ids.insert(effect->instanceId);
+    }
+    return true;
+}
+
 void EffectStack::apply(VectorGeometry& geometry, qreal stackStrength) const
 {
     geometry.recomputeBounds();
@@ -339,6 +350,10 @@ EffectStack EffectStack::fromJson(const QJsonArray& array, QString* error)
             return {};
         }
         stack.append(std::move(effect));
+    }
+    if (!stack.hasUniqueInstanceIds()) {
+        if (error) *error = QStringLiteral("Effect stack contains duplicate or missing instance IDs.");
+        return {};
     }
     return stack;
 }

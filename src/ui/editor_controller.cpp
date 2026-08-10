@@ -15,6 +15,7 @@
 #include <QLineF>
 #include <QMimeData>
 #include <QStandardPaths>
+#include <QUuid>
 #include <QFontDatabase>
 
 #include <cmath>
@@ -390,7 +391,7 @@ void EditorController::setEffectStackStrength(qreal strength)
         return;
     }
     m_undoStack.push(new SetEffectStackStrengthCommand(
-        m_document, object->effectStackStrength, bounded, [this] { onCommandChanged(); }));
+        m_document, object->id, object->effectStackStrength, bounded, [this] { onCommandChanged(); }));
 }
 
 void EditorController::beginEffectStackStrengthGesture()
@@ -413,11 +414,8 @@ void EditorController::endEffectStackStrengthGesture()
     if (!object || nearlyEqual(start, object->effectStackStrength)) return;
     const qreal final = object->effectStackStrength;
     object->effectStackStrength = start;
-    const QString active = m_document.activeObjectId;
-    m_document.activeObjectId = objectId;
-    m_undoStack.push(new SetEffectStackStrengthCommand(m_document, start, final,
+    m_undoStack.push(new SetEffectStackStrengthCommand(m_document, objectId, start, final,
         [this] { onCommandChanged(); }));
-    m_document.activeObjectId = active;
 }
 
 void EditorController::setTextRange(int start, int end)
@@ -1667,6 +1665,7 @@ bool EditorController::savePreset(const QString& name, QString* error)
     preset.effects = object->effects;
     const bool saved = m_presetManager.savePreset(preset, error);
     if (saved) {
+        m_presetCatalog.invalidateUserPresets();
         emit statusMessageChanged(QStringLiteral("Preset '%1' saved.").arg(preset.name));
     }
     return saved;
@@ -1708,7 +1707,7 @@ bool EditorController::applyPresetById(const QString& id, QString* error)
     QStringList targets = hasRange ? QStringList{m_document.activeObjectId} : selectedObjectIds();
     if (targets.isEmpty() && !m_document.activeObjectId.isEmpty()) targets.push_back(m_document.activeObjectId);
     int skipped = 0;
-    QVector<QPair<QString, EffectStack>> changes;
+    QVector<ApplyPresetToObjectsCommand::Target> changes;
     for (const QString& targetId : targets) {
         Layer* layer = currentPageLayerForObject(m_document, targetId);
         TextObject* object = layer ? layer->objectById(targetId) : nullptr;
@@ -1717,30 +1716,27 @@ bool EditorController::applyPresetById(const QString& id, QString* error)
         if (hasRange) {
             for (int index = 0; index < entry.preset.effects.size(); ++index) {
                 std::unique_ptr<Effect> effect = entry.preset.effects.at(index)->clone();
+                effect->instanceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
                 effect->scope = {EffectScopeKind::TextRange, selectedRange.first, selectedRange.second};
                 next.append(std::move(effect));
             }
         } else {
             next = entry.preset.effects;
         }
-        if (!effectStacksEqual(object->effects, next)) changes.push_back({targetId, std::move(next)});
+        const qreal nextStrength = hasRange ? object->effectStackStrength : 1.0;
+        if (!effectStacksEqual(object->effects, next)
+            || !nearlyEqual(object->effectStackStrength, nextStrength)) {
+            changes.push_back({targetId, object->effects, std::move(next),
+                               object->effectStackStrength, nextStrength});
+        }
     }
     if (changes.isEmpty()) {
         if (error && skipped > 0) *error = QStringLiteral("All selected objects are locked or hidden.");
         return skipped == 0;
     }
-    const QString originalActiveId = m_document.activeObjectId;
-    m_undoStack.beginMacro(QStringLiteral("Apply preset '%1'").arg(entry.preset.name));
-    for (const auto& [targetId, next] : changes) {
-        TextObject* object = m_document.objectById(targetId);
-        if (!object) continue;
-        m_document.activeObjectId = targetId;
-        m_undoStack.push(new ApplyPresetCommand(m_document, object->effects, next,
-            [this] { onCommandChanged(); }, QStringLiteral("Apply preset"),
-            object->effectStackStrength, hasRange ? object->effectStackStrength : 1.0));
-    }
-    m_undoStack.endMacro();
-    m_document.activeObjectId = originalActiveId;
+    m_undoStack.push(new ApplyPresetToObjectsCommand(
+        m_document, std::move(changes), [this] { onCommandChanged(); },
+        QStringLiteral("Apply preset '%1'").arg(entry.preset.name)));
     if (skipped) emit statusMessageChanged(QStringLiteral("Applied '%1'; skipped %2 locked or hidden object%3.")
         .arg(entry.preset.name).arg(skipped).arg(skipped == 1 ? QString() : QStringLiteral("s")));
     else emit statusMessageChanged(QStringLiteral("Applied '%1'.").arg(entry.preset.name));
@@ -1751,7 +1747,9 @@ bool EditorController::duplicateBuiltinPreset(const QString& id, QString* error)
 {
     Preset copy;
     if (!m_presetCatalog.duplicateBuiltIn(id, &copy, error)) return false;
-    return m_presetManager.savePreset(std::move(copy), error);
+    const bool saved = m_presetManager.savePreset(std::move(copy), error);
+    if (saved) m_presetCatalog.invalidateUserPresets();
+    return saved;
 }
 
 bool EditorController::deletePresetById(const QString& id, QString* error)
@@ -1762,7 +1760,11 @@ bool EditorController::deletePresetById(const QString& id, QString* error)
         if (error) *error = QStringLiteral("Built-in presets are immutable.");
         return false;
     }
-    return m_presetManager.deletePresetById(id, error);
+    const bool deleted = id.startsWith(QStringLiteral("legacy."))
+        ? m_presetManager.deletePreset(entry.preset.name, error)
+        : m_presetManager.deletePresetById(id, error);
+    if (deleted) m_presetCatalog.invalidateUserPresets();
+    return deleted;
 }
 
 bool EditorController::deletePreset(const QString& name, QString* error)

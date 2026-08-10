@@ -316,15 +316,18 @@ private:
     double m_newValue = 1.0;
 };
 
-class SetEffectStackStrengthCommand final : public DocumentCommand {
+class SetEffectStackStrengthCommand final : public QUndoCommand {
 public:
-    SetEffectStackStrengthCommand(Document& document, qreal oldValue, qreal newValue,
-                                  DocumentChangeCallback onChanged);
+    SetEffectStackStrengthCommand(Document& document, QString objectId, qreal oldValue,
+                                  qreal newValue, DocumentChangeCallback onChanged);
     void undo() override;
     void redo() override;
 private:
     qreal m_oldValue = 1.0;
     qreal m_newValue = 1.0;
+    Document& m_document;
+    QString m_objectId;
+    DocumentChangeCallback m_onChanged;
 };
 
 class SetEffectScopeCommand final : public DocumentCommand {
@@ -380,6 +383,28 @@ private:
     EffectStack m_after;
     qreal m_beforeStackStrength = 1.0;
     qreal m_afterStackStrength = 1.0;
+};
+
+class ApplyPresetToObjectsCommand final : public QUndoCommand {
+public:
+    struct Target {
+        QString objectId;
+        EffectStack beforeEffects;
+        EffectStack afterEffects;
+        qreal beforeStackStrength = 1.0;
+        qreal afterStackStrength = 1.0;
+    };
+
+    ApplyPresetToObjectsCommand(Document& document, QVector<Target> targets,
+                                DocumentChangeCallback onChanged, const QString& description);
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(bool after);
+    Document& m_document;
+    QVector<Target> m_targets;
+    DocumentChangeCallback m_onChanged;
 };
 
 class AddDeformationStrokeCommand final : public DocumentCommand {

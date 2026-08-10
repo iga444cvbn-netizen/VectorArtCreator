@@ -25,6 +25,7 @@ signals:
 
 private:
     void rebuild();
+    void updateActions();
     [[nodiscard]] QStringList favorites() const;
     void setFavorites(const QStringList& ids);
     void markRecent(const QString& id);
@@ -37,6 +38,7 @@ private:
     QPushButton* m_favorite = nullptr;
     QPushButton* m_duplicate = nullptr;
     QPushButton* m_delete = nullptr;
+    bool m_targetAvailable = false;
 };
 
 } // namespace vt

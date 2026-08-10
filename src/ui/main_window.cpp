@@ -532,10 +532,8 @@ void MainWindow::refreshUi()
     if (object) updateStylesForFamily(object->font.family);
     m_typographyPanel->refresh(object);
     m_effectsPanel->refresh(object, m_presetNames);
-    QString catalogDiagnostics;
-    m_styleGallery->setEntries(m_controller->presetCatalogEntries(&catalogDiagnostics));
+    m_styleGallery->setEntries(m_controller->presetCatalogEntries());
     m_styleGallery->setTargetAvailable(object != nullptr);
-    if (!catalogDiagnostics.isEmpty()) setStatus(catalogDiagnostics);
     {
         const QSignalBlocker blocker(m_styleIntensity);
         m_styleIntensity->setValue(object ? object->effectStackStrength : 1.0);

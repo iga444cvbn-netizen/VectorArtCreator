@@ -566,24 +566,32 @@ bool SetEffectMasterStrengthCommand::mergeWith(const QUndoCommand* other)
 }
 
 SetEffectStackStrengthCommand::SetEffectStackStrengthCommand(Document& document,
+                                                             QString objectId,
                                                              qreal oldValue,
                                                              qreal newValue,
                                                              DocumentChangeCallback onChanged)
-    : DocumentCommand(document, std::move(onChanged), QStringLiteral("Change style intensity"))
+    : QUndoCommand(QStringLiteral("Change style intensity"))
     , m_oldValue(oldValue), m_newValue(newValue)
+    , m_document(document), m_objectId(std::move(objectId)), m_onChanged(std::move(onChanged))
 {
 }
 
 void SetEffectStackStrengthCommand::undo()
 {
-    targetObject().effectStackStrength = m_oldValue;
-    notifyChanged();
+    if (TextObject* object = m_document.objectById(m_objectId)) {
+        object->effectStackStrength = m_oldValue;
+        m_document.touchModified();
+        if (m_onChanged) m_onChanged();
+    }
 }
 
 void SetEffectStackStrengthCommand::redo()
 {
-    targetObject().effectStackStrength = m_newValue;
-    notifyChanged();
+    if (TextObject* object = m_document.objectById(m_objectId)) {
+        object->effectStackStrength = m_newValue;
+        m_document.touchModified();
+        if (m_onChanged) m_onChanged();
+    }
 }
 
 SetEffectScopeCommand::SetEffectScopeCommand(Document& document,
@@ -683,6 +691,36 @@ void ApplyPresetCommand::redo()
     targetObject().effectStackStrength = m_afterStackStrength;
     notifyChanged();
 }
+
+ApplyPresetToObjectsCommand::ApplyPresetToObjectsCommand(Document& document,
+                                                         QVector<Target> targets,
+                                                         DocumentChangeCallback onChanged,
+                                                         const QString& description)
+    : QUndoCommand(description)
+    , m_document(document)
+    , m_targets(std::move(targets))
+    , m_onChanged(std::move(onChanged))
+{
+}
+
+void ApplyPresetToObjectsCommand::apply(bool after)
+{
+    bool changed = false;
+    for (const Target& target : m_targets) {
+        TextObject* object = m_document.objectById(target.objectId);
+        if (!object) continue;
+        object->effects = after ? target.afterEffects : target.beforeEffects;
+        object->effectStackStrength = after ? target.afterStackStrength : target.beforeStackStrength;
+        changed = true;
+    }
+    if (changed) {
+        m_document.touchModified();
+        if (m_onChanged) m_onChanged();
+    }
+}
+
+void ApplyPresetToObjectsCommand::undo() { apply(false); }
+void ApplyPresetToObjectsCommand::redo() { apply(true); }
 
 AddDeformationStrokeCommand::AddDeformationStrokeCommand(Document& document,
                                                          QString objectId,

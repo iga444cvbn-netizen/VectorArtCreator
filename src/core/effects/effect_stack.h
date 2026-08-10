@@ -32,6 +32,8 @@ public:
     void move(int from, int to);
     void clear();
 
+    [[nodiscard]] bool hasUniqueInstanceIds() const;
+
     void apply(VectorGeometry& geometry, qreal stackStrength = 1.0) const;
 
     [[nodiscard]] QJsonArray toJson() const;

@@ -1,8 +1,10 @@
 #include "core/presets/preset_catalog.h"
+#include "core/presets/preset_resources.h"
 
 #include "core/effects/effect_registry.h"
 
 #include <QFile>
+#include <QCryptographicHash>
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QSet>
@@ -14,6 +16,7 @@ PresetCatalog::PresetCatalog(const PresetManager& userPresets) : m_userPresets(u
 
 QVector<PresetCatalogEntry> PresetCatalog::builtinEntries(QString* error) const
 {
+    ensurePresetResources();
     QFile resource(QStringLiteral(":/presets/builtins.json"));
     if (!resource.open(QIODevice::ReadOnly)) {
         if (error) *error = QStringLiteral("Built-in preset resource is unavailable.");
@@ -63,19 +66,42 @@ QVector<PresetCatalogEntry> PresetCatalog::builtinEntries(QString* error) const
 
 QVector<PresetCatalogEntry> PresetCatalog::entries(QString* diagnostics) const
 {
-    QVector<PresetCatalogEntry> result = builtinEntries(diagnostics);
-    if (diagnostics && !diagnostics->isEmpty()) return {};
-    QString userDiagnostics;
-    for (const PresetInfo& info : m_userPresets.listPresets(&userDiagnostics)) {
-        Preset preset;
-        QString loadError;
-        if (!m_userPresets.loadPresetById(info.id, &preset, &loadError)) {
-            userDiagnostics += (userDiagnostics.isEmpty() ? QString() : QStringLiteral("\n")) + loadError;
-            continue;
-        }
-        result.push_back({std::move(preset), QStringLiteral("My Presets"), QStringLiteral("User preset"), {}, false});
+    if (!m_builtInsLoaded) {
+        m_cachedBuiltIns = builtinEntries(&m_cachedDiagnostics);
+        m_builtInsLoaded = true;
     }
-    if (diagnostics && !userDiagnostics.isEmpty()) *diagnostics = userDiagnostics;
+    if (!m_userPresetsLoaded) {
+        QString userDiagnostics;
+        m_cachedUserPresets.clear();
+        for (const PresetInfo& info : m_userPresets.listPresets(&userDiagnostics)) {
+            Preset preset;
+            QString loadError;
+            const bool loaded = info.id.isEmpty()
+                ? m_userPresets.loadPreset(info.name, &preset, &loadError)
+                : m_userPresets.loadPresetById(info.id, &preset, &loadError);
+            if (!loaded) {
+                userDiagnostics += (userDiagnostics.isEmpty() ? QString() : QStringLiteral("\n")) + loadError;
+                continue;
+            }
+            // Legacy v1 files have no UUID. Keep their display name out of
+            // new file paths while assigning a stable catalog-only identity.
+            if (preset.id.isEmpty()) {
+                preset.id = QStringLiteral("legacy.")
+                    + QString::fromLatin1(QCryptographicHash::hash(
+                        (m_userPresets.directoryPath() + QLatin1Char('/') + info.name).toUtf8(),
+                        QCryptographicHash::Sha1).toHex());
+            }
+            m_cachedUserPresets.push_back({std::move(preset), QStringLiteral("My Presets"),
+                                           QStringLiteral("User preset"), {}, false});
+        }
+        if (!userDiagnostics.isEmpty()) {
+            m_cachedDiagnostics += (m_cachedDiagnostics.isEmpty() ? QString() : QStringLiteral("\n")) + userDiagnostics;
+        }
+        m_userPresetsLoaded = true;
+    }
+    if (diagnostics) *diagnostics = m_cachedDiagnostics;
+    QVector<PresetCatalogEntry> result = m_cachedBuiltIns;
+    result += m_cachedUserPresets;
     return result;
 }
 
@@ -104,6 +130,14 @@ bool PresetCatalog::duplicateBuiltIn(const QString& id, Preset* copy, QString* e
     entry.preset.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     if (copy) *copy = std::move(entry.preset);
     return true;
+}
+
+void PresetCatalog::invalidateUserPresets() const
+{
+    m_userPresetsLoaded = false;
+    m_cachedUserPresets.clear();
+    // Built-in parsing errors remain meaningful; reset only user diagnostics.
+    if (m_builtInsLoaded) m_cachedDiagnostics.clear();
 }
 
 } // namespace vt

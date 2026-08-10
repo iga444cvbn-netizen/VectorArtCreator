@@ -38,6 +38,7 @@ set(CORE_SOURCES
     src/core/serialization/project_serializer.cpp
     src/core/presets/preset.cpp
     src/core/presets/preset_catalog.cpp
+    src/core/presets/preset_resources.cpp
     src/core/presets/preset_manager.cpp
     resources/resources.qrc
     src/core/export/svg_exporter.cpp

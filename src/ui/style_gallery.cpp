@@ -4,6 +4,7 @@
 #include <QHBoxLayout>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPushButton>
 #include <QSettings>
 #include <QVBoxLayout>
 
@@ -36,10 +37,7 @@ StyleGallery::StyleGallery(QWidget* parent) : QWidget(parent)
     connect(m_search, &QLineEdit::textChanged, this, [this] { rebuild(); });
     connect(m_filter, &QComboBox::currentIndexChanged, this, [this] { rebuild(); });
     connect(m_list, &QListWidget::itemSelectionChanged, this, [this] {
-        const auto* item = m_list->currentItem();
-        const bool builtIn = item && item->data(Qt::UserRole + 1).toBool();
-        m_apply->setEnabled(item); m_favorite->setEnabled(item);
-        m_duplicate->setEnabled(item && builtIn); m_delete->setEnabled(item && !builtIn);
+        updateActions();
     });
     connect(m_list, &QListWidget::itemActivated, this, [this](QListWidgetItem* item) {
         if (!item) return;
@@ -57,8 +55,22 @@ StyleGallery::StyleGallery(QWidget* parent) : QWidget(parent)
     setTargetAvailable(false);
 }
 
-void StyleGallery::setEntries(const QVector<PresetCatalogEntry>& entries) { m_entries = entries; rebuild(); }
-void StyleGallery::setTargetAvailable(bool available) { m_apply->setEnabled(available && m_list->currentItem()); }
+void StyleGallery::setEntries(const QVector<PresetCatalogEntry>& entries)
+{
+    if (entries.size() == m_entries.size()) {
+        bool identical = true;
+        for (int index = 0; index < entries.size(); ++index) {
+            const auto& left = entries.at(index); const auto& right = m_entries.at(index);
+            if (left.preset.id != right.preset.id || left.preset.name != right.preset.name
+                || left.category != right.category || left.description != right.description
+                || left.tags != right.tags || left.builtIn != right.builtIn) { identical = false; break; }
+        }
+        if (identical) return;
+    }
+    m_entries = entries;
+    rebuild();
+}
+void StyleGallery::setTargetAvailable(bool available) { m_targetAvailable = available; updateActions(); }
 QStringList StyleGallery::favorites() const { return QSettings().value(QStringLiteral("creativeStyles/favorites")).toStringList(); }
 void StyleGallery::setFavorites(const QStringList& ids) { QSettings().setValue(QStringLiteral("creativeStyles/favorites"), ids); }
 void StyleGallery::markRecent(const QString& id) { QStringList ids = QSettings().value(QStringLiteral("creativeStyles/recent")).toStringList(); ids.removeAll(id); ids.prepend(id); while (ids.size() > 12) ids.removeLast(); QSettings().setValue(QStringLiteral("creativeStyles/recent"), ids); }
@@ -80,6 +92,18 @@ void StyleGallery::rebuild()
         if (entry.preset.id == selected) m_list->setCurrentItem(item);
     }
     if (!m_list->currentItem() && m_list->count()) m_list->setCurrentRow(0);
+    updateActions();
+}
+
+void StyleGallery::updateActions()
+{
+    const auto* item = m_list->currentItem();
+    const bool builtIn = item && item->data(Qt::UserRole + 1).toBool();
+    m_apply->setEnabled(item && m_targetAvailable);
+    m_apply->setToolTip(m_targetAvailable ? QString() : QStringLiteral("Select editable text first."));
+    m_favorite->setEnabled(item != nullptr);
+    m_duplicate->setEnabled(item && builtIn);
+    m_delete->setEnabled(item && !builtIn);
 }
 
 } // namespace vt
