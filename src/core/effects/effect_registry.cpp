@@ -1,11 +1,14 @@
 #include "core/effects/effect_registry.h"
 
 #include "core/effects/glyph_jitter_effect.h"
+#include "core/effects/geometry_warp_effect.h"
 #include "core/effects/procedural_effect.h"
 #include "core/effects/stretch_effect.h"
 #include "core/effects/wave_effect.h"
 
 #include <QSet>
+
+#include <utility>
 
 namespace vt {
 
@@ -26,6 +29,19 @@ EffectDescriptor procedural(const char* id, const char* name, ProceduralEffect::
     descriptor.factory = [id = descriptor.typeId, name = descriptor.displayName, mode] {
         return std::make_unique<ProceduralEffect>(id, name, mode);
     };
+    return descriptor;
+}
+
+EffectDescriptor warp(const char* id, const char* name, GeometryWarpEffect::Mode mode,
+                      const char* description, QStringList basic)
+{
+    EffectDescriptor descriptor;
+    descriptor.typeId = QString::fromLatin1(id); descriptor.displayName = QString::fromLatin1(name);
+    descriptor.category = QStringLiteral("Contour Warp"); descriptor.shortDescription = QString::fromLatin1(description);
+    descriptor.searchTags = {QStringLiteral("warp"), QStringLiteral("contour"), QStringLiteral("geometry")};
+    descriptor.domain = EffectDomain::Geometry; descriptor.supportsMask = false;
+    descriptor.basicParameterIds = std::move(basic); descriptor.iconName = QStringLiteral("effect-warp");
+    descriptor.factory = [id=descriptor.typeId,name=descriptor.displayName,mode] { return std::make_unique<GeometryWarpEffect>(id,name,mode); };
     return descriptor;
 }
 
@@ -73,6 +89,14 @@ EffectRegistry::EffectRegistry()
         procedural("squeezeCenter", "Squeeze to Center", ProceduralEffect::Mode::SqueezeCenter),
         procedural("baselineDrift", "Baseline Drift", ProceduralEffect::Mode::BaselineDrift),
         procedural("alternatingTilt", "Alternating Tilt", ProceduralEffect::Mode::AlternatingTilt),
+        warp("bend", "Bend", GeometryWarpEffect::Mode::Bend, "Bends contour points along the baseline.", {QStringLiteral("amount"),QStringLiteral("frequency")}),
+        warp("sag", "Sag", GeometryWarpEffect::Mode::Sag, "Sags contour points along the baseline.", {QStringLiteral("amount"),QStringLiteral("frequency")}),
+        warp("waveWarp", "Wave Warp", GeometryWarpEffect::Mode::WaveWarp, "Warps every outline point with a wave.", {QStringLiteral("amount"),QStringLiteral("frequency")}),
+        warp("bulge", "Bulge", GeometryWarpEffect::Mode::Bulge, "Expands outlines around a normalized centre.", {QStringLiteral("amount"),QStringLiteral("centerX"),QStringLiteral("centerY"),QStringLiteral("radius")}),
+        warp("pinch", "Pinch", GeometryWarpEffect::Mode::Pinch, "Contracts outlines around a normalized centre.", {QStringLiteral("amount"),QStringLiteral("centerX"),QStringLiteral("centerY"),QStringLiteral("radius")}),
+        warp("noiseWarp", "Noise Warp", GeometryWarpEffect::Mode::NoiseWarp, "Applies deterministic contour noise.", {QStringLiteral("amount"),QStringLiteral("frequency"),QStringLiteral("seed")}),
+        warp("melt", "Melt", GeometryWarpEffect::Mode::Melt, "Applies a bounded downward contour displacement.", {QStringLiteral("amount"),QStringLiteral("frequency"),QStringLiteral("seed")}),
+        warp("smear", "Smear", GeometryWarpEffect::Mode::Smear, "Applies a bounded directional contour displacement.", {QStringLiteral("amount"),QStringLiteral("frequency"),QStringLiteral("seed")}),
     };
 }
 

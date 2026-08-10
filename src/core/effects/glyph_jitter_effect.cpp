@@ -93,15 +93,16 @@ bool GlyphJitterEffect::parametersFromJson(const QJsonObject& object, QString* e
 
 void GlyphJitterEffect::apply(VectorGeometry& geometry, const EffectContext& context) const
 {
+    const qreal strength = context.effectiveStrength(*this);
     const qreal rotationRangeDegrees = amount * 12.0;
     for (int index = 0; index < geometry.pieces.size(); ++index) {
         GeometryPiece& piece = geometry.pieces[index];
         const qreal xOffset = (unitValue(seed, piece.sourceGlyphIndex, 0x1234ULL) * 2.0 - 1.0)
-            * amount * masterStrength * context.referenceHeight;
+            * amount * strength * context.referenceHeight;
         const qreal yOffset = (unitValue(seed, piece.sourceGlyphIndex, 0x5678ULL) * 2.0 - 1.0)
-            * amount * masterStrength * context.referenceHeight;
+            * amount * strength * context.referenceHeight;
         const qreal angle = (unitValue(seed, piece.sourceGlyphIndex, 0x9abcULL) * 2.0 - 1.0)
-            * rotationRangeDegrees * masterStrength;
+            * rotationRangeDegrees * strength;
 
         const QPointF center = piece.path.isEmpty()
             ? piece.anchor
