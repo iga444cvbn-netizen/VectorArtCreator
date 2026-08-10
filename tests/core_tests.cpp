@@ -216,6 +216,8 @@ private slots:
     void asyncEvaluationPublishesLatestGeneration();
     void objectFrameRoundTripsPointsAndVectors();
     void deformationBrushModesProduceDistinctGeometry();
+    void fontTraitsInvalidateSceneShapingAndProduceVectorDecorations();
+    void masterStrengthSupportsAmplificationAndRoundTrip();
     void geometrySourceMetadataStaysImmutableUnderEffectsAndTransforms();
     void missingUndoTargetDoesNotRedirectToAnotherObject();
     void ambiguousLegacyDeformationStrokeIsSkipped();
@@ -488,6 +490,46 @@ void CoreTests::geometrySourceMetadataStaysImmutableUnderEffectsAndTransforms()
         QCOMPARE(geometry.pieces.at(index).originalAnchor,
                  original.pieces.at(index).originalAnchor);
     }
+}
+
+void CoreTests::fontTraitsInvalidateSceneShapingAndProduceVectorDecorations()
+{
+    TextObject object = configuredText(QStringLiteral("Decorated"));
+    const QByteArray regularKey = SceneEvaluator::shapingCacheKey(object);
+    object.font.italic = true;
+    QVERIFY(SceneEvaluator::shapingCacheKey(object) != regularKey);
+
+    TextEngine engine;
+    const ShapedText shaped = engine.shape(object);
+    const VectorGeometry plain = GlyphGeometryBuilder::build(shaped, object.typography.fontSize);
+    const VectorGeometry decorated = GlyphGeometryBuilder::build(shaped,
+                                                                   object.typography.fontSize,
+                                                                   true,
+                                                                   true);
+    QVERIFY(decorated.pieces.size() >= plain.pieces.size() + 2);
+    QVERIFY(geometrySignature(decorated) != geometrySignature(plain));
+}
+
+void CoreTests::masterStrengthSupportsAmplificationAndRoundTrip()
+{
+    VectorGeometry normal = rectangleGeometry();
+    VectorGeometry amplified = normal;
+    WaveEffect effect;
+    effect.amplitude = 0.25;
+    effect.masterStrength = 1.0;
+    effect.apply(normal, {normal.referenceBounds, normal.referenceHeight});
+    effect.masterStrength = 2.5;
+    effect.apply(amplified, {amplified.referenceBounds, amplified.referenceHeight});
+    QVERIFY(geometrySignature(normal) != geometrySignature(amplified));
+
+    EffectStack stack;
+    auto stored = std::make_unique<WaveEffect>();
+    stored->masterStrength = 2.5;
+    stack.append(std::move(stored));
+    QString error;
+    EffectStack restored = EffectStack::fromJson(stack.toJson(), &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QCOMPARE(restored.at(0)->masterStrength, 2.5);
 }
 
 void CoreTests::missingUndoTargetDoesNotRedirectToAnotherObject()

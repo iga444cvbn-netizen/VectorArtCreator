@@ -174,6 +174,35 @@ void SetFontItalicCommand::redo()
     notifyChanged();
 }
 
+SetFontDecorationCommand::SetFontDecorationCommand(Document& document,
+                                                     FontDecoration decoration,
+                                                     bool oldValue,
+                                                     bool newValue,
+                                                     DocumentChangeCallback onChanged)
+    : DocumentCommand(document,
+                      std::move(onChanged),
+                      decoration == FontDecoration::Underline
+                          ? QStringLiteral("Toggle underline")
+                          : QStringLiteral("Toggle strikeout"))
+    , m_decoration(decoration)
+    , m_oldValue(oldValue)
+    , m_newValue(newValue)
+{
+}
+
+void SetFontDecorationCommand::apply(bool value)
+{
+    if (m_decoration == FontDecoration::Underline) {
+        targetObject().font.underline = value;
+    } else {
+        targetObject().font.strikeOut = value;
+    }
+    notifyChanged();
+}
+
+void SetFontDecorationCommand::undo() { apply(m_oldValue); }
+void SetFontDecorationCommand::redo() { apply(m_newValue); }
+
 SetFontSizeCommand::SetFontSizeCommand(Document& document,
                                        qreal oldSize,
                                        qreal newSize,

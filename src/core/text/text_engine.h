@@ -70,7 +70,10 @@ private:
 
 class GlyphGeometryBuilder {
 public:
-    [[nodiscard]] static VectorGeometry build(const ShapedText& shaped, qreal fallbackReferenceHeight);
+    [[nodiscard]] static VectorGeometry build(const ShapedText& shaped,
+                                              qreal fallbackReferenceHeight,
+                                              bool underline = false,
+                                              bool strikeOut = false);
 };
 
 } // namespace vt

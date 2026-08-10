@@ -175,7 +175,7 @@ std::unique_ptr<Effect> effectFromJson(const QJsonObject& object, QString* error
     effect->masterStrength = qBound<qreal>(0.0,
                                            object.value(QStringLiteral("masterStrength"))
                                                .toDouble(effect->masterStrength),
-                                           1.0);
+                                           3.0);
     const QJsonArray mask = object.value(QStringLiteral("mask")).toArray();
     for (const QJsonValue& value : mask) {
         if (value.isObject()) {

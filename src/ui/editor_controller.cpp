@@ -353,6 +353,9 @@ void EditorController::newDocument()
     m_document = Document();
     m_previewStroke.reset();
     m_previewObjectId.clear();
+    m_previewEffectMask.reset();
+    m_previewEffectMaskObjectId.clear();
+    m_previewEffectMaskEffectId.clear();
     m_undoStack.clear();
     m_undoStack.setClean();
     m_selectionModel->clear();
@@ -440,6 +443,32 @@ void EditorController::setFontItalic(bool italic)
     }
     m_undoStack.push(new SetFontItalicCommand(
         m_document, object->font.italic, italic, [this] { onCommandChanged(); }));
+}
+
+void EditorController::setFontUnderline(bool underline)
+{
+    const TextObject* object = editableActiveObject();
+    if (!object || object->font.underline == underline) {
+        return;
+    }
+    m_undoStack.push(new SetFontDecorationCommand(m_document,
+                                                   FontDecoration::Underline,
+                                                   object->font.underline,
+                                                   underline,
+                                                   [this] { onCommandChanged(); }));
+}
+
+void EditorController::setFontStrikeOut(bool strikeOut)
+{
+    const TextObject* object = editableActiveObject();
+    if (!object || object->font.strikeOut == strikeOut) {
+        return;
+    }
+    m_undoStack.push(new SetFontDecorationCommand(m_document,
+                                                   FontDecoration::StrikeOut,
+                                                   object->font.strikeOut,
+                                                   strikeOut,
+                                                   [this] { onCommandChanged(); }));
 }
 
 void EditorController::setFontSize(qreal pointSize)
@@ -1244,6 +1273,7 @@ void EditorController::addEffectMaskStroke(const QString& objectId,
                                             const QString& effectId,
                                             const EffectMaskStroke& stroke)
 {
+    clearEffectMaskPreview();
     if (objectId.isEmpty() || effectId.isEmpty() || stroke.points.isEmpty()) {
         return;
     }
@@ -1284,6 +1314,44 @@ void EditorController::addEffectMaskStroke(const QString& objectId,
         m_document, objectId, effectId, localStroke, [this] { onCommandChanged(); }));
 }
 
+void EditorController::setEffectMaskPreview(const QString& objectId,
+                                             const QString& effectId,
+                                             const EffectMaskStroke& stroke)
+{
+    if (objectId.isEmpty() || effectId.isEmpty() || stroke.points.isEmpty()) {
+        clearEffectMaskPreview();
+        return;
+    }
+    TextObject* object = m_document.objectById(objectId);
+    if (!object || !object->effects.byInstanceId(effectId)) {
+        clearEffectMaskPreview();
+        return;
+    }
+    EffectMaskStroke localStroke = stroke;
+    const ObjectFrame frame = ObjectFrame::fromTransform(object->transform, localReferenceBounds(*object));
+    for (QPointF& point : localStroke.points) {
+        point = frame.pagePointToLocal(point);
+    }
+    localStroke.radius = qMax<qreal>(0.1, frame.pageRadiusToLocalEquivalentArea(localStroke.radius));
+    localStroke.opacity = qBound<qreal>(0.0, localStroke.opacity, 1.0);
+    localStroke.hardness = qBound<qreal>(0.0, localStroke.hardness, 1.0);
+    m_previewEffectMask = std::move(localStroke);
+    m_previewEffectMaskObjectId = objectId;
+    m_previewEffectMaskEffectId = effectId;
+    rebuildScene();
+}
+
+void EditorController::clearEffectMaskPreview()
+{
+    if (!m_previewEffectMask.has_value()) {
+        return;
+    }
+    m_previewEffectMask.reset();
+    m_previewEffectMaskObjectId.clear();
+    m_previewEffectMaskEffectId.clear();
+    rebuildScene();
+}
+
 void EditorController::setEffectMasterStrength(int index, double strength)
 {
     TextObject* object = editableActiveObject();
@@ -1294,7 +1362,7 @@ void EditorController::setEffectMasterStrength(int index, double strength)
     if (!effect) {
         return;
     }
-    const double bounded = qBound(0.0, strength, 1.0);
+    const double bounded = qBound(0.0, strength, 3.0);
     if (nearlyEqual(effect->masterStrength, bounded)) {
         return;
     }
@@ -1315,6 +1383,9 @@ void EditorController::addDeformationStroke(const QString& objectId,
     }
     m_previewStroke.reset();
     m_previewObjectId.clear();
+    m_previewEffectMask.reset();
+    m_previewEffectMaskObjectId.clear();
+    m_previewEffectMaskEffectId.clear();
     TextObject* object = m_document.objectById(objectId);
     if (!object) {
         return;
@@ -1640,6 +1711,19 @@ void EditorController::rebuildScene()
                                                            ? m_document.activeObjectId
                                                            : m_previewObjectId)) {
                 object->deformation.strokes.push_back(*m_previewStroke);
+                break;
+            }
+        }
+    }
+    if (m_previewEffectMask.has_value()) {
+        for (const auto& layer : snapshot.layers) {
+            if (!layer) {
+                continue;
+            }
+            if (TextObject* object = layer->objectById(m_previewEffectMaskObjectId)) {
+                if (Effect* effect = object->effects.byInstanceId(m_previewEffectMaskEffectId)) {
+                    effect->maskStrokes.push_back(*m_previewEffectMask);
+                }
                 break;
             }
         }

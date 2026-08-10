@@ -104,6 +104,29 @@ private:
     bool m_newItalic = false;
 };
 
+enum class FontDecoration {
+    Underline,
+    StrikeOut,
+};
+
+class SetFontDecorationCommand final : public DocumentCommand {
+public:
+    SetFontDecorationCommand(Document& document,
+                             FontDecoration decoration,
+                             bool oldValue,
+                             bool newValue,
+                             DocumentChangeCallback onChanged);
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(bool value);
+
+    FontDecoration m_decoration;
+    bool m_oldValue = false;
+    bool m_newValue = false;
+};
+
 class SetFontSizeCommand final : public DocumentCommand {
 public:
     SetFontSizeCommand(Document& document,

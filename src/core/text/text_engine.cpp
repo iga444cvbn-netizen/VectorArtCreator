@@ -122,6 +122,12 @@ QString TextEngine::cacheKey(const TextObject& object) const
         + QChar(0x1f)
         + QString::number(font.weight)
         + QChar(0x1f)
+        + QString::number(font.italic)
+        + QChar(0x1f)
+        + QString::number(font.underline)
+        + QChar(0x1f)
+        + QString::number(font.strikeOut)
+        + QChar(0x1f)
         + QString::number(object.typography.fontSize, 'g', 16)
         + QChar(0x1f)
         + QString::number(object.typography.trackingEm, 'g', 16)
@@ -320,7 +326,10 @@ void TextEngine::clearCache()
     m_cachedResult.reset();
 }
 
-VectorGeometry GlyphGeometryBuilder::build(const ShapedText& shaped, qreal fallbackReferenceHeight)
+VectorGeometry GlyphGeometryBuilder::build(const ShapedText& shaped,
+                                           qreal fallbackReferenceHeight,
+                                           bool underline,
+                                           bool strikeOut)
 {
     VectorGeometry geometry;
     QRectF visibleBounds;
@@ -348,6 +357,37 @@ VectorGeometry GlyphGeometryBuilder::build(const ShapedText& shaped, qreal fallb
                 hasVisibleBounds = true;
             } else {
                 visibleBounds = visibleBounds.united(pieceBounds);
+            }
+        }
+    }
+
+    const auto addDecoration = [&geometry, &visibleBounds, &hasVisibleBounds](const QRectF& bounds,
+                                                                                 int lineIndex,
+                                                                                 qreal verticalCenter,
+                                                                                 qreal thickness) {
+        if (bounds.width() <= 0.0) {
+            return;
+        }
+        const QRectF decoration(bounds.left(), verticalCenter - thickness * 0.5,
+                               bounds.width(), thickness);
+        GeometryPiece piece;
+        piece.sourceLineIndex = lineIndex;
+        piece.anchor = decoration.center();
+        piece.originalAnchor = piece.anchor;
+        piece.path.addRect(decoration);
+        geometry.pieces.push_back(piece);
+        visibleBounds = hasVisibleBounds ? visibleBounds.united(decoration) : decoration;
+        hasVisibleBounds = true;
+    };
+    if (underline || strikeOut) {
+        for (int lineIndex = 0; lineIndex < shaped.lineBounds.size(); ++lineIndex) {
+            const QRectF line = shaped.lineBounds.at(lineIndex);
+            const qreal thickness = qMax<qreal>(1.0, line.height() * 0.055);
+            if (underline) {
+                addDecoration(line, lineIndex, line.bottom() - line.height() * 0.10, thickness);
+            }
+            if (strikeOut) {
+                addDecoration(line, lineIndex, line.center().y() - line.height() * 0.10, thickness);
             }
         }
     }

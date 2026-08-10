@@ -362,8 +362,8 @@ void EffectsPanel::rebuildParameterEditor()
     masterLayout->addWidget(new QLabel(QStringLiteral("Master strength"), masterRow));
     m_masterStrengthSlider = new SliderSpinBox(masterRow);
     m_masterStrengthSlider->setObjectName(QStringLiteral("masterStrength"));
-    m_masterStrengthSlider->setRange(0.0, 1.0);
-    m_masterStrengthSlider->setSingleStep(0.01);
+    m_masterStrengthSlider->setRange(0.0, 3.0);
+    m_masterStrengthSlider->setSingleStep(0.05);
     m_masterStrengthSlider->setDecimals(2);
     m_masterStrengthSlider->setValue(effect->masterStrength);
     masterLayout->addWidget(m_masterStrengthSlider, 1);
