@@ -15,6 +15,10 @@
 #include <QWidget>
 #include <QStringList>
 
+class QGraphicsProxyWidget;
+class QGraphicsScene;
+class QGraphicsView;
+
 namespace vt {
 
 class EditorCanvas final : public QWidget {
@@ -152,7 +156,12 @@ private:
     QPointF m_transformStartLocal;
     qreal m_transformStartAngle = 0.0;
     QString m_transformObjectId;
+    // The native editor is hosted in a graphics proxy so its Qt text document,
+    // caret, selection and IME support share the object's page transform.
     QPlainTextEdit* m_textEditor = nullptr;
+    QGraphicsView* m_editorView = nullptr;
+    QGraphicsScene* m_editorScene = nullptr;
+    QGraphicsProxyWidget* m_editorProxy = nullptr;
     QString m_editingObjectId;
     QString m_editingPageId;
     QRectF m_editingDocumentBounds;

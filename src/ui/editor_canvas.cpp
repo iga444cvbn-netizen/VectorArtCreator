@@ -3,6 +3,9 @@
 #include <QApplication>
 #include <QEvent>
 #include <QFrame>
+#include <QGraphicsProxyWidget>
+#include <QGraphicsScene>
+#include <QGraphicsView>
 #include <QKeyEvent>
 #include <QLineF>
 #include <QMouseEvent>
@@ -165,14 +168,25 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
         return;
     }
     if (!m_textEditor) {
-        m_textEditor = new QPlainTextEdit(this);
+        m_editorView = new QGraphicsView(this);
+        m_editorView->setFrameShape(QFrame::NoFrame);
+        m_editorView->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        m_editorView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_editorView->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_editorView->setStyleSheet(QStringLiteral("QGraphicsView { background: transparent; border: 0px; }"));
+        m_editorScene = new QGraphicsScene(m_editorView);
+        m_editorView->setScene(m_editorScene);
+        m_editorView->setVisible(false);
+
+        m_textEditor = new QPlainTextEdit;
         m_textEditor->setFrameShape(QFrame::NoFrame);
         m_textEditor->setWordWrapMode(QTextOption::NoWrap);
         m_textEditor->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_textEditor->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_textEditor->setStyleSheet(QStringLiteral(
             "QPlainTextEdit { background: rgba(18, 21, 27, 190); color: #f4f7fb; "
-            "border: 1px solid #79bfff; padding: 4px; selection-background-color: #2e76ba; }"));
+            "border: 1px solid #79bfff; padding: 0px; selection-background-color: #2e76ba; }"));
+        m_editorProxy = m_editorScene->addWidget(m_textEditor);
         m_textEditor->installEventFilter(this);
         connect(m_textEditor, &QPlainTextEdit::textChanged, this, [this] {
             if (!m_updatingTextEditor && !m_editingObjectId.isEmpty()) {
@@ -201,8 +215,9 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
     m_textEditor->setTextCursor(cursor);
     m_updatingTextEditor = false;
     updateTextEditorGeometry();
-    m_textEditor->show();
-    m_textEditor->raise();
+    m_editorProxy->show();
+    m_editorView->show();
+    m_editorView->raise();
     m_textEditor->setFocus(Qt::OtherFocusReason);
     emit textEditingChanged(true);
 }
@@ -212,7 +227,8 @@ void EditorCanvas::finishTextEditing()
     if (!m_textEditor || m_editingObjectId.isEmpty()) {
         return;
     }
-    m_textEditor->hide();
+    m_editorProxy->hide();
+    m_editorView->hide();
     m_editingObjectId.clear();
     m_editingPageId.clear();
     m_textRangeStart = -1;
@@ -863,25 +879,35 @@ void EditorCanvas::updateCursorShape()
 
 void EditorCanvas::updateTextEditorGeometry()
 {
-    if (!m_textEditor || m_editingObjectId.isEmpty()) {
+    if (!m_textEditor || !m_editorView || !m_editorProxy || m_editingObjectId.isEmpty()) {
+        return;
+    }
+    m_editorView->setGeometry(rect());
+    m_editorScene->setSceneRect(QRectF(rect()));
+    if (const SceneObjectGeometry* object = m_sceneGeometry.objectById(m_editingObjectId)) {
+        QRectF localBounds = object->frame.currentLocalBounds;
+        if (localBounds.isEmpty()) {
+            localBounds = object->frame.baseLocalBounds;
+        }
+        if (localBounds.isEmpty()) {
+            localBounds = QRectF(0.0, 0.0, 120.0, 36.0);
+        }
+        m_textEditor->resize(qMax(1, qCeil(localBounds.width())),
+                             qMax(1, qCeil(localBounds.height())));
+        QTransform localOffset;
+        localOffset.translate(localBounds.x(), localBounds.y());
+        m_editorProxy->setTransform(viewTransform() * object->frame.localToPage * localOffset);
+        m_editorProxy->setPos(QPointF());
         return;
     }
     QRectF documentBounds = m_editingDocumentBounds;
-    if (const SceneObjectGeometry* object = m_sceneGeometry.objectById(m_editingObjectId)) {
-        if (!object->visualBounds.isEmpty()) {
-            documentBounds = object->visualBounds;
-        }
-    }
     if (documentBounds.isEmpty()) {
         documentBounds = QRectF(QPointF(0.0, 0.0), QSizeF(360.0, 120.0));
     }
-    QRectF screenBounds = viewTransform().mapRect(documentBounds).adjusted(-6.0, -6.0, 12.0, 12.0);
-    screenBounds = screenBounds.intersected(rect().adjusted(4, 4, -4, -24));
-    if (screenBounds.width() < 100.0 || screenBounds.height() < 40.0) {
-        screenBounds.setWidth(qMax<qreal>(100.0, screenBounds.width()));
-        screenBounds.setHeight(qMax<qreal>(40.0, screenBounds.height()));
-    }
-    m_textEditor->setGeometry(screenBounds.toRect());
+    m_textEditor->resize(qMax(1, qCeil(documentBounds.width())),
+                         qMax(1, qCeil(documentBounds.height())));
+    m_editorProxy->setTransform(viewTransform());
+    m_editorProxy->setPos(documentBounds.topLeft());
 }
 
 QString EditorCanvas::hitTestObject(const QPointF& documentPoint) const

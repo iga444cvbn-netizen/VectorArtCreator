@@ -41,11 +41,22 @@ QIcon makeToolIcon(EditorTool tool)
     painter.setBrush(Qt::NoBrush);
     const QRectF r(5.0, 5.0, 18.0, 18.0);
     switch (tool) {
-    case EditorTool::Select:
-        painter.drawLine(7, 5, 11, 22);
-        painter.drawLine(11, 18, 17, 24);
-        painter.drawLine(11, 18, 19, 16);
+    case EditorTool::Select: {
+        // Conventional pointer silhouette: the previous open three-line mark
+        // looked like a brush rather than a selection cursor.
+        QPainterPath pointer;
+        pointer.moveTo(5.0, 3.0);
+        pointer.lineTo(8.0, 22.0);
+        pointer.lineTo(12.0, 16.5);
+        pointer.lineTo(17.0, 24.0);
+        pointer.lineTo(20.0, 22.0);
+        pointer.lineTo(15.0, 14.5);
+        pointer.lineTo(23.0, 12.0);
+        pointer.closeSubpath();
+        painter.setBrush(QColor(220, 226, 236));
+        painter.drawPath(pointer);
         break;
+    }
     case EditorTool::Move:
         painter.drawLine(14, 4, 14, 24);
         painter.drawLine(4, 14, 24, 14);
@@ -84,10 +95,15 @@ QIcon makeToolIcon(EditorTool tool)
         painter.drawLine(5, 21, 14, 14);
         painter.drawLine(23, 21, 14, 14);
         break;
-    case EditorTool::Smooth:
-        painter.drawPath(QPainterPath(QPointF(4, 18)));
-        painter.drawArc(r, 20 * 16, 140 * 16);
+    case EditorTool::Smooth: {
+        QPainterPath wave(QPointF(3.0, 17.0));
+        wave.cubicTo(7.0, 6.0, 11.0, 28.0, 15.0, 17.0);
+        wave.cubicTo(19.0, 6.0, 22.0, 16.0, 25.0, 11.0);
+        painter.drawPath(wave);
+        painter.setPen(QPen(QColor(135, 207, 255), 1.7, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(7.0, 6.0, 21.0, 6.0);
         break;
+    }
     case EditorTool::EffectMask:
         painter.drawEllipse(r);
         painter.drawLine(6, 22, 22, 6);
