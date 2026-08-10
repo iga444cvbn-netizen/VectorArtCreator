@@ -57,7 +57,7 @@ private:
     qreal m_normalStrength = 0.7;
     qreal m_normalHardness = 0.5;
     qreal m_maskRadius = 40.0;
-    qreal m_maskOpacity = 0.7 / 4.0;
+    qreal m_maskOpacity = 1.0;
     qreal m_maskHardness = 0.5;
 };
 
