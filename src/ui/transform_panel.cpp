@@ -19,6 +19,13 @@ QDoubleSpinBox* makeTransformSpin(QWidget* parent, double minimum, double maximu
     return spin;
 }
 
+QDoubleSpinBox* makeScaleSpin(QWidget* parent)
+{
+    auto* spin = makeTransformSpin(parent, -20.0, 20.0, 0.001);
+    spin->setDecimals(4);
+    return spin;
+}
+
 }
 
 TransformPanel::TransformPanel(QWidget* parent)
@@ -32,8 +39,10 @@ TransformPanel::TransformPanel(QWidget* parent)
     m_y = makeTransformSpin(group, -100000.0, 100000.0, 1.0);
     m_rotation = makeTransformSpin(group, -360.0, 360.0, 1.0);
     m_rotation->setSuffix(QStringLiteral("°"));
-    m_scaleX = makeTransformSpin(group, -20.0, 20.0, 0.01);
-    m_scaleY = makeTransformSpin(group, -20.0, 20.0, 0.01);
+    m_scaleX = makeScaleSpin(group);
+    m_scaleX->setObjectName(QStringLiteral("transformScaleX"));
+    m_scaleY = makeScaleSpin(group);
+    m_scaleY->setObjectName(QStringLiteral("transformScaleY"));
     form->addRow(QStringLiteral("X"), m_x);
     form->addRow(QStringLiteral("Y"), m_y);
     form->addRow(QStringLiteral("Rotation"), m_rotation);
@@ -77,6 +86,15 @@ void TransformPanel::emitTransform()
     m_transform.rotation = m_rotation->value();
     m_transform.scale = QPointF(m_scaleX->value(), m_scaleY->value());
     m_transform.normalizeScale();
+    // QDoubleSpinBox otherwise continues to show 0.00 even though the model
+    // correctly clamps it to MinimumScale.  Reflect the committed domain
+    // immediately, including negative mirrored values.
+    {
+        const QSignalBlocker xBlocker(m_scaleX);
+        const QSignalBlocker yBlocker(m_scaleY);
+        m_scaleX->setValue(m_transform.scale.x());
+        m_scaleY->setValue(m_transform.scale.y());
+    }
     emit transformChanged(m_transform);
 }
 

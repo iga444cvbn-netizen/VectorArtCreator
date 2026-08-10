@@ -119,6 +119,12 @@ private:
     void cancelBrushStroke();
     void updateCursorShape();
     void updateTextEditorGeometry();
+    [[nodiscard]] bool handleCanvasMousePress(Qt::MouseButton button,
+                                              const QPointF& widgetPosition,
+                                              Qt::KeyboardModifiers modifiers);
+    [[nodiscard]] bool handleCanvasWheel(const QPoint& angleDelta,
+                                         Qt::KeyboardModifiers modifiers);
+    [[nodiscard]] bool isOutsideNativeEditor(const QPointF& viewportPosition) const;
 
     VectorGeometry m_geometry;
     SceneGeometry m_sceneGeometry;

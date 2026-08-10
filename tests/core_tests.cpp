@@ -176,6 +176,7 @@ private slots:
     void missingFontStatesAreDistinguished();
     void trackingScalesWithFontSize();
     void trackingUsesTrueEmDistance();
+    void decorationsFollowTrackedLineExtents();
     void deformationSerializationRoundTrip();
     void deformationResamplingIsBoundedAndDeterministic();
     void pushStrokeIsDeterministic();
@@ -1749,6 +1750,93 @@ void CoreTests::deformationBrushModesProduceDistinctGeometry()
         signatures.insert(geometrySignature(geometry));
     }
     QCOMPARE(signatures.size(), 5);
+}
+
+void CoreTests::decorationsFollowTrackedLineExtents()
+{
+    TextObject base = configuredText(QStringLiteral("ABCD"));
+    base.typography.trackingEm = 0.0;
+    TextEngine engine;
+    const ShapedText untracked = engine.shape(base);
+    QVERIFY2(untracked.error.isEmpty(), qPrintable(untracked.error));
+    const int glyphCount = std::count_if(untracked.glyphs.cbegin(), untracked.glyphs.cend(),
+                                         [](const ShapedGlyph& glyph) { return glyph.lineIndex == 0; });
+    QVERIFY(glyphCount > 1);
+
+    for (const qreal tracking : {0.05, -0.05, 0.0}) {
+        TextObject object = base;
+        object.typography.trackingEm = tracking;
+        engine.clearCache();
+        const ShapedText shaped = engine.shape(object);
+        QVERIFY2(shaped.error.isEmpty(), qPrintable(shaped.error));
+        const qreal expectedWidth = qMax<qreal>(0.0, untracked.lineBounds.at(0).width()
+            + tracking * shaped.resolvedEmSize * (glyphCount - 1));
+        QVERIFY(shaped.lineBounds.at(0).isValid());
+        QVERIFY(std::abs(shaped.lineBounds.at(0).width() - expectedWidth) < 0.01);
+
+        const VectorGeometry geometry = GlyphGeometryBuilder::build(shaped,
+                                                                      object.typography.fontSize,
+                                                                      true, true);
+        QVector<qreal> decorationWidths;
+        for (const GeometryPiece& piece : geometry.pieces) {
+            if (piece.sourceGlyphIndex == -1 && piece.sourceLineIndex == 0) {
+                decorationWidths.push_back(piece.path.boundingRect().width());
+            }
+        }
+        QCOMPARE(decorationWidths.size(), 2);
+        for (const qreal width : decorationWidths) {
+            QVERIFY(std::abs(width - shaped.lineBounds.at(0).width()) < 0.01);
+        }
+    }
+
+    TextObject multiline = base;
+    multiline.sourceText = QStringLiteral("AB\nWXYZ");
+    multiline.typography.trackingEm = 0.08;
+    engine.clearCache();
+    const ShapedText trackedMultiline = engine.shape(multiline);
+    QVERIFY2(trackedMultiline.error.isEmpty(), qPrintable(trackedMultiline.error));
+    TextObject multilineUntracked = multiline;
+    multilineUntracked.typography.trackingEm = 0.0;
+    engine.clearCache();
+    const ShapedText untrackedMultiline = engine.shape(multilineUntracked);
+    QCOMPARE(trackedMultiline.lineBounds.size(), 2);
+    QCOMPARE(untrackedMultiline.lineBounds.size(), 2);
+    for (int line = 0; line < trackedMultiline.lineBounds.size(); ++line) {
+        const int lineGlyphs = std::count_if(trackedMultiline.glyphs.cbegin(), trackedMultiline.glyphs.cend(),
+                                             [line](const ShapedGlyph& glyph) {
+                                                 return glyph.lineIndex == line;
+                                             });
+        const qreal expectedWidth = untrackedMultiline.lineBounds.at(line).width()
+            + multiline.typography.trackingEm * trackedMultiline.resolvedEmSize * qMax(0, lineGlyphs - 1);
+        QVERIFY(std::abs(trackedMultiline.lineBounds.at(line).width() - expectedWidth) < 0.01);
+    }
+    QVERIFY(trackedMultiline.lineBounds.at(0).width() != trackedMultiline.lineBounds.at(1).width());
+
+    const VectorGeometry decorated = GlyphGeometryBuilder::build(trackedMultiline,
+                                                                   multiline.typography.fontSize,
+                                                                   true, true);
+    for (int line = 0; line < trackedMultiline.lineBounds.size(); ++line) {
+        int decorationCount = 0;
+        for (const GeometryPiece& piece : decorated.pieces) {
+            if (piece.sourceGlyphIndex == -1 && piece.sourceLineIndex == line) {
+                ++decorationCount;
+                QVERIFY(std::abs(piece.path.boundingRect().width()
+                                 - trackedMultiline.lineBounds.at(line).width()) < 0.01);
+            }
+        }
+        QCOMPARE(decorationCount, 2);
+    }
+    Document document;
+    document.primaryTextObject() = multiline;
+    SvgExporter exporter;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString error;
+    const QString filePath = directory.filePath(QStringLiteral("tracked-decorations.svg"));
+    QVERIFY2(exporter.exportGeometry(document, decorated, filePath, &error), qPrintable(error));
+    QFile svg(filePath);
+    QVERIFY(svg.open(QIODevice::ReadOnly | QIODevice::Text));
+    QVERIFY(svg.readAll().contains("<path"));
 }
 
 void CoreTests::capturedMoveIdsDoNotFollowSelectionChanges()

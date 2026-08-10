@@ -189,7 +189,10 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
         m_editorScene = new QGraphicsScene(m_editorView);
         m_editorView->setScene(m_editorScene);
         m_editorView->setVisible(false);
-        m_editorView->installEventFilter(this);
+        // QAbstractScrollArea delivers pointer input to its viewport, not the
+        // QGraphicsView object.  Filtering the viewport keeps the full-canvas
+        // overlay from swallowing input outside the native editor.
+        m_editorView->viewport()->installEventFilter(this);
 
         m_textEditor = new QPlainTextEdit;
         m_textEditor->setFrameShape(QFrame::NoFrame);
@@ -426,45 +429,46 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
 
 void EditorCanvas::wheelEvent(QWheelEvent* event)
 {
-    if (event->angleDelta().y() == 0
-        || (event->modifiers().testFlag(Qt::ControlModifier)
-            && m_navigationMode == QStringLiteral("middleSpace"))) {
+    if (!handleCanvasWheel(event->angleDelta(), event->modifiers())) {
         event->ignore();
         return;
     }
-    qreal delta = static_cast<qreal>(event->angleDelta().y());
-    if (m_invertZoom) {
-        delta = -delta;
-    }
-    const qreal factor = std::pow(1.0015, delta);
-    setZoom(qBound<qreal>(0.02, m_zoom * factor, 32.0));
     event->accept();
 }
 
 void EditorCanvas::mousePressEvent(QMouseEvent* event)
 {
     setFocus(Qt::MouseFocusReason);
-    if (event->button() == Qt::MiddleButton
-        || (event->button() == Qt::LeftButton
-            && m_spacePressed && m_navigationMode == QStringLiteral("middleSpace"))) {
-        m_panning = true;
-        m_lastMousePosition = event->position().toPoint();
-        updateCursorShape();
+    if (handleCanvasMousePress(event->button(), event->position(), event->modifiers())) {
         event->accept();
         return;
     }
+    QWidget::mousePressEvent(event);
+}
 
-    if (event->button() == Qt::LeftButton
+bool EditorCanvas::handleCanvasMousePress(Qt::MouseButton button,
+                                          const QPointF& widgetPosition,
+                                          Qt::KeyboardModifiers modifiers)
+{
+    if (button == Qt::MiddleButton
+        || (button == Qt::LeftButton
+            && m_spacePressed && m_navigationMode == QStringLiteral("middleSpace"))) {
+        m_panning = true;
+        m_lastMousePosition = widgetPosition.toPoint();
+        updateCursorShape();
+        return true;
+    }
+
+    if (button == Qt::LeftButton
         && (m_tool == EditorTool::Select || m_tool == EditorTool::Move || m_tool == EditorTool::Text)) {
-        const QPointF documentPoint = documentPosition(event->position());
+        const QPointF documentPoint = documentPosition(widgetPosition);
         if ((m_tool == EditorTool::Select || m_tool == EditorTool::Move)
             && beginTransform(documentPoint)) {
             grabMouse();
-            event->accept();
-            return;
+            return true;
         }
         const QString hitObjectId = hitTestObject(documentPoint);
-        const bool additive = event->modifiers().testFlag(Qt::ShiftModifier);
+        const bool additive = modifiers.testFlag(Qt::ShiftModifier);
         if (m_tool == EditorTool::Text) {
             if (hitObjectId.isEmpty()) {
                 emit textCreateRequested(documentPoint);
@@ -472,8 +476,7 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
                 emit objectClicked(hitObjectId, additive);
                 emit textEditRequested(hitObjectId);
             }
-            event->accept();
-            return;
+            return true;
         }
         if (m_tool == EditorTool::Move && !hitObjectId.isEmpty()) {
             if (!m_selectedObjectIds.contains(hitObjectId)) {
@@ -487,35 +490,31 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
                 m_moveObjectIds = {hitObjectId};
             }
             grabMouse();
-            event->accept();
-            return;
+            return true;
         }
         if (m_tool == EditorTool::Select && !hitObjectId.isEmpty()) {
             emit objectClicked(hitObjectId, additive);
-            event->accept();
-            return;
+            return true;
         }
         if (m_tool == EditorTool::Select && hitObjectId.isEmpty()) {
             m_marqueeSelecting = true;
             m_marqueeMoved = false;
             m_moveStartDocument = documentPoint;
-            m_marqueeStartWidget = event->position();
+            m_marqueeStartWidget = widgetPosition;
             m_marqueeRect = QRectF(documentPoint, documentPoint);
             grabMouse();
-            event->accept();
-            return;
+            return true;
         }
     }
 
-    if (event->button() == Qt::LeftButton && m_tool == EditorTool::EffectMask) {
-        const QPointF documentPoint = documentPosition(event->position());
+    if (button == Qt::LeftButton && m_tool == EditorTool::EffectMask) {
+        const QPointF documentPoint = documentPosition(widgetPosition);
         const QString hit = hitTestObject(documentPoint);
         if (!m_maskEnabled || m_maskTargetId.isEmpty()
             || (!hit.isEmpty() && hit != m_maskTargetId)) {
-            event->ignore();
-            return;
+            return false;
         }
-        m_cursorPosition = event->position().toPoint();
+        m_cursorPosition = widgetPosition.toPoint();
         m_hasCursorPosition = true;
         m_brushing = true;
         m_brushTargetId = m_maskTargetId;
@@ -525,33 +524,30 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
         grabMouse();
         emit effectMaskPreviewChanged(m_brushTargetId, m_brushEffectId, currentMaskStroke());
         update();
-        event->accept();
-        return;
+        return true;
     }
 
-    if (event->button() == Qt::LeftButton && m_tool != EditorTool::Select
+    if (button == Qt::LeftButton && m_tool != EditorTool::Select
         && m_tool != EditorTool::Move && m_tool != EditorTool::Text
         && m_tool != EditorTool::EffectMask) {
-        m_cursorPosition = event->position().toPoint();
+        m_cursorPosition = widgetPosition.toPoint();
         m_hasCursorPosition = true;
         m_brushing = true;
-        m_brushTargetId = hitTestObject(documentPosition(event->position()));
+        m_brushTargetId = hitTestObject(documentPosition(widgetPosition));
         if (m_brushTargetId.isEmpty()) {
             m_brushTargetId = m_activeObjectId;
         }
         if (m_brushTargetId.isEmpty()) {
             m_brushing = false;
-            event->ignore();
-            return;
+            return false;
         }
         m_brushPositions.clear();
-        m_brushPositions.push_back(documentPosition(event->position()));
+        m_brushPositions.push_back(documentPosition(widgetPosition));
         grabMouse();
         updateBrushPreview();
-        event->accept();
-        return;
+        return true;
     }
-    QWidget::mousePressEvent(event);
+    return false;
 }
 
 void EditorCanvas::mouseMoveEvent(QMouseEvent* event)
@@ -774,23 +770,23 @@ void EditorCanvas::leaveEvent(QEvent* event)
 
 bool EditorCanvas::eventFilter(QObject* watched, QEvent* event)
 {
-    if (watched == m_editorView && isTextEditing()) {
-        const auto outsideEditor = [this](const QPointF& viewPosition) {
-            if (!m_editorProxy) return true;
-            const QPointF proxyPosition = m_editorProxy->mapFromScene(m_editorView->mapToScene(viewPosition.toPoint()));
-            return !m_editorProxy->boundingRect().contains(proxyPosition);
-        };
+    if (m_editorView && watched == m_editorView->viewport() && isTextEditing()) {
         if (event->type() == QEvent::MouseButtonPress) {
             auto* mouseEvent = static_cast<QMouseEvent*>(event);
-            if (outsideEditor(mouseEvent->position())) {
+            if (isOutsideNativeEditor(mouseEvent->position())) {
+                const QPointF canvasPosition = m_editorView->viewport()->mapTo(this,
+                                                                                mouseEvent->position().toPoint());
                 finishTextEditing();
-                mousePressEvent(mouseEvent);
+                setFocus(Qt::MouseFocusReason);
+                static_cast<void>(handleCanvasMousePress(mouseEvent->button(),
+                                                         canvasPosition,
+                                                         mouseEvent->modifiers()));
                 return true;
             }
         } else if (event->type() == QEvent::Wheel) {
             auto* wheel = static_cast<QWheelEvent*>(event);
-            if (outsideEditor(wheel->position())) {
-                wheelEvent(wheel);
+            if (isOutsideNativeEditor(wheel->position())) {
+                static_cast<void>(handleCanvasWheel(wheel->angleDelta(), wheel->modifiers()));
                 return true;
             }
         }
@@ -810,6 +806,31 @@ bool EditorCanvas::eventFilter(QObject* watched, QEvent* event)
         }
     }
     return QWidget::eventFilter(watched, event);
+}
+
+bool EditorCanvas::handleCanvasWheel(const QPoint& angleDelta, Qt::KeyboardModifiers modifiers)
+{
+    if (angleDelta.y() == 0
+        || (modifiers.testFlag(Qt::ControlModifier)
+            && m_navigationMode == QStringLiteral("middleSpace"))) {
+        return false;
+    }
+    qreal delta = static_cast<qreal>(angleDelta.y());
+    if (m_invertZoom) {
+        delta = -delta;
+    }
+    setZoom(qBound<qreal>(0.02, m_zoom * std::pow(1.0015, delta), 32.0));
+    return true;
+}
+
+bool EditorCanvas::isOutsideNativeEditor(const QPointF& viewportPosition) const
+{
+    if (!m_editorView || !m_editorProxy) {
+        return true;
+    }
+    const QPointF proxyPosition = m_editorProxy->mapFromScene(
+        m_editorView->mapToScene(viewportPosition.toPoint()));
+    return !m_editorProxy->boundingRect().contains(proxyPosition);
 }
 
 void EditorCanvas::setZoom(qreal value)

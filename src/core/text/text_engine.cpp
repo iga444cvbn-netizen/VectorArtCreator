@@ -264,6 +264,12 @@ ShapedText TextEngine::shape(const TextObject& object)
                 result.glyphs.push_back(glyph);
             }
         }
+        // Decorations are built from lineBounds, so it must reflect the same
+        // per-glyph tracking offsets used above.  Keep this per line: a
+        // multiline layout does not have one shared tracking count.
+        const int trackingPairs = qMax(0, lineGlyphCounts.at(lineIndex) - 1);
+        const qreal trackedWidth = lineWidth + trackingDistance * trackingPairs;
+        result.lineBounds[lineIndex].setWidth(qMax<qreal>(0.0, trackedWidth));
         lineTop += lineHeight * lineSpacing;
     };
 
@@ -293,18 +299,6 @@ ShapedText TextEngine::shape(const TextObject& object)
             result.logicalBounds = result.logicalBounds.united(result.lineBounds.at(index));
         }
     }
-    const qreal trackingDistance = object.typography.trackingEm * result.resolvedEmSize;
-
-    int trackingPairs = 0;
-    for (const int lineGlyphCount : lineGlyphCounts) {
-        trackingPairs += qMax(0, lineGlyphCount - 1);
-    }
-    if (trackingPairs > 0 && !qFuzzyIsNull(trackingDistance)) {
-        const qreal adjustedWidth = result.logicalBounds.width()
-            + trackingDistance * trackingPairs;
-        result.logicalBounds.setWidth(qMax<qreal>(0.0, adjustedWidth));
-    }
-
     if (result.fontResolutionStatus == FontResolutionStatus::RequestedFont
         && result.fallbackGlyphCount > 0) {
         result.fontResolutionStatus = FontResolutionStatus::GlyphFallback;
