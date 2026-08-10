@@ -1829,6 +1829,9 @@ void CoreTests::maskUsesPieceGeometryWhenAnchorIsOutsideBrush()
     stroke.radius = 3.0;
     stroke.opacity = 1.0;
     effect.maskStrokes.push_back(stroke);
+    // A painted stroke normally removes influence.  Inverting it turns this
+    // into a positive assertion: only an intersecting contour receives Wave.
+    effect.maskInverted = true;
     EffectStack stack;
     stack.append(effect.clone());
     stack.apply(geometry);
