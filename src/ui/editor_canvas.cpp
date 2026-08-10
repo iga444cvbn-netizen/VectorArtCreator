@@ -446,6 +446,23 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
     QWidget::mousePressEvent(event);
 }
 
+void EditorCanvas::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    // Deformation and effect-mask tools own their gestures.  Select/Move may
+    // promote an editable object into the native QPlainTextEdit session.
+    if (event->button() == Qt::LeftButton
+        && (m_tool == EditorTool::Select || m_tool == EditorTool::Move)) {
+        const QString objectId = hitTestObject(documentPosition(event->position()));
+        if (!objectId.isEmpty()) {
+            emit objectClicked(objectId, false);
+            emit textEditRequested(objectId);
+            event->accept();
+            return;
+        }
+    }
+    QWidget::mouseDoubleClickEvent(event);
+}
+
 bool EditorCanvas::handleCanvasMousePress(Qt::MouseButton button,
                                           const QPointF& widgetPosition,
                                           Qt::KeyboardModifiers modifiers)

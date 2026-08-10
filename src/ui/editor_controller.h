@@ -3,6 +3,7 @@
 #include "core/document/document.h"
 #include "core/export/svg_exporter.h"
 #include "core/presets/preset_manager.h"
+#include "core/presets/preset_catalog.h"
 #include "core/scene/scene_geometry.h"
 #include "core/text/text_engine.h"
 #include "core/undo/document_commands.h"
@@ -39,6 +40,7 @@ public:
     [[nodiscard]] QStringList fontFamilies() const;
     [[nodiscard]] QStringList fontStyles(const QString& family) const;
     [[nodiscard]] QStringList presetNames(QString* error = nullptr) const;
+    [[nodiscard]] QVector<PresetCatalogEntry> presetCatalogEntries(QString* diagnostics = nullptr) const;
     [[nodiscard]] QString presetDirectory() const;
     [[nodiscard]] TextObject* activeObject();
     [[nodiscard]] const TextObject* activeObject() const;
@@ -71,6 +73,9 @@ public:
     void setTracking(qreal tracking);
     void setLineSpacing(qreal lineSpacing);
     void setFillColor(const QColor& color);
+    void setEffectStackStrength(qreal strength);
+    void beginEffectStackStrengthGesture();
+    void endEffectStackStrengthGesture();
 
     void selectObject(const QString& objectId, bool additive = false);
     void toggleObjectSelection(const QString& objectId);
@@ -130,6 +135,9 @@ public:
 
     [[nodiscard]] bool savePreset(const QString& name, QString* error = nullptr);
     [[nodiscard]] bool applyPreset(const QString& name, QString* error = nullptr);
+    [[nodiscard]] bool applyPresetById(const QString& id, QString* error = nullptr);
+    [[nodiscard]] bool duplicateBuiltinPreset(const QString& id, QString* error = nullptr);
+    [[nodiscard]] bool deletePresetById(const QString& id, QString* error = nullptr);
     [[nodiscard]] bool deletePreset(const QString& name, QString* error = nullptr);
 
     void copySelectedObjects();
@@ -184,6 +192,7 @@ private:
     QString m_selectedEffectId;
     quint64 m_evaluationGeneration = 0;
     PresetManager m_presetManager;
+    PresetCatalog m_presetCatalog;
     SvgExporter m_svgExporter;
     QUndoStack m_undoStack;
     std::optional<DeformationStroke> m_previewStroke;
@@ -193,6 +202,9 @@ private:
     QString m_previewEffectMaskEffectId;
     QFutureWatcher<SceneGeometry>* m_evaluationWatcher = nullptr;
     std::optional<Page> m_pendingEvaluation;
+    bool m_effectStackStrengthGestureActive = false;
+    QString m_effectStackStrengthGestureObjectId;
+    qreal m_effectStackStrengthGestureStart = 1.0;
 };
 
 } // namespace vt

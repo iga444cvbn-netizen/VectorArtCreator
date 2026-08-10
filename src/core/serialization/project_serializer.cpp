@@ -20,6 +20,7 @@ QJsonObject serializeTextObject(const TextObject& textObject)
     object.insert(QStringLiteral("font"), textObject.font.toJson());
     object.insert(QStringLiteral("typography"), textObject.typography.toJson(textObject.fill));
     object.insert(QStringLiteral("effects"), textObject.effects.toJson());
+    object.insert(QStringLiteral("effectStackStrength"), textObject.effectStackStrength);
     object.insert(QStringLiteral("deformation"), textObject.deformation.toJson());
     object.insert(QStringLiteral("transform"), textObject.transform.toJson());
     object.insert(QStringLiteral("visible"), textObject.visible);
@@ -51,6 +52,10 @@ bool deserializeTextObject(const QJsonObject& object,
     }
     result.visible = object.value(QStringLiteral("visible")).toBool(result.visible);
     result.futureData = object.value(QStringLiteral("futureData")).toObject();
+    if (formatVersion >= 6) {
+        result.effectStackStrength = qBound<qreal>(0.0,
+            object.value(QStringLiteral("effectStackStrength")).toDouble(1.0), 2.0);
+    }
 
     const QJsonValue effectValue = object.value(QStringLiteral("effects"));
     if (!effectValue.isArray()) {

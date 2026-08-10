@@ -11,6 +11,8 @@
 #include "ui/tool_palette.h"
 #include "ui/transform_panel.h"
 #include "ui/typography_panel.h"
+#include "ui/style_gallery.h"
+#include "ui/slider_spin_box.h"
 
 #include <QAction>
 #include <QHash>
@@ -18,6 +20,8 @@
 #include <QMainWindow>
 #include <QTabBar>
 #include <QVector>
+
+class QPushButton;
 
 namespace vt {
 
@@ -53,12 +57,15 @@ private:
     void applyNavigationSettings();
     void setGlobalEditorShortcutsEnabled(bool enabled);
     void handleTextEditingChanged(bool editing);
+    void addTextAtPageCenter();
 
     EditorController* m_controller = nullptr;
     EditorCanvas* m_canvas = nullptr;
     TypographyPanel* m_typographyPanel = nullptr;
     TransformPanel* m_transformPanel = nullptr;
     EffectsPanel* m_effectsPanel = nullptr;
+    StyleGallery* m_styleGallery = nullptr;
+    SliderSpinBox* m_styleIntensity = nullptr;
     DeformationPanel* m_deformationPanel = nullptr;
     ToolPalette* m_toolPalette = nullptr;
     LayersPanel* m_layersPanel = nullptr;
@@ -71,6 +78,7 @@ private:
     QAction* m_cutAction = nullptr;
     QAction* m_pasteAction = nullptr;
     QAction* m_selectAllAction = nullptr;
+    QPushButton* m_addTextButton = nullptr;
     QVector<QAction*> m_toolActions;
     QHash<QString, QAction*> m_actions;
     QString m_newTextEditObjectId;

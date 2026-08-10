@@ -104,8 +104,13 @@ QVector<PresetManager::PresetRecord> PresetManager::readPresetRecords(QString* e
     for (const QString& fileName : files) {
         const QString filePath = directory.filePath(fileName);
         Preset preset;
-        if (!readPresetFile(filePath, &preset, error)) {
-            return {};
+        QString entryError;
+        if (!readPresetFile(filePath, &preset, &entryError)) {
+            // A corrupt user file is isolated; valid presets remain usable.
+            if (error) {
+                *error += error->isEmpty() ? entryError : QStringLiteral("\n") + entryError;
+            }
+            continue;
         }
 
         PresetInfo info;
@@ -120,9 +125,6 @@ QVector<PresetInfo> PresetManager::listPresets(QString* error) const
 {
     QVector<PresetInfo> result;
     const QVector<PresetRecord> records = readPresetRecords(error);
-    if (error && !error->isEmpty()) {
-        return {};
-    }
     result.reserve(records.size());
     for (const PresetRecord& record : records) {
         result.push_back(record.info);
@@ -134,9 +136,6 @@ QStringList PresetManager::listPresetNames(QString* error) const
 {
     QStringList names;
     const QVector<PresetInfo> presets = listPresets(error);
-    if (error && !error->isEmpty()) {
-        return {};
-    }
     names.reserve(presets.size());
     for (const PresetInfo& preset : presets) {
         names.push_back(preset.name);
@@ -158,9 +157,6 @@ bool PresetManager::savePreset(Preset preset, QString* error) const
     }
 
     const QVector<PresetRecord> existing = readPresetRecords(error);
-    if (error && !error->isEmpty()) {
-        return false;
-    }
     for (const PresetRecord& record : existing) {
         if (record.info.name == preset.name
             && (!isStorageId(preset.id) || record.info.id != preset.id)) {
@@ -222,9 +218,6 @@ bool PresetManager::loadPresetById(const QString& id, Preset* preset, QString* e
 bool PresetManager::loadPreset(const QString& name, Preset* preset, QString* error) const
 {
     const QVector<PresetRecord> records = readPresetRecords(error);
-    if (error && !error->isEmpty()) {
-        return false;
-    }
     const QString requestedName = name.trimmed();
     for (const PresetRecord& record : records) {
         if (record.info.name != requestedName) {
@@ -265,9 +258,6 @@ bool PresetManager::deletePresetById(const QString& id, QString* error) const
 bool PresetManager::deletePreset(const QString& name, QString* error) const
 {
     const QVector<PresetRecord> records = readPresetRecords(error);
-    if (error && !error->isEmpty()) {
-        return false;
-    }
     const QString requestedName = name.trimmed();
     for (const PresetRecord& record : records) {
         if (record.info.name != requestedName) {

@@ -2,12 +2,15 @@
 #include "core/deformation/contour_sampler.h"
 #include "core/deformation/manual_deformation.h"
 #include "core/effects/glyph_jitter_effect.h"
+#include "core/effects/effect_registry.h"
+#include "core/effects/text_range_rebaser.h"
 #include "core/effects/procedural_effect.h"
 #include "core/effects/stretch_effect.h"
 #include "core/effects/wave_effect.h"
 #include "core/export/svg_exporter.h"
 #include "core/presets/preset.h"
 #include "core/presets/preset_manager.h"
+#include "core/presets/preset_catalog.h"
 #include "core/serialization/project_serializer.h"
 #include "core/scene/scene_evaluator.h"
 #include "core/scene/object_frame.h"
@@ -228,6 +231,10 @@ private slots:
     void transformScaleDomainAndPivotRoundTrip();
     void maskUsesPieceGeometryWhenAnchorIsOutsideBrush();
     void fontCacheEpochInvalidatesWorkerShapingKeys();
+    void effectRegistryDescriptorsAgreeWithFactories();
+    void builtInPresetCatalogParses();
+    void effectStackStrengthZeroIsIdentity();
+    void textRangeRebasingUsesUtf16Offsets();
 };
 
 void CoreTests::projectSerializationRoundTrip()
@@ -1934,6 +1941,64 @@ void CoreTests::fontCacheEpochInvalidatesWorkerShapingKeys()
     SceneEvaluator::invalidateFontCaches();
     QVERIFY(SceneEvaluator::fontCacheEpoch() > epoch);
     QVERIFY(SceneEvaluator::shapingCacheKey(object) != before);
+}
+
+void CoreTests::effectRegistryDescriptorsAgreeWithFactories()
+{
+    QString error;
+    QVERIFY2(EffectRegistry::instance().validate(&error), qPrintable(error));
+    QSet<QString> ids;
+    for (const EffectDescriptor& descriptor : EffectRegistry::instance().descriptors()) {
+        QVERIFY(!ids.contains(descriptor.typeId));
+        ids.insert(descriptor.typeId);
+        QVERIFY(EffectRegistry::instance().create(descriptor.typeId) != nullptr);
+    }
+}
+
+void CoreTests::builtInPresetCatalogParses()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    PresetManager manager(directory.path());
+    PresetCatalog catalog(manager);
+    QString diagnostics;
+    const QVector<PresetCatalogEntry> entries = catalog.entries(&diagnostics);
+    QVERIFY2(diagnostics.isEmpty(), qPrintable(diagnostics));
+    QCOMPARE(entries.size(), 16);
+    for (const PresetCatalogEntry& entry : entries) {
+        QVERIFY(entry.builtIn);
+        QVERIFY(entry.preset.id.startsWith(QStringLiteral("builtin.")));
+        QVERIFY(!entry.preset.effects.isEmpty());
+    }
+}
+
+void CoreTests::effectStackStrengthZeroIsIdentity()
+{
+    VectorGeometry geometry = rectangleGeometry();
+    const QByteArray before = geometrySignature(geometry);
+    for (const EffectDescriptor& descriptor : EffectRegistry::instance().descriptors()) {
+        EffectStack stack;
+        stack.append(EffectRegistry::instance().create(descriptor.typeId));
+        VectorGeometry candidate = geometry;
+        stack.apply(candidate, 0.0);
+        QCOMPARE(geometrySignature(candidate), before);
+    }
+}
+
+void CoreTests::textRangeRebasingUsesUtf16Offsets()
+{
+    EffectScope range{EffectScopeKind::TextRange, 2, 4};
+    const EffectScope shifted = TextRangeRebaser::rebase(range, QStringLiteral("abCD"), QStringLiteral("XabCD"));
+    QCOMPARE(shifted.start, 3);
+    QCOMPARE(shifted.end, 5);
+    const QString emoji = QString::fromUtf8("A😀BC");
+    const EffectScope emojiRange{EffectScopeKind::TextRange, 3, 5}; // B/C after surrogate pair
+    const EffectScope unchanged = TextRangeRebaser::rebase(emojiRange, emoji, emoji + QStringLiteral("!"));
+    QCOMPARE(unchanged.start, 3);
+    QCOMPARE(unchanged.end, 5);
+    const EffectScope deleted = TextRangeRebaser::rebase(range, QStringLiteral("abCD"), QStringLiteral("ab"));
+    QCOMPARE(deleted.start, 2);
+    QCOMPARE(deleted.end, 2);
 }
 
 int main(int argc, char* argv[])

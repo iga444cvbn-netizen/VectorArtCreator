@@ -1,4 +1,5 @@
 #include "ui/effects_panel.h"
+#include "core/effects/effect_registry.h"
 
 #include <QDoubleSpinBox>
 #include <QAbstractItemView>
@@ -15,25 +16,8 @@ namespace {
 
 QString categoryFor(const QString& typeId)
 {
-    if (typeId == QStringLiteral("wave") || typeId == QStringLiteral("bounce")
-        || typeId == QStringLiteral("staircase") || typeId == QStringLiteral("arc")
-        || typeId == QStringLiteral("zigzag") || typeId == QStringLiteral("sineRotation")
-        || typeId == QStringLiteral("baselineDrift")) {
-        return QStringLiteral("Baseline");
-    }
-    if (typeId.contains(QStringLiteral("random"), Qt::CaseInsensitive)
-        || typeId == QStringLiteral("glyphJitter")
-        || typeId == QStringLiteral("alternatingTilt")) {
-        return QStringLiteral("Random");
-    }
-    if (typeId == QStringLiteral("stretch") || typeId == QStringLiteral("compression")
-        || typeId == QStringLiteral("skew") || typeId == QStringLiteral("crescendo")
-        || typeId == QStringLiteral("shrink") || typeId == QStringLiteral("horizontalSpread")
-        || typeId == QStringLiteral("verticalSpread") || typeId == QStringLiteral("expandCenter")
-        || typeId == QStringLiteral("squeezeCenter")) {
-        return QStringLiteral("Transform");
-    }
-    return QStringLiteral("Warp");
+    const EffectDescriptor* descriptor = EffectRegistry::instance().descriptor(typeId);
+    return descriptor ? descriptor->category : QStringLiteral("Other");
 }
 
 void addEffectChoice(QComboBox* combo, const QString& typeId, const QString& displayName)
@@ -62,8 +46,8 @@ EffectsPanel::EffectsPanel(QWidget* parent)
 
     auto* addRow = new QHBoxLayout();
     m_addEffectCombo = new QComboBox(effectsGroup);
-    for (const auto& [typeId, displayName] : availableEffectTypes()) {
-        addEffectChoice(m_addEffectCombo, typeId, displayName);
+    for (const EffectDescriptor& effect : EffectRegistry::instance().descriptors()) {
+        addEffectChoice(m_addEffectCombo, effect.typeId, effect.displayName);
     }
     m_addEffectButton = new QPushButton(QStringLiteral("Add"), effectsGroup);
     addRow->addWidget(m_addEffectCombo, 1);
@@ -117,10 +101,14 @@ EffectsPanel::EffectsPanel(QWidget* parent)
         const QString currentType = m_addEffectCombo->currentData().toString();
         const QSignalBlocker blocker(m_addEffectCombo);
         m_addEffectCombo->clear();
-        for (const auto& [typeId, displayName] : availableEffectTypes()) {
+        for (const EffectDescriptor& descriptor : EffectRegistry::instance().descriptors()) {
+            const QString& typeId = descriptor.typeId;
+            const QString& displayName = descriptor.displayName;
             if (query.trimmed().isEmpty()
                 || displayName.contains(query, Qt::CaseInsensitive)
-                || categoryFor(typeId).contains(query, Qt::CaseInsensitive)) {
+                || descriptor.category.contains(query, Qt::CaseInsensitive)
+                || descriptor.shortDescription.contains(query, Qt::CaseInsensitive)
+                || descriptor.searchTags.join(QLatin1Char(' ')).contains(query, Qt::CaseInsensitive)) {
                 addEffectChoice(m_addEffectCombo, typeId, displayName);
             }
         }

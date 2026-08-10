@@ -32,7 +32,7 @@ public:
     void move(int from, int to);
     void clear();
 
-    void apply(VectorGeometry& geometry) const;
+    void apply(VectorGeometry& geometry, qreal stackStrength = 1.0) const;
 
     [[nodiscard]] QJsonArray toJson() const;
     [[nodiscard]] static EffectStack fromJson(const QJsonArray& array, QString* error);

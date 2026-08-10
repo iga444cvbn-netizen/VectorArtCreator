@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/document/document.h"
+#include "core/effects/text_range_rebaser.h"
 
 #include <QColor>
 #include <QString>
@@ -43,6 +44,8 @@ public:
 private:
     QString m_oldText;
     QString m_newText;
+    QVector<QPair<QString, EffectScope>> m_oldScopes;
+    QVector<QPair<QString, EffectScope>> m_newScopes;
 };
 
 class SetFontFamilyCommand final : public DocumentCommand {
@@ -313,6 +316,17 @@ private:
     double m_newValue = 1.0;
 };
 
+class SetEffectStackStrengthCommand final : public DocumentCommand {
+public:
+    SetEffectStackStrengthCommand(Document& document, qreal oldValue, qreal newValue,
+                                  DocumentChangeCallback onChanged);
+    void undo() override;
+    void redo() override;
+private:
+    qreal m_oldValue = 1.0;
+    qreal m_newValue = 1.0;
+};
+
 class SetEffectScopeCommand final : public DocumentCommand {
 public:
     SetEffectScopeCommand(Document& document,
@@ -354,7 +368,9 @@ public:
                        EffectStack before,
                        EffectStack after,
                        DocumentChangeCallback onChanged,
-                       const QString& description);
+                       const QString& description,
+                       qreal beforeStackStrength = 1.0,
+                       qreal afterStackStrength = 1.0);
 
     void undo() override;
     void redo() override;
@@ -362,6 +378,8 @@ public:
 private:
     EffectStack m_before;
     EffectStack m_after;
+    qreal m_beforeStackStrength = 1.0;
+    qreal m_afterStackStrength = 1.0;
 };
 
 class AddDeformationStrokeCommand final : public DocumentCommand {

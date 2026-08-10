@@ -8,11 +8,13 @@
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QKeySequence>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPalette>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -91,6 +93,10 @@ MainWindow::MainWindow(QWidget* parent)
     auto* sidebarLayout = new QVBoxLayout(sidebar);
     sidebarLayout->setContentsMargins(4, 4, 4, 4);
     sidebarLayout->setSpacing(4);
+    m_addTextButton = new QPushButton(QStringLiteral("Add Text"), sidebar);
+    m_addTextButton->setObjectName(QStringLiteral("emptyAddText"));
+    m_addTextButton->setToolTip(QStringLiteral("Create editable text at the page centre"));
+    sidebarLayout->addWidget(m_addTextButton);
 
     auto* layersGroup = new QGroupBox(QStringLiteral("Layers"), sidebar);
     auto* layersLayout = new QVBoxLayout(layersGroup);
@@ -106,6 +112,20 @@ MainWindow::MainWindow(QWidget* parent)
     m_transformPanel = new TransformPanel(inspector);
     m_typographyPanel = new TypographyPanel(inspector);
     m_effectsPanel = new EffectsPanel(inspector);
+    m_styleGallery = new StyleGallery(inspector);
+    auto* stylesHost = new QWidget(inspector);
+    auto* stylesLayout = new QVBoxLayout(stylesHost);
+    stylesLayout->setContentsMargins(0, 0, 0, 0);
+    stylesLayout->addWidget(m_styleGallery);
+    auto* intensityRow = new QHBoxLayout();
+    intensityRow->addWidget(new QLabel(QStringLiteral("Style Intensity"), stylesHost));
+    m_styleIntensity = new SliderSpinBox(stylesHost);
+    m_styleIntensity->setObjectName(QStringLiteral("styleIntensity"));
+    m_styleIntensity->setRange(0.0, 2.0);
+    m_styleIntensity->setDecimals(2);
+    m_styleIntensity->setSingleStep(0.05);
+    intensityRow->addWidget(m_styleIntensity, 1);
+    stylesLayout->addLayout(intensityRow);
     m_deformationPanel = new DeformationPanel(inspector);
     inspectorLayout->addWidget(new CollapsibleSection(QStringLiteral("Object"),
                                                        QStringLiteral("Object"),
@@ -117,6 +137,9 @@ MainWindow::MainWindow(QWidget* parent)
                                                        m_typographyPanel,
                                                        true,
                                                        inspector));
+    inspectorLayout->insertWidget(1, new CollapsibleSection(QStringLiteral("Creative Styles"),
+                                                             QStringLiteral("Creative Styles"),
+                                                             stylesHost, true, inspector));
     inspectorLayout->addWidget(new CollapsibleSection(QStringLiteral("Effects"),
                                                        QStringLiteral("Effects"),
                                                        m_effectsPanel,
@@ -141,6 +164,7 @@ MainWindow::MainWindow(QWidget* parent)
     setCentralWidget(workspace);
 
     connect(addPageButton, &QToolButton::clicked, m_controller, &EditorController::addPage);
+    connect(m_addTextButton, &QPushButton::clicked, this, &MainWindow::addTextAtPageCenter);
     connect(duplicatePageButton, &QToolButton::clicked,
             m_controller, &EditorController::duplicateCurrentPage);
     connect(renamePageButton, &QToolButton::clicked, this, &MainWindow::renameCurrentPage);
@@ -338,6 +362,21 @@ MainWindow::MainWindow(QWidget* parent)
             m_controller, &EditorController::setEffectParameter);
     connect(m_effectsPanel, &EffectsPanel::effectMasterStrengthChanged,
             m_controller, &EditorController::setEffectMasterStrength);
+    connect(m_styleIntensity, &SliderSpinBox::valueChanged,
+            m_controller, &EditorController::setEffectStackStrength);
+    connect(m_styleIntensity, &SliderSpinBox::interactionStarted,
+            m_controller, &EditorController::beginEffectStackStrengthGesture);
+    connect(m_styleIntensity, &SliderSpinBox::interactionFinished,
+            m_controller, &EditorController::endEffectStackStrengthGesture);
+    connect(m_styleGallery, &StyleGallery::applyPresetRequested, this, [this](const QString& id) {
+        QString error; if (!m_controller->applyPresetById(id, &error)) setStatus(error);
+    });
+    connect(m_styleGallery, &StyleGallery::duplicateBuiltInRequested, this, [this](const QString& id) {
+        QString error; if (!m_controller->duplicateBuiltinPreset(id, &error)) setStatus(error); refreshUi();
+    });
+    connect(m_styleGallery, &StyleGallery::deleteUserPresetRequested, this, [this](const QString& id) {
+        QString error; if (!m_controller->deletePresetById(id, &error)) setStatus(error); refreshUi();
+    });
     connect(m_effectsPanel, &EffectsPanel::effectSelected,
             this, [this](const QString& effectId) {
                 m_controller->setSelectedEffectId(effectId);
@@ -488,8 +527,20 @@ void MainWindow::refreshUi()
     m_canvas->setMaskEnabled(!m_effectsPanel->selectedEffectId().isEmpty());
     m_canvas->setMaskEffectId(m_effectsPanel->selectedEffectId());
     m_transformPanel->refresh(object);
+    // Family and style are one resolved FontDescriptor. Populate/select the
+    // family styles before TypographyPanel reads that descriptor.
+    if (object) updateStylesForFamily(object->font.family);
     m_typographyPanel->refresh(object);
     m_effectsPanel->refresh(object, m_presetNames);
+    QString catalogDiagnostics;
+    m_styleGallery->setEntries(m_controller->presetCatalogEntries(&catalogDiagnostics));
+    m_styleGallery->setTargetAvailable(object != nullptr);
+    if (!catalogDiagnostics.isEmpty()) setStatus(catalogDiagnostics);
+    {
+        const QSignalBlocker blocker(m_styleIntensity);
+        m_styleIntensity->setValue(object ? object->effectStackStrength : 1.0);
+        m_styleIntensity->setEnabled(object != nullptr);
+    }
     if (!object) {
         m_controller->setSelectedEffectId(QString());
     } else if (m_effectsPanel->selectedEffectId() != m_controller->selectedEffectId()) {
@@ -498,9 +549,6 @@ void MainWindow::refreshUi()
     m_effectsPanel->setTextRange(m_controller->selectionModel()->textRange().first,
                                  m_controller->selectionModel()->textRange().second);
     m_deformationPanel->refresh(object ? &object->deformation : nullptr);
-    if (object) {
-        updateStylesForFamily(object->font.family);
-    }
 
     {
         const QSignalBlocker blocker(m_pageTabs);
@@ -538,9 +586,27 @@ void MainWindow::refreshFonts()
     m_controller->refreshFonts();
 }
 
+void MainWindow::addTextAtPageCenter()
+{
+    const Page* page = m_controller->document().currentPage();
+    if (!page) return;
+    const QPointF position(page->size.width() * 0.5, page->size.height() * 0.5);
+    const QString objectId = m_controller->createTextObject(position);
+    const TextObject* object = m_controller->activeObject();
+    if (!object || object->id != objectId) return;
+    m_newTextEditObjectId = objectId;
+    m_newTextEditTouched = false;
+    m_canvas->beginTextEditing(objectId, object->sourceText,
+                               object->font.toQFont(object->typography.fontSize),
+                               QRectF(position, QSizeF(420.0, 130.0)));
+}
+
 void MainWindow::updateStylesForFamily(const QString& family)
 {
-    m_typographyPanel->setFontStyles(m_controller->fontStyles(family));
+    const TextObject* object = m_controller->activeObject();
+    m_typographyPanel->setFontStyles(m_controller->fontStyles(family),
+                                     object && object->font.family == family
+                                         ? object->font.styleName : QString());
 }
 
 void MainWindow::newProject()

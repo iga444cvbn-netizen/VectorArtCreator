@@ -28,6 +28,8 @@ set(CORE_SOURCES
     src/core/text/text_engine.cpp
     src/core/geometry/vector_geometry.cpp
     src/core/effects/effect.cpp
+    src/core/effects/effect_registry.cpp
+    src/core/effects/text_range_rebaser.cpp
     src/core/effects/effect_stack.cpp
     src/core/effects/wave_effect.cpp
     src/core/effects/glyph_jitter_effect.cpp
@@ -35,7 +37,9 @@ set(CORE_SOURCES
     src/core/effects/procedural_effect.cpp
     src/core/serialization/project_serializer.cpp
     src/core/presets/preset.cpp
+    src/core/presets/preset_catalog.cpp
     src/core/presets/preset_manager.cpp
+    resources/resources.qrc
     src/core/export/svg_exporter.cpp
     src/core/undo/document_commands.cpp
     src/core/undo/scene_commands.cpp
@@ -75,6 +79,8 @@ set(UI_SOURCES
     src/ui/typography_panel.cpp
     src/ui/effects_panel.h
     src/ui/effects_panel.cpp
+    src/ui/style_gallery.h
+    src/ui/style_gallery.cpp
     src/ui/deformation_panel.h
     src/ui/deformation_panel.cpp
     src/ui/main_window.h

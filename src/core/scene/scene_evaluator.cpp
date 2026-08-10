@@ -87,7 +87,10 @@ QByteArray shapingKey(const TextObject& object)
 
 QByteArray effectsKey(const TextObject& object)
 {
-    return hashKey(QJsonDocument(object.effects.toJson()).toJson(QJsonDocument::Compact));
+    QByteArray key = QJsonDocument(object.effects.toJson()).toJson(QJsonDocument::Compact);
+    key += QByteArrayLiteral("|stackStrength=");
+    key += QByteArray::number(object.effectStackStrength, 'g', 16);
+    return hashKey(key);
 }
 
 QByteArray deformationKey(const TextObject& object)
@@ -146,7 +149,7 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
     const QByteArray currentEffectKey = hashKey(cache.baseKey + effectsKey(object));
     if (cache.effectKey != currentEffectKey) {
         cache.effectGeometry = cache.baseGeometry;
-        object.effects.apply(cache.effectGeometry);
+        object.effects.apply(cache.effectGeometry, object.effectStackStrength);
         cache.effectKey = currentEffectKey;
         cache.deformationKey.clear();
     }

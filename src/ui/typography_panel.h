@@ -19,7 +19,7 @@ public:
     explicit TypographyPanel(QWidget* parent = nullptr);
 
     void setFontFamilies(const QStringList& families);
-    void setFontStyles(const QStringList& styles);
+    void setFontStyles(const QStringList& styles, const QString& resolvedStyle = {});
     void refresh(const TextObject* object);
     void refresh(const TextObject& object) { refresh(&object); }
 

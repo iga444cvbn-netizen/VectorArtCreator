@@ -43,6 +43,9 @@ struct TextObject {
     TypographyProperties typography;
     QColor fill = QColor(24, 24, 28);
     EffectStack effects;
+    // A persistent object-level multiplier for the entire nondestructive
+    // stack.  Individual effect Master Strength remains untouched.
+    qreal effectStackStrength = 1.0;
     ManualDeformation deformation;
     ObjectTransform transform;
     bool visible = true;
@@ -93,7 +96,7 @@ struct Page {
 
 class Document {
 public:
-    static constexpr int CurrentFormatVersion = 5;
+    static constexpr int CurrentFormatVersion = 6;
 
     int formatVersion = CurrentFormatVersion;
     QString title = QStringLiteral("Untitled Vector Typography Project");
