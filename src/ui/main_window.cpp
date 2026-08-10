@@ -269,6 +269,15 @@ MainWindow::MainWindow(QWidget* parent)
                 }
                 m_controller->addEffectMaskStroke(objectId, effectId, stroke);
             });
+    connect(m_canvas, &EditorCanvas::effectMaskPreviewChanged, this,
+            [this](const QString& objectId, const EffectMaskStroke& stroke) {
+                const QString effectId = m_effectsPanel->selectedEffectId();
+                if (!effectId.isEmpty()) {
+                    m_controller->setEffectMaskPreview(objectId, effectId, stroke);
+                }
+            });
+    connect(m_canvas, &EditorCanvas::effectMaskPreviewCleared,
+            m_controller, &EditorController::clearEffectMaskPreview);
 
     connect(m_typographyPanel, &TypographyPanel::textChangedByUser,
             m_controller, &EditorController::setText);
@@ -282,6 +291,10 @@ MainWindow::MainWindow(QWidget* parent)
             m_controller, &EditorController::setFontWeight);
     connect(m_typographyPanel, &TypographyPanel::fontItalicChanged,
             m_controller, &EditorController::setFontItalic);
+    connect(m_typographyPanel, &TypographyPanel::fontUnderlineChanged,
+            m_controller, &EditorController::setFontUnderline);
+    connect(m_typographyPanel, &TypographyPanel::fontStrikeOutChanged,
+            m_controller, &EditorController::setFontStrikeOut);
     connect(m_typographyPanel, &TypographyPanel::fontSizeChanged,
             m_controller, &EditorController::setFontSize);
     connect(m_typographyPanel, &TypographyPanel::trackingChanged,

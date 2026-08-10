@@ -65,6 +65,8 @@ public:
     void setFontStyle(const QString& styleName);
     void setFontWeight(int weight);
     void setFontItalic(bool italic);
+    void setFontUnderline(bool underline);
+    void setFontStrikeOut(bool strikeOut);
     void setFontSize(qreal pointSize);
     void setTracking(qreal tracking);
     void setLineSpacing(qreal lineSpacing);
@@ -111,6 +113,10 @@ public:
     void addEffectMaskStroke(const QString& objectId,
                              const QString& effectId,
                              const EffectMaskStroke& stroke);
+    void setEffectMaskPreview(const QString& objectId,
+                              const QString& effectId,
+                              const EffectMaskStroke& stroke);
+    void clearEffectMaskPreview();
 
     void addDeformationStroke(const DeformationStroke& stroke);
     void addDeformationStroke(const QString& objectId, const DeformationStroke& stroke);
@@ -171,7 +177,7 @@ private:
     qreal m_brushStrength = 0.7;
     qreal m_brushHardness = 0.5;
     qreal m_maskRadius = 40.0;
-    qreal m_maskOpacity = 0.7 / 4.0;
+    qreal m_maskOpacity = 1.0;
     qreal m_maskHardness = 0.5;
     bool m_maskRestore = false;
     QString m_selectedEffectId;
@@ -181,6 +187,9 @@ private:
     QUndoStack m_undoStack;
     std::optional<DeformationStroke> m_previewStroke;
     QString m_previewObjectId;
+    std::optional<EffectMaskStroke> m_previewEffectMask;
+    QString m_previewEffectMaskObjectId;
+    QString m_previewEffectMaskEffectId;
     QFutureWatcher<SceneGeometry>* m_evaluationWatcher = nullptr;
     std::optional<Page> m_pendingEvaluation;
 };

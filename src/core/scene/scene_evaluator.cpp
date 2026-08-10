@@ -62,6 +62,12 @@ QByteArray shapingKey(const TextObject& object)
     key += QByteArrayLiteral("italic=");
     key += object.font.italic ? '1' : '0';
     key += '\0';
+    key += QByteArrayLiteral("underline=");
+    key += object.font.underline ? '1' : '0';
+    key += '\0';
+    key += QByteArrayLiteral("strikeOut=");
+    key += object.font.strikeOut ? '1' : '0';
+    key += '\0';
     key += QByteArrayLiteral("fontSize=");
     key += QByteArray::number(object.typography.fontSize, 'g', 16);
     key += '\0';
@@ -116,7 +122,10 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
     const QByteArray currentBaseKey = hashKey(currentShapingKey
                                                + QByteArray::number(object.typography.fontSize));
     if (cache.baseKey != currentBaseKey) {
-        cache.baseGeometry = GlyphGeometryBuilder::build(cache.shaped, object.typography.fontSize);
+        cache.baseGeometry = GlyphGeometryBuilder::build(cache.shaped,
+                                                          object.typography.fontSize,
+                                                          object.font.underline,
+                                                          object.font.strikeOut);
         cache.baseKey = currentBaseKey;
         cache.effectKey.clear();
         cache.deformationKey.clear();

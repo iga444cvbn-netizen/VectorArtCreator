@@ -5,13 +5,52 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPainter>
+#include <QPixmap>
 #include <QSignalBlocker>
 #include <QTextCursor>
 #include <QVBoxLayout>
 
 namespace vt {
+
+namespace {
+
+QIcon formattingIcon(const QString& letter, bool italic, bool underline, bool strikeOut)
+{
+    QPixmap pixmap(24, 24);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    QFont font(QStringLiteral("Segoe UI"), 14, QFont::Bold);
+    font.setItalic(italic);
+    painter.setFont(font);
+    painter.setPen(QColor(225, 230, 240));
+    painter.drawText(pixmap.rect(), Qt::AlignCenter, letter);
+    if (underline) {
+        painter.drawLine(5, 20, 19, 20);
+    }
+    if (strikeOut) {
+        painter.drawLine(4, 12, 20, 12);
+    }
+    return QIcon(pixmap);
+}
+
+QPushButton* formattingButton(const QIcon& icon, const QString& name, QWidget* parent)
+{
+    auto* button = new QPushButton(parent);
+    button->setIcon(icon);
+    button->setIconSize(QSize(20, 20));
+    button->setAccessibleName(name);
+    button->setToolTip(name);
+    button->setCheckable(true);
+    button->setFixedWidth(32);
+    return button;
+}
+
+} // namespace
 
 TypographyPanel::TypographyPanel(QWidget* parent)
     : QWidget(parent)
@@ -48,20 +87,18 @@ TypographyPanel::TypographyPanel(QWidget* parent)
     auto* formatting = new QWidget(group);
     auto* formattingLayout = new QHBoxLayout(formatting);
     formattingLayout->setContentsMargins(0, 0, 0, 0);
-    m_boldButton = new QPushButton(QStringLiteral("B"), formatting);
-    m_boldButton->setCheckable(true);
-    m_boldButton->setToolTip(QStringLiteral("Bold"));
-    m_italicButton = new QPushButton(QStringLiteral("I"), formatting);
-    m_italicButton->setCheckable(true);
-    m_italicButton->setToolTip(QStringLiteral("Italic"));
-    QFont boldFont = m_boldButton->font();
-    boldFont.setBold(true);
-    m_boldButton->setFont(boldFont);
-    QFont italicFont = m_italicButton->font();
-    italicFont.setItalic(true);
-    m_italicButton->setFont(italicFont);
+    m_boldButton = formattingButton(formattingIcon(QStringLiteral("B"), false, false, false),
+                                    QStringLiteral("Bold"), formatting);
+    m_italicButton = formattingButton(formattingIcon(QStringLiteral("I"), true, false, false),
+                                      QStringLiteral("Italic"), formatting);
+    m_underlineButton = formattingButton(formattingIcon(QStringLiteral("U"), false, true, false),
+                                         QStringLiteral("Underline"), formatting);
+    m_strikeOutButton = formattingButton(formattingIcon(QStringLiteral("S"), false, false, true),
+                                         QStringLiteral("Strikeout"), formatting);
     formattingLayout->addWidget(m_boldButton);
     formattingLayout->addWidget(m_italicButton);
+    formattingLayout->addWidget(m_underlineButton);
+    formattingLayout->addWidget(m_strikeOutButton);
     formattingLayout->addStretch(1);
     layout->addRow(QStringLiteral("Format"), formatting);
     layout->addRow(QStringLiteral("Advanced weight"), m_weightCombo);
@@ -118,6 +155,8 @@ TypographyPanel::TypographyPanel(QWidget* parent)
         emit fontWeightChanged(enabled ? static_cast<int>(QFont::Bold) : static_cast<int>(QFont::Normal));
     });
     connect(m_italicButton, &QPushButton::toggled, this, &TypographyPanel::fontItalicChanged);
+    connect(m_underlineButton, &QPushButton::toggled, this, &TypographyPanel::fontUnderlineChanged);
+    connect(m_strikeOutButton, &QPushButton::toggled, this, &TypographyPanel::fontStrikeOutChanged);
     connect(m_fontSizeSlider, &SliderSpinBox::valueChanged, this,
             [this](double value) { emit fontSizeChanged(value); });
     connect(m_trackingSlider, &SliderSpinBox::valueChanged, this,
@@ -192,6 +231,14 @@ void TypographyPanel::refresh(const TextObject* object)
     {
         const QSignalBlocker blocker(m_italicButton);
         m_italicButton->setChecked(object->font.italic);
+    }
+    {
+        const QSignalBlocker blocker(m_underlineButton);
+        m_underlineButton->setChecked(object->font.underline);
+    }
+    {
+        const QSignalBlocker blocker(m_strikeOutButton);
+        m_strikeOutButton->setChecked(object->font.strikeOut);
     }
     {
         const QSignalBlocker blocker(m_fontSizeSlider);

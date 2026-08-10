@@ -12,6 +12,8 @@ struct FontDescriptor {
     QString styleName;
     int weight = static_cast<int>(QFont::Normal);
     bool italic = false;
+    bool underline = false;
+    bool strikeOut = false;
 
     // Reserved for a future private embedded-font resource implementation.
     QString fingerprint;

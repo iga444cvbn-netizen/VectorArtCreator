@@ -74,6 +74,8 @@ signals:
     void textRangeChanged(const QString& objectId, int start, int end);
     void textEditingChanged(bool editing);
     void effectMaskStrokeReady(const QString& objectId, const EffectMaskStroke& stroke);
+    void effectMaskPreviewChanged(const QString& objectId, const EffectMaskStroke& stroke);
+    void effectMaskPreviewCleared();
     void objectTransformCommitted(const QString& objectId, const ObjectTransform& transform);
     void nudgeRequested(const QPointF& delta);
     void deleteRequested();
@@ -104,6 +106,9 @@ private:
     [[nodiscard]] QPointF rotationHandleCenter(const SceneObjectGeometry& object) const;
     bool beginTransform(const QPointF& documentPoint);
     void updateTransformPreview(const QPointF& documentPoint);
+    void applyPreviewTransform(SceneObjectGeometry* preview,
+                               const SceneObjectGeometry& source,
+                               const ObjectTransform& transform);
     [[nodiscard]] QRectF selectionRectInDocument() const;
     void updateBrushPreview();
     void cancelBrushStroke();
@@ -128,7 +133,7 @@ private:
     qreal m_brushStrength = 0.7;
     qreal m_brushHardness = 0.5;
     qreal m_maskRadius = 40.0;
-    qreal m_maskOpacity = 0.7 / 4.0;
+    qreal m_maskOpacity = 1.0;
     qreal m_maskHardness = 0.5;
     bool m_maskRestore = false;
     bool m_panning = false;

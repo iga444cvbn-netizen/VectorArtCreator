@@ -14,6 +14,8 @@ QFont FontDescriptor::toQFont(qreal pointSize) const
     const int boundedWeight = qBound(0, weight, 1000);
     font.setWeight(static_cast<QFont::Weight>(boundedWeight));
     font.setItalic(italic);
+    font.setUnderline(underline);
+    font.setStrikeOut(strikeOut);
     return font;
 }
 
@@ -24,6 +26,8 @@ QJsonObject FontDescriptor::toJson() const
     object.insert(QStringLiteral("styleName"), styleName);
     object.insert(QStringLiteral("weight"), weight);
     object.insert(QStringLiteral("italic"), italic);
+    object.insert(QStringLiteral("underline"), underline);
+    object.insert(QStringLiteral("strikeOut"), strikeOut);
     object.insert(QStringLiteral("fingerprint"), fingerprint);
     object.insert(QStringLiteral("embeddedResourceId"), embeddedResourceId);
     object.insert(QStringLiteral("embeddingPermission"), embeddingPermission);
@@ -38,6 +42,8 @@ FontDescriptor FontDescriptor::fromJson(const QJsonObject& object)
     descriptor.weight = object.value(QStringLiteral("weight"))
                             .toInt(static_cast<int>(QFont::Normal));
     descriptor.italic = object.value(QStringLiteral("italic")).toBool(false);
+    descriptor.underline = object.value(QStringLiteral("underline")).toBool(false);
+    descriptor.strikeOut = object.value(QStringLiteral("strikeOut")).toBool(false);
     descriptor.fingerprint = object.value(QStringLiteral("fingerprint")).toString();
     descriptor.embeddedResourceId = object.value(QStringLiteral("embeddedResourceId")).toString();
     descriptor.embeddingPermission = object.value(QStringLiteral("embeddingPermission")).toString();
@@ -50,6 +56,8 @@ bool FontDescriptor::operator==(const FontDescriptor& other) const
         && styleName == other.styleName
         && weight == other.weight
         && italic == other.italic
+        && underline == other.underline
+        && strikeOut == other.strikeOut
         && fingerprint == other.fingerprint
         && embeddedResourceId == other.embeddedResourceId
         && embeddingPermission == other.embeddingPermission;
