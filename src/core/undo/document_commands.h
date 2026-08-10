@@ -21,9 +21,11 @@ public:
 
 protected:
     void notifyChanged();
+    [[nodiscard]] TextObject& targetObject();
 
     Document& m_document;
     DocumentChangeCallback m_onChanged;
+    QString m_objectId;
 };
 
 class SetTextCommand final : public DocumentCommand {
@@ -88,6 +90,43 @@ private:
     int m_newWeight = 0;
 };
 
+class SetFontItalicCommand final : public DocumentCommand {
+public:
+    SetFontItalicCommand(Document& document,
+                         bool oldItalic,
+                         bool newItalic,
+                         DocumentChangeCallback onChanged);
+    void undo() override;
+    void redo() override;
+
+private:
+    bool m_oldItalic = false;
+    bool m_newItalic = false;
+};
+
+enum class FontDecoration {
+    Underline,
+    StrikeOut,
+};
+
+class SetFontDecorationCommand final : public DocumentCommand {
+public:
+    SetFontDecorationCommand(Document& document,
+                             FontDecoration decoration,
+                             bool oldValue,
+                             bool newValue,
+                             DocumentChangeCallback onChanged);
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(bool value);
+
+    FontDecoration m_decoration;
+    bool m_oldValue = false;
+    bool m_newValue = false;
+};
+
 class SetFontSizeCommand final : public DocumentCommand {
 public:
     SetFontSizeCommand(Document& document,
@@ -120,6 +159,23 @@ public:
 private:
     qreal m_oldTrackingEm = 0.0;
     qreal m_newTrackingEm = 0.0;
+};
+
+class SetLineSpacingCommand final : public DocumentCommand {
+public:
+    SetLineSpacingCommand(Document& document,
+                          qreal oldValue,
+                          qreal newValue,
+                          DocumentChangeCallback onChanged);
+
+    void undo() override;
+    void redo() override;
+    [[nodiscard]] int id() const override;
+    bool mergeWith(const QUndoCommand* other) override;
+
+private:
+    qreal m_oldValue = 1.0;
+    qreal m_newValue = 1.0;
 };
 
 class SetFillColorCommand final : public DocumentCommand {
@@ -221,6 +277,60 @@ private:
     double m_newValue = 0.0;
 };
 
+class SetEffectMasterStrengthCommand final : public DocumentCommand {
+public:
+    SetEffectMasterStrengthCommand(Document& document,
+                                   int index,
+                                   double oldValue,
+                                   double newValue,
+                                   DocumentChangeCallback onChanged);
+
+    void undo() override;
+    void redo() override;
+    [[nodiscard]] int id() const override;
+    bool mergeWith(const QUndoCommand* other) override;
+
+private:
+    int m_index = -1;
+    double m_oldValue = 1.0;
+    double m_newValue = 1.0;
+};
+
+class SetEffectScopeCommand final : public DocumentCommand {
+public:
+    SetEffectScopeCommand(Document& document,
+                          int index,
+                          EffectScope oldScope,
+                          EffectScope newScope,
+                          DocumentChangeCallback onChanged);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    int m_index = -1;
+    EffectScope m_oldScope;
+    EffectScope m_newScope;
+};
+
+class AddEffectMaskStrokeCommand final : public DocumentCommand {
+public:
+    AddEffectMaskStrokeCommand(Document& document,
+                               QString objectId,
+                               QString effectId,
+                               EffectMaskStroke stroke,
+                               DocumentChangeCallback onChanged,
+                               QString description = QStringLiteral("Paint effect mask"));
+
+    void undo() override;
+    void redo() override;
+
+private:
+    QString m_objectId;
+    QString m_effectId;
+    EffectMaskStroke m_stroke;
+};
+
 class ApplyPresetCommand final : public DocumentCommand {
 public:
     ApplyPresetCommand(Document& document,
@@ -240,6 +350,7 @@ private:
 class AddDeformationStrokeCommand final : public DocumentCommand {
 public:
     AddDeformationStrokeCommand(Document& document,
+                                QString objectId,
                                 int index,
                                 DeformationStroke stroke,
                                 DocumentChangeCallback onChanged);
@@ -248,6 +359,7 @@ public:
     void redo() override;
 
 private:
+    QString m_targetObjectId;
     int m_index = -1;
     DeformationStroke m_stroke;
 };

@@ -89,7 +89,7 @@ void WaveEffect::apply(VectorGeometry& geometry, const EffectContext& context) c
             0.0,
             (piece.originalAnchor.x() - context.referenceBounds.left()) / width,
             1.0);
-        const qreal displacement = amplitude * context.referenceHeight
+        const qreal displacement = amplitude * masterStrength * context.referenceHeight
             * std::sin(twoPi * (frequency * progress + phase));
         geometry.translatePiece(index, QPointF(0.0, displacement));
     }

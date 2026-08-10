@@ -3,8 +3,11 @@
 #include "core/geometry/vector_geometry.h"
 
 #include <QJsonObject>
+#include <QPointF>
 #include <QString>
 #include <QVector>
+#include <QPair>
+#include <QUuid>
 
 #include <memory>
 
@@ -17,6 +20,32 @@ enum class EffectDomain {
     Generator,
     Mask,
     Deformation,
+};
+
+enum class EffectScopeKind {
+    WholeObject,
+    TextRange,
+};
+
+struct EffectScope {
+    EffectScopeKind kind = EffectScopeKind::WholeObject;
+    int start = 0;
+    int end = 0;
+
+    [[nodiscard]] bool includes(int clusterStart, int clusterLength) const;
+    [[nodiscard]] QJsonObject toJson() const;
+    [[nodiscard]] static EffectScope fromJson(const QJsonObject& object);
+};
+
+struct EffectMaskStroke {
+    QVector<QPointF> points;
+    qreal radius = 32.0;
+    qreal opacity = 1.0;
+    qreal hardness = 0.5;
+    bool restore = false;
+
+    [[nodiscard]] QJsonObject toJson() const;
+    [[nodiscard]] static EffectMaskStroke fromJson(const QJsonObject& object);
 };
 
 struct EffectContext {
@@ -48,10 +77,16 @@ public:
     [[nodiscard]] virtual QJsonObject parametersToJson() const = 0;
     [[nodiscard]] virtual bool parametersFromJson(const QJsonObject& object, QString* error) = 0;
 
+    QString instanceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     bool enabled = true;
+    double masterStrength = 1.0;
+    EffectScope scope;
+    QVector<EffectMaskStroke> maskStrokes;
+    bool maskInverted = false;
 };
 
 [[nodiscard]] std::unique_ptr<Effect> createEffect(const QString& typeId);
+[[nodiscard]] QVector<QPair<QString, QString>> availableEffectTypes();
 [[nodiscard]] std::unique_ptr<Effect> effectFromJson(const QJsonObject& object, QString* error);
 
 } // namespace vt

@@ -208,6 +208,13 @@ void DeformationEvaluator::apply(const ManualDeformation& deformation, VectorGeo
 
     const qreal samplingTolerance = qBound<qreal>(0.05, geometry.referenceHeight * 0.0025, 1.0);
     for (const DeformationStroke& stroke : deformation.strokes) {
+        // Pre-object-frame projects did not record the transform present when
+        // page-space samples were painted.  Their coordinates cannot be
+        // reconstructed safely, so preserve them in serialization but never
+        // pretend they are current object-local deformation data.
+        if (stroke.coordinateSpace == DeformationCoordinateSpace::LegacyPageAmbiguous) {
+            continue;
+        }
         if (stroke.samples.isEmpty() || !std::isfinite(stroke.radius) || stroke.radius <= 0.0) {
             continue;
         }

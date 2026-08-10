@@ -2,16 +2,24 @@
 #include "core/deformation/contour_sampler.h"
 #include "core/deformation/manual_deformation.h"
 #include "core/effects/glyph_jitter_effect.h"
+#include "core/effects/procedural_effect.h"
 #include "core/effects/stretch_effect.h"
 #include "core/effects/wave_effect.h"
 #include "core/export/svg_exporter.h"
 #include "core/presets/preset.h"
 #include "core/presets/preset_manager.h"
 #include "core/serialization/project_serializer.h"
+#include "core/scene/scene_evaluator.h"
+#include "core/scene/object_frame.h"
 #include "core/text/text_engine.h"
+#include "core/undo/document_commands.h"
 #include "ui/deformation_tool_state.h"
 #include "ui/editor_controller.h"
+#include "ui/selection_model.h"
+#include "ui/shortcut_manager.h"
 
+#include <QAction>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFont>
@@ -21,8 +29,10 @@
 #include <QJsonObject>
 #include <QPainterPath>
 #include <QSet>
+#include <QSettings>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTransform>
 #include <QUuid>
 
 #include <algorithm>
@@ -156,6 +166,7 @@ private slots:
     void unicodePresetStorageIsCollisionSafe();
     void deterministicJitter();
     void effectOrderingIsDeterministic();
+    void effectMasksAttenuateGeometry();
     void textReplacementPreservesEffects();
     void presetApplicationClonesEffects();
     void svgExportContainsPaths();
@@ -187,6 +198,29 @@ private slots:
     void controllerEffectCommandsAreGranular();
     void controllerDeformationCommandsAreGranular();
     void controllerCleanStateFollowsUndoStack();
+    void documentHierarchyHasStableIds();
+    void legacyFlatProjectMigratesToPageAndLayer();
+    void multilineShapingPreservesLinesAndClusters();
+    void scopedEffectsOnlyTouchSelectedClusters();
+    void proceduralEffectsAreDeterministicAndAvailable();
+    void selectionModelSupportsSingleAndRangeSelection();
+    void controllerSceneCommandsMoveDuplicateAndDeleteObjects();
+    void controllerUndoTargetsStableObject();
+    void controllerPageAndLayerCommandsAreUndoable();
+    void controllerMoveObjectBetweenLayersIsUndoable();
+    void controllerLockedLayerObjectsAreNotEditable();
+    void controllerMaskUsesObjectLocalScale();
+    void pageReorderIsUndoableAndSerializable();
+    void shapingCacheKeyIgnoresFillButTracksLayoutInputs();
+    void shortcutManagerDetectsConflictsAndPersists();
+    void asyncEvaluationPublishesLatestGeneration();
+    void objectFrameRoundTripsPointsAndVectors();
+    void deformationBrushModesProduceDistinctGeometry();
+    void fontTraitsInvalidateSceneShapingAndProduceVectorDecorations();
+    void masterStrengthSupportsAmplificationAndRoundTrip();
+    void geometrySourceMetadataStaysImmutableUnderEffectsAndTransforms();
+    void missingUndoTargetDoesNotRedirectToAnotherObject();
+    void ambiguousLegacyDeformationStrokeIsSkipped();
 };
 
 void CoreTests::projectSerializationRoundTrip()
@@ -200,6 +234,13 @@ void CoreTests::projectSerializationRoundTrip()
     wave->amplitude = 0.21;
     wave->frequency = 2.5;
     wave->phase = -0.25;
+    EffectMaskStroke mask;
+    mask.points = {QPointF(12.0, 18.0), QPointF(30.0, 18.0)};
+    mask.radius = 24.0;
+    mask.opacity = 0.8;
+    mask.hardness = 0.65;
+    mask.restore = true;
+    wave->maskStrokes.push_back(mask);
     object.effects.append(std::move(wave));
     auto jitter = std::make_unique<GlyphJitterEffect>();
     jitter->amount = 0.04;
@@ -231,6 +272,8 @@ void CoreTests::projectSerializationRoundTrip()
     QCOMPARE(restored.primaryTextObject().fill, object.fill);
     QCOMPARE(restored.primaryTextObject().effects.size(), 2);
     QCOMPARE(restored.primaryTextObject().effects.at(0)->typeId(), QStringLiteral("wave"));
+    QCOMPARE(restored.primaryTextObject().effects.at(0)->maskStrokes.size(), 1);
+    QCOMPARE(restored.primaryTextObject().effects.at(0)->maskStrokes.front().restore, true);
     QCOMPARE(restored.primaryTextObject().effects.at(1)->enabled, false);
     const auto* restoredJitter = dynamic_cast<const GlyphJitterEffect*>(restored.primaryTextObject().effects.at(1));
     QVERIFY(restoredJitter);
@@ -417,6 +460,137 @@ void CoreTests::effectOrderingIsDeterministic()
     VectorGeometry changed = baseGeometry(object);
     reordered.apply(changed);
     QVERIFY(geometrySignature(first) != geometrySignature(changed));
+}
+
+void CoreTests::geometrySourceMetadataStaysImmutableUnderEffectsAndTransforms()
+{
+    const VectorGeometry original = rectangleGeometry();
+    VectorGeometry geometry = original;
+    StretchEffect stretch;
+    stretch.horizontal = 1.7;
+    stretch.vertical = 0.6;
+    stretch.apply(geometry, {geometry.referenceBounds, geometry.referenceHeight});
+
+    QTransform pageTransform;
+    pageTransform.translate(80.0, -35.0);
+    pageTransform.rotate(23.0);
+    geometry.transformAll(pageTransform);
+
+    QCOMPARE(geometry.referenceBounds, original.referenceBounds);
+    for (int index = 0; index < geometry.pieces.size(); ++index) {
+        QCOMPARE(geometry.pieces.at(index).originalAnchor,
+                 original.pieces.at(index).originalAnchor);
+    }
+
+    WaveEffect wave;
+    wave.amplitude = 0.2;
+    wave.apply(geometry, {geometry.referenceBounds, geometry.referenceHeight});
+    QCOMPARE(geometry.referenceBounds, original.referenceBounds);
+    for (int index = 0; index < geometry.pieces.size(); ++index) {
+        QCOMPARE(geometry.pieces.at(index).originalAnchor,
+                 original.pieces.at(index).originalAnchor);
+    }
+}
+
+void CoreTests::fontTraitsInvalidateSceneShapingAndProduceVectorDecorations()
+{
+    TextObject object = configuredText(QStringLiteral("Decorated"));
+    const QByteArray regularKey = SceneEvaluator::shapingCacheKey(object);
+    object.font.italic = true;
+    QVERIFY(SceneEvaluator::shapingCacheKey(object) != regularKey);
+
+    TextEngine engine;
+    const ShapedText shaped = engine.shape(object);
+    const VectorGeometry plain = GlyphGeometryBuilder::build(shaped, object.typography.fontSize);
+    const VectorGeometry decorated = GlyphGeometryBuilder::build(shaped,
+                                                                   object.typography.fontSize,
+                                                                   true,
+                                                                   true);
+    QVERIFY(decorated.pieces.size() >= plain.pieces.size() + 2);
+    QVERIFY(geometrySignature(decorated) != geometrySignature(plain));
+}
+
+void CoreTests::masterStrengthSupportsAmplificationAndRoundTrip()
+{
+    VectorGeometry normal = rectangleGeometry();
+    VectorGeometry amplified = normal;
+    WaveEffect effect;
+    effect.amplitude = 0.25;
+    effect.masterStrength = 1.0;
+    effect.apply(normal, {normal.referenceBounds, normal.referenceHeight});
+    effect.masterStrength = 2.5;
+    effect.apply(amplified, {amplified.referenceBounds, amplified.referenceHeight});
+    QVERIFY(geometrySignature(normal) != geometrySignature(amplified));
+
+    EffectStack stack;
+    auto stored = std::make_unique<WaveEffect>();
+    stored->masterStrength = 2.5;
+    stack.append(std::move(stored));
+    QString error;
+    EffectStack restored = EffectStack::fromJson(stack.toJson(), &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QCOMPARE(restored.at(0)->masterStrength, 2.5);
+}
+
+void CoreTests::missingUndoTargetDoesNotRedirectToAnotherObject()
+{
+    Document document;
+    Layer* layer = document.activeLayer();
+    QVERIFY(layer);
+    auto first = std::make_unique<TextObject>();
+    first->id = QStringLiteral("first");
+    first->sourceText = QStringLiteral("A stays unchanged");
+    auto second = std::make_unique<TextObject>();
+    second->id = QStringLiteral("second");
+    second->sourceText = QStringLiteral("B");
+    layer->objects.push_back(std::move(first));
+    layer->objects.push_back(std::move(second));
+    document.activeObjectId = QStringLiteral("second");
+
+    SetTextCommand command(document, QStringLiteral("B"), QStringLiteral("changed"), {});
+    command.redo();
+    QCOMPARE(document.objectById(QStringLiteral("second"))->sourceText, QStringLiteral("changed"));
+    layer->objects.erase(layer->objects.begin() + 1);
+    document.activeObjectId = QStringLiteral("first");
+    command.undo();
+
+    QCOMPARE(document.objectById(QStringLiteral("first"))->sourceText,
+             QStringLiteral("A stays unchanged"));
+}
+
+void CoreTests::ambiguousLegacyDeformationStrokeIsSkipped()
+{
+    const VectorGeometry original = rectangleGeometry();
+    VectorGeometry geometry = original;
+    ManualDeformation deformation;
+    DeformationStroke stroke = pushStroke();
+    stroke.coordinateSpace = DeformationCoordinateSpace::LegacyPageAmbiguous;
+    deformation.strokes.push_back(stroke);
+    deformation.apply(geometry);
+    QCOMPARE(geometrySignature(geometry), geometrySignature(original));
+}
+
+void CoreTests::effectMasksAttenuateGeometry()
+{
+    const VectorGeometry original = rectangleGeometry();
+    EffectStack stack;
+    auto stretch = std::make_unique<StretchEffect>();
+    stretch->horizontal = 2.0;
+    stretch->vertical = 1.0;
+    EffectMaskStroke mask;
+    mask.points = {QPointF(10.0, 10.0)};
+    mask.radius = 18.0;
+    mask.opacity = 1.0;
+    mask.hardness = 1.0;
+    stretch->maskStrokes.push_back(mask);
+    stack.append(std::move(stretch));
+
+    VectorGeometry masked = original;
+    stack.apply(masked);
+    QCOMPARE(firstPathElement(masked.pieces.at(0).path),
+             firstPathElement(original.pieces.at(0).path));
+    QVERIFY(firstPathElement(masked.pieces.at(1).path)
+            != firstPathElement(original.pieces.at(1).path));
 }
 
 void CoreTests::textReplacementPreservesEffects()
@@ -630,7 +804,8 @@ void CoreTests::deformationSerializationRoundTrip()
                                        .at(0)
                                        .toObject();
     QVERIFY(textObject.value(QStringLiteral("deformation")).isObject());
-    QCOMPARE(ProjectSerializer::toJson(original).object().value(QStringLiteral("formatVersion")).toInt(), 3);
+    QCOMPARE(ProjectSerializer::toJson(original).object().value(QStringLiteral("formatVersion")).toInt(),
+             Document::CurrentFormatVersion);
 
     Document restored;
     QString error;
@@ -990,96 +1165,105 @@ void CoreTests::cyrillicShapeDeformationProducesGeometry()
 void CoreTests::controllerUndoRedoAndMerge()
 {
     EditorController controller;
-    const QString initial = controller.document().primaryTextObject().sourceText;
+    const QString objectId = controller.createTextObject(QPointF(120.0, 160.0));
+    QVERIFY(!objectId.isEmpty());
+    const QString initial = controller.activeObject()->sourceText;
+    controller.undoStack()->setClean();
     QVERIFY(!controller.isModified());
+    const int initialCommandCount = controller.undoStack()->count();
     controller.setText(QStringLiteral("first"));
     controller.setText(QStringLiteral("second"));
-    QCOMPARE(controller.undoStack()->count(), 1);
+    QCOMPARE(controller.undoStack()->count(), initialCommandCount + 1);
     QVERIFY(controller.isModified());
-    QCOMPARE(controller.document().primaryTextObject().sourceText, QStringLiteral("second"));
+    QCOMPARE(controller.document().objectById(objectId)->sourceText, QStringLiteral("second"));
 
     controller.undoStack()->undo();
-    QCOMPARE(controller.document().primaryTextObject().sourceText, initial);
+    QCOMPARE(controller.document().objectById(objectId)->sourceText, initial);
     QVERIFY(!controller.isModified());
     controller.undoStack()->redo();
-    QCOMPARE(controller.document().primaryTextObject().sourceText, QStringLiteral("second"));
+    QCOMPARE(controller.document().objectById(objectId)->sourceText, QStringLiteral("second"));
     QVERIFY(controller.isModified());
 }
 
 void CoreTests::controllerEffectCommandsAreGranular()
 {
     EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(0.0, 0.0), QStringLiteral("Effects"));
+    QVERIFY(!objectId.isEmpty());
     controller.addEffect(QStringLiteral("wave"));
     controller.addEffect(QStringLiteral("stretch"));
-    QCOMPARE(controller.document().primaryTextObject().effects.size(), 2);
-    QCOMPARE(controller.document().primaryTextObject().effects.at(0)->typeId(), QStringLiteral("wave"));
-    QCOMPARE(controller.document().primaryTextObject().effects.at(1)->typeId(), QStringLiteral("stretch"));
+    QCOMPARE(controller.document().objectById(objectId)->effects.size(), 2);
+    QCOMPARE(controller.document().objectById(objectId)->effects.at(0)->typeId(), QStringLiteral("wave"));
+    QCOMPARE(controller.document().objectById(objectId)->effects.at(1)->typeId(), QStringLiteral("stretch"));
 
     const int beforeParameter = controller.undoStack()->count();
     const double initialAmplitude = effectParameterValue(
-        *controller.document().primaryTextObject().effects.at(0), QStringLiteral("amplitude"));
+        *controller.document().objectById(objectId)->effects.at(0), QStringLiteral("amplitude"));
     controller.setEffectParameter(0, QStringLiteral("amplitude"), 0.2);
     controller.setEffectParameter(0, QStringLiteral("amplitude"), 0.4);
     QCOMPARE(controller.undoStack()->count(), beforeParameter + 1);
     QCOMPARE(effectParameterValue(
-                 *controller.document().primaryTextObject().effects.at(0), QStringLiteral("amplitude")),
+                 *controller.document().objectById(objectId)->effects.at(0), QStringLiteral("amplitude")),
              0.4);
     controller.undoStack()->undo();
     QCOMPARE(effectParameterValue(
-                 *controller.document().primaryTextObject().effects.at(0), QStringLiteral("amplitude")),
+                 *controller.document().objectById(objectId)->effects.at(0), QStringLiteral("amplitude")),
              initialAmplitude);
     controller.undoStack()->redo();
     QCOMPARE(effectParameterValue(
-                 *controller.document().primaryTextObject().effects.at(0), QStringLiteral("amplitude")),
+                 *controller.document().objectById(objectId)->effects.at(0), QStringLiteral("amplitude")),
              0.4);
 
     controller.moveEffect(0, 1);
-    QCOMPARE(controller.document().primaryTextObject().effects.at(0)->typeId(), QStringLiteral("stretch"));
+    QCOMPARE(controller.document().objectById(objectId)->effects.at(0)->typeId(), QStringLiteral("stretch"));
     controller.undoStack()->undo();
-    QCOMPARE(controller.document().primaryTextObject().effects.at(0)->typeId(), QStringLiteral("wave"));
+    QCOMPARE(controller.document().objectById(objectId)->effects.at(0)->typeId(), QStringLiteral("wave"));
     controller.removeEffect(0);
-    QCOMPARE(controller.document().primaryTextObject().effects.size(), 1);
+    QCOMPARE(controller.document().objectById(objectId)->effects.size(), 1);
     controller.undoStack()->undo();
-    QCOMPARE(controller.document().primaryTextObject().effects.size(), 2);
-    QCOMPARE(controller.document().primaryTextObject().effects.at(0)->typeId(), QStringLiteral("wave"));
+    QCOMPARE(controller.document().objectById(objectId)->effects.size(), 2);
+    QCOMPARE(controller.document().objectById(objectId)->effects.at(0)->typeId(), QStringLiteral("wave"));
 }
 
 void CoreTests::controllerDeformationCommandsAreGranular()
 {
     EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(0.0, 0.0), QStringLiteral("Deform"));
+    QVERIFY(!objectId.isEmpty());
+    controller.undoStack()->setClean();
     const DeformationStroke stroke = pushStroke(BrushTarget::Shape);
     controller.setDeformationPreview(stroke);
     QVERIFY(!controller.isModified());
-    QVERIFY(controller.document().primaryTextObject().deformation.strokes.isEmpty());
+    QVERIFY(controller.document().objectById(objectId)->deformation.strokes.isEmpty());
     controller.clearDeformationPreview();
 
     const int initialCommandCount = controller.undoStack()->count();
     controller.addDeformationStroke(stroke);
     QCOMPARE(controller.undoStack()->count(), initialCommandCount + 1);
-    QCOMPARE(controller.document().primaryTextObject().deformation.strokes.size(), 1);
+    QCOMPARE(controller.document().objectById(objectId)->deformation.strokes.size(), 1);
 
     controller.undoStack()->undo();
-    QVERIFY(controller.document().primaryTextObject().deformation.strokes.isEmpty());
+    QVERIFY(controller.document().objectById(objectId)->deformation.strokes.isEmpty());
     controller.undoStack()->redo();
-    QCOMPARE(controller.document().primaryTextObject().deformation.strokes.size(), 1);
+    QCOMPARE(controller.document().objectById(objectId)->deformation.strokes.size(), 1);
 
     const int beforeStrength = controller.undoStack()->count();
     controller.setDeformationStrength(0.5);
     controller.setDeformationStrength(0.75);
     QCOMPARE(controller.undoStack()->count(), beforeStrength + 1);
-    QCOMPARE(controller.document().primaryTextObject().deformation.strength, 0.75);
+    QCOMPARE(controller.document().objectById(objectId)->deformation.strength, 0.75);
 
     controller.setDeformationEnabled(false);
-    QVERIFY(!controller.document().primaryTextObject().deformation.enabled);
+    QVERIFY(!controller.document().objectById(objectId)->deformation.enabled);
     controller.undoStack()->undo();
-    QVERIFY(controller.document().primaryTextObject().deformation.enabled);
+    QVERIFY(controller.document().objectById(objectId)->deformation.enabled);
     controller.undoStack()->undo();
-    QCOMPARE(controller.document().primaryTextObject().deformation.strength, 1.0);
+    QCOMPARE(controller.document().objectById(objectId)->deformation.strength, 1.0);
 
     controller.clearDeformation();
-    QVERIFY(controller.document().primaryTextObject().deformation.strokes.isEmpty());
+    QVERIFY(controller.document().objectById(objectId)->deformation.strokes.isEmpty());
     controller.undoStack()->undo();
-    QCOMPARE(controller.document().primaryTextObject().deformation.strokes.size(), 1);
+    QCOMPARE(controller.document().objectById(objectId)->deformation.strokes.size(), 1);
 }
 
 void CoreTests::controllerCleanStateFollowsUndoStack()
@@ -1087,6 +1271,8 @@ void CoreTests::controllerCleanStateFollowsUndoStack()
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(), QStringLiteral("Clean state"));
+    QVERIFY(!objectId.isEmpty());
     const QString projectPath = directory.filePath(QStringLiteral("clean-state.vtproj"));
     QString error;
     QVERIFY2(controller.saveProject(projectPath, &error), qPrintable(error));
@@ -1098,6 +1284,451 @@ void CoreTests::controllerCleanStateFollowsUndoStack()
     QVERIFY(!controller.isModified());
     controller.undoStack()->redo();
     QVERIFY(controller.isModified());
+}
+
+void CoreTests::documentHierarchyHasStableIds()
+{
+    Document document;
+    QVERIFY(!document.pages.empty());
+    QVERIFY(!document.currentPageId.isEmpty());
+    QVERIFY(!document.activeLayerId.isEmpty());
+    QVERIFY(document.activeObjectId.isEmpty());
+    QVERIFY(!document.hasObjects());
+    QVERIFY(document.currentPage());
+    QVERIFY(document.activeLayer());
+    const QString compatibilityObjectId = document.primaryTextObject().id;
+    QVERIFY(compatibilityObjectId != document.activeLayerId);
+
+    Page extraPage;
+    Layer extraLayer;
+    TextObject extraObject;
+    QVERIFY(extraPage.id != document.currentPageId);
+    QVERIFY(extraLayer.id != document.activeLayerId);
+    QVERIFY(extraObject.id != compatibilityObjectId);
+}
+
+void CoreTests::legacyFlatProjectMigratesToPageAndLayer()
+{
+    Document original;
+    original.primaryTextObject().sourceText = QStringLiteral("Legacy");
+    QJsonObject root = ProjectSerializer::toJson(original).object();
+    root.insert(QStringLiteral("formatVersion"), 3);
+    root.remove(QStringLiteral("pages"));
+    root.remove(QStringLiteral("currentPageId"));
+    root.remove(QStringLiteral("activeLayerId"));
+    root.remove(QStringLiteral("activeObjectId"));
+
+    Document migrated;
+    QString error;
+    QVERIFY2(ProjectSerializer::fromJson(QJsonDocument(root), &migrated, &error), qPrintable(error));
+    QCOMPARE(migrated.formatVersion, Document::CurrentFormatVersion);
+    QCOMPARE(migrated.pages.size(), size_t(1));
+    QCOMPARE(migrated.pages.front()->layers.size(), size_t(1));
+    QCOMPARE(migrated.primaryTextObject().sourceText, QStringLiteral("Legacy"));
+}
+
+void CoreTests::multilineShapingPreservesLinesAndClusters()
+{
+    TextObject object = configuredText(QStringLiteral("СТРАХ\nНЕ СМОТРИ"));
+    TextEngine engine;
+    const ShapedText shaped = engine.shape(object);
+    QVERIFY2(shaped.error.isEmpty(), qPrintable(shaped.error));
+    QVERIFY(shaped.lineCount >= 2);
+    QCOMPARE(shaped.lineBounds.size(), shaped.lineCount);
+    QVERIFY(std::any_of(shaped.glyphs.cbegin(), shaped.glyphs.cend(), [](const ShapedGlyph& glyph) {
+        return glyph.lineIndex > 0;
+    }));
+    QVERIFY(std::any_of(shaped.glyphs.cbegin(), shaped.glyphs.cend(), [](const ShapedGlyph& glyph) {
+        return glyph.clusterStart >= 0 && glyph.clusterLength > 0;
+    }));
+    const VectorGeometry geometry = GlyphGeometryBuilder::build(shaped, object.typography.fontSize);
+    QVERIFY(geometry.hasVisibleGeometry());
+}
+
+void CoreTests::scopedEffectsOnlyTouchSelectedClusters()
+{
+    VectorGeometry original = rectangleGeometry();
+    original.pieces[0].sourceClusterStart = 0;
+    original.pieces[1].sourceClusterStart = 1;
+    original.pieces[0].sourceClusterLength = 1;
+    original.pieces[1].sourceClusterLength = 1;
+    VectorGeometry scoped = original;
+    EffectStack stack;
+    auto stretch = std::make_unique<StretchEffect>();
+    stretch->horizontal = 2.0;
+    stretch->vertical = 1.0;
+    stretch->scope.kind = EffectScopeKind::TextRange;
+    stretch->scope.start = 0;
+    stretch->scope.end = 1;
+    stack.append(std::move(stretch));
+    stack.apply(scoped);
+    VectorGeometry originalSecond;
+    originalSecond.pieces.push_back(original.pieces.at(1));
+    VectorGeometry scopedSecond;
+    scopedSecond.pieces.push_back(scoped.pieces.at(1));
+    QCOMPARE(geometrySignature(scopedSecond), geometrySignature(originalSecond));
+    QVERIFY(geometrySignature(scoped) != geometrySignature(original));
+}
+
+void CoreTests::proceduralEffectsAreDeterministicAndAvailable()
+{
+    const QVector<QPair<QString, QString>> definitions = availableEffectTypes();
+    QVERIFY(definitions.size() >= 15);
+    const TextObject object = configuredText();
+    const VectorGeometry source = baseGeometry(object);
+    for (const auto& definition : definitions) {
+        std::unique_ptr<Effect> first = createEffect(definition.first);
+        std::unique_ptr<Effect> second = createEffect(definition.first);
+        QVERIFY(first);
+        QVERIFY(second);
+        VectorGeometry left = source;
+        VectorGeometry right = source;
+        first->apply(left, {source.referenceBounds, source.referenceHeight});
+        second->apply(right, {source.referenceBounds, source.referenceHeight});
+        QCOMPARE(geometrySignature(left), geometrySignature(right));
+    }
+}
+
+void CoreTests::selectionModelSupportsSingleAndRangeSelection()
+{
+    SelectionModel selection;
+    selection.selectSingle(QStringLiteral("a"));
+    QVERIFY(selection.contains(QStringLiteral("a")));
+    QCOMPARE(selection.activeObjectId(), QStringLiteral("a"));
+    selection.add(QStringLiteral("b"));
+    QCOMPARE(selection.selectedObjectIds().size(), 2);
+    selection.toggle(QStringLiteral("a"));
+    QVERIFY(!selection.contains(QStringLiteral("a")));
+    selection.setTextRange(9, 3);
+    QVERIFY(selection.hasTextRange());
+    QCOMPARE(selection.textRange(), qMakePair(3, 9));
+    selection.clearTextRange();
+    QVERIFY(!selection.hasTextRange());
+}
+
+void CoreTests::controllerSceneCommandsMoveDuplicateAndDeleteObjects()
+{
+    EditorController controller;
+    const QString firstId = controller.createTextObject(QPointF(80.0, 100.0), QStringLiteral("First"));
+    QVERIFY(!firstId.isEmpty());
+    const QString createdSecondId = controller.createTextObject(QPointF(120.0, 160.0),
+                                                                 QStringLiteral("Second"));
+    QVERIFY(!createdSecondId.isEmpty());
+    const QString secondId = controller.activeObject()->id;
+    QCOMPARE(controller.document().objectsOnCurrentPage().size(), 2);
+    controller.moveSelectedObjects(QPointF(8.0, 12.0));
+    QCOMPARE(controller.activeObject()->transform.position, QPointF(128.0, 172.0));
+    controller.undoStack()->undo();
+    QCOMPARE(controller.activeObject()->transform.position, QPointF(120.0, 160.0));
+    controller.undoStack()->redo();
+    QCOMPARE(controller.activeObject()->transform.position, QPointF(128.0, 172.0));
+    controller.duplicateSelectedObjects();
+    QCOMPARE(controller.document().objectsOnCurrentPage().size(), 3);
+    QVERIFY(controller.activeObject()->id != secondId);
+    QVERIFY(controller.activeObject()->id != firstId);
+    controller.deleteSelectedObjects();
+    QCOMPARE(controller.document().objectsOnCurrentPage().size(), 2);
+}
+
+void CoreTests::controllerUndoTargetsStableObject()
+{
+    EditorController controller;
+    const QString firstId = controller.createTextObject(QPointF(), QStringLiteral("First"));
+    QVERIFY(!firstId.isEmpty());
+    controller.undoStack()->setClean();
+    controller.setText(QStringLiteral("First edited"));
+
+    const QString secondId = controller.createTextObject(QPointF(), QStringLiteral("Second"));
+    QVERIFY(!secondId.isEmpty());
+    controller.setText(QStringLiteral("Second edited"));
+    controller.selectObject(firstId);
+
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().objectById(firstId)->sourceText, QStringLiteral("First edited"));
+    QCOMPARE(controller.document().objectById(secondId)->sourceText, QStringLiteral("Second"));
+    controller.undoStack()->redo();
+    QCOMPARE(controller.document().objectById(secondId)->sourceText, QStringLiteral("Second edited"));
+}
+
+void CoreTests::controllerPageAndLayerCommandsAreUndoable()
+{
+    EditorController controller;
+    QCOMPARE(controller.document().pages.size(), size_t(1));
+    controller.addLayer();
+    const QString addedLayerId = controller.document().activeLayerId;
+    QCOMPARE(controller.document().currentPage()->layers.size(), size_t(2));
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().currentPage()->layers.size(), size_t(1));
+    QVERIFY(controller.document().activeLayerId != addedLayerId);
+    controller.undoStack()->redo();
+    QCOMPARE(controller.document().currentPage()->layers.size(), size_t(2));
+    QCOMPARE(controller.document().activeLayerId, addedLayerId);
+    controller.addPage();
+    QCOMPARE(controller.document().pages.size(), size_t(2));
+    const QString addedPageId = controller.document().currentPageId;
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().pages.size(), size_t(1));
+    QVERIFY(controller.document().currentPageId != addedPageId);
+    controller.undoStack()->redo();
+    QCOMPARE(controller.document().pages.size(), size_t(2));
+    controller.removeCurrentPage();
+    QCOMPARE(controller.document().pages.size(), size_t(1));
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().pages.size(), size_t(2));
+    QCOMPARE(controller.document().currentPageId, addedPageId);
+    controller.undoStack()->redo();
+    QCOMPARE(controller.document().pages.size(), size_t(1));
+}
+
+void CoreTests::controllerMoveObjectBetweenLayersIsUndoable()
+{
+    EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(40.0, 50.0), QStringLiteral("Move me"));
+    QVERIFY(!objectId.isEmpty());
+    const QString sourceLayerId = controller.document().activeLayerId;
+    TextObject* original = controller.document().objectById(objectId);
+    QVERIFY(original);
+    original->transform.rotation = 12.0;
+    original->transform.scale = QPointF(1.4, 0.8);
+    auto wave = std::make_unique<WaveEffect>();
+    EffectMaskStroke mask;
+    mask.points = {QPointF(10.0, 10.0)};
+    mask.restore = true;
+    wave->maskStrokes.push_back(mask);
+    original->effects.append(std::move(wave));
+    original->deformation.strokes.push_back(pushStroke());
+    const QJsonObject fontBefore = original->font.toJson();
+    const QJsonObject typographyBefore = original->typography.toJson(original->fill);
+    const QColor fillBefore = original->fill;
+    const QJsonObject transformBefore = original->transform.toJson();
+    const QJsonArray effectsBefore = original->effects.toJson();
+    const QJsonObject deformationBefore = original->deformation.toJson();
+
+    controller.addLayer();
+    const QString destinationLayerId = controller.document().activeLayerId;
+    QVERIFY(sourceLayerId != destinationLayerId);
+    controller.moveObjectToLayer(objectId, destinationLayerId);
+
+    const Layer* source = controller.document().layerById(sourceLayerId);
+    const Layer* destination = controller.document().layerById(destinationLayerId);
+    QVERIFY(source);
+    QVERIFY(destination);
+    QVERIFY(!source->objectById(objectId));
+    const TextObject* moved = destination->objectById(objectId);
+    QVERIFY(moved);
+    QCOMPARE(moved->id, objectId);
+    QCOMPARE(moved->sourceText, QStringLiteral("Move me"));
+    QCOMPARE(moved->font.toJson(), fontBefore);
+    QCOMPARE(moved->typography.toJson(moved->fill), typographyBefore);
+    QCOMPARE(moved->fill, fillBefore);
+    QCOMPARE(moved->transform.toJson(), transformBefore);
+    QCOMPARE(moved->effects.toJson(), effectsBefore);
+    QCOMPARE(moved->deformation.toJson(), deformationBefore);
+
+    controller.undoStack()->undo();
+    QVERIFY(controller.document().layerById(sourceLayerId)->objectById(objectId));
+    QVERIFY(!controller.document().layerById(destinationLayerId)->objectById(objectId));
+    QCOMPARE(controller.document().activeLayerId, sourceLayerId);
+    controller.undoStack()->redo();
+    QVERIFY(controller.document().layerById(destinationLayerId)->objectById(objectId));
+    QCOMPARE(controller.document().activeLayerId, destinationLayerId);
+}
+
+void CoreTests::controllerLockedLayerObjectsAreNotEditable()
+{
+    EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(), QStringLiteral("Locked"));
+    QVERIFY(!objectId.isEmpty());
+    TextObject* object = controller.document().objectById(objectId);
+    QVERIFY(object);
+    object->effects.append(std::make_unique<WaveEffect>());
+    const QString effectId = object->effects.at(0)->instanceId;
+    const QPointF oldPosition = object->transform.position;
+    const QString oldText = object->sourceText;
+    controller.setActiveLayerLocked(true);
+    controller.setText(QStringLiteral("Should stay locked"));
+    controller.moveSelectedObjects(QPointF(20.0, 20.0));
+    controller.addDeformationStroke(pushStroke());
+    EffectMaskStroke mask;
+    mask.points = {QPointF(0.0, 0.0)};
+    controller.addEffectMaskStroke(objectId, effectId, mask);
+
+    QCOMPARE(controller.document().objectById(objectId)->sourceText, oldText);
+    QCOMPARE(controller.document().objectById(objectId)->transform.position, oldPosition);
+    QVERIFY(controller.document().objectById(objectId)->deformation.strokes.isEmpty());
+    QVERIFY(controller.document().objectById(objectId)->effects.at(0)->maskStrokes.isEmpty());
+    QVERIFY(!controller.activeObject());
+}
+
+void CoreTests::controllerMaskUsesObjectLocalScale()
+{
+    EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(), QStringLiteral("Masked"));
+    QVERIFY(!objectId.isEmpty());
+    TextObject* object = controller.document().objectById(objectId);
+    QVERIFY(object);
+    object->transform.position = QPointF(160.0, 120.0);
+    object->transform.scale = QPointF(2.0, 2.0);
+    object->effects.append(std::make_unique<WaveEffect>());
+    const QString effectId = object->effects.at(0)->instanceId;
+
+    EffectMaskStroke stroke;
+    stroke.points = {QPointF(180.0, 140.0)};
+    stroke.radius = 20.0;
+    controller.addEffectMaskStroke(objectId, effectId, stroke);
+    QCOMPARE(object->effects.at(0)->maskStrokes.size(), 1);
+    QCOMPARE(object->effects.at(0)->maskStrokes.front().radius, 10.0);
+
+    Document restored;
+    QString error;
+    QVERIFY2(ProjectSerializer::fromJson(ProjectSerializer::toJson(controller.document()),
+                                         &restored,
+                                         &error),
+             qPrintable(error));
+    QCOMPARE(restored.objectById(objectId)->effects.at(0)->maskStrokes.front().radius, 10.0);
+}
+
+void CoreTests::pageReorderIsUndoableAndSerializable()
+{
+    EditorController controller;
+    controller.addPage();
+    controller.addPage();
+    QVERIFY(controller.document().pages.size() == 3);
+    QStringList originalOrder;
+    for (const auto& page : controller.document().pages) {
+        originalOrder.push_back(page->id);
+    }
+    controller.movePage(2, 0);
+    QCOMPARE(controller.document().pages.at(0)->id, originalOrder.at(2));
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().pages.at(0)->id, originalOrder.at(0));
+    controller.undoStack()->redo();
+    QCOMPARE(controller.document().pages.at(0)->id, originalOrder.at(2));
+
+    Document restored;
+    QString error;
+    QVERIFY2(ProjectSerializer::fromJson(ProjectSerializer::toJson(controller.document()),
+                                         &restored,
+                                         &error),
+             qPrintable(error));
+    QCOMPARE(restored.pages.size(), controller.document().pages.size());
+    for (int index = 0; index < static_cast<int>(restored.pages.size()); ++index) {
+        QCOMPARE(restored.pages.at(static_cast<size_t>(index))->id,
+                 controller.document().pages.at(static_cast<size_t>(index))->id);
+    }
+}
+
+void CoreTests::shapingCacheKeyIgnoresFillButTracksLayoutInputs()
+{
+    TextObject object = configuredText(QStringLiteral("Cache key"));
+    const QByteArray original = SceneEvaluator::shapingCacheKey(object);
+    object.fill = QColor(Qt::red);
+    QCOMPARE(SceneEvaluator::shapingCacheKey(object), original);
+    object.sourceText += QStringLiteral(" changed");
+    QVERIFY(SceneEvaluator::shapingCacheKey(object) != original);
+    object.sourceText = QStringLiteral("Cache key");
+    object.typography.trackingEm += 0.01;
+    QVERIFY(SceneEvaluator::shapingCacheKey(object) != original);
+    object.typography.trackingEm = 0.025;
+    object.typography.lineSpacing += 0.1;
+    QVERIFY(SceneEvaluator::shapingCacheKey(object) != original);
+    object.typography.lineSpacing = 1.0;
+    object.font.weight += 100;
+    QVERIFY(SceneEvaluator::shapingCacheKey(object) != original);
+}
+
+void CoreTests::shortcutManagerDetectsConflictsAndPersists()
+{
+    QTemporaryDir settingsDirectory;
+    QVERIFY(settingsDirectory.isValid());
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
+    QCoreApplication::setOrganizationName(QStringLiteral("VectorTypographyTests"));
+    QCoreApplication::setApplicationName(QStringLiteral("ShortcutManager"));
+
+    const QString suffix = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString firstId = QStringLiteral("test.open.%1").arg(suffix);
+    const QString secondId = QStringLiteral("test.close.%1").arg(suffix);
+    const QKeySequence firstSequence(QStringLiteral("Ctrl+Shift+9"));
+    const QKeySequence secondDefault(QStringLiteral("Ctrl+Shift+0"));
+    const QKeySequence secondCustom(QStringLiteral("Ctrl+Alt+9"));
+
+    QAction firstAction;
+    QAction secondAction;
+    ShortcutManager manager;
+    manager.registerAction(firstId, &firstAction, firstSequence);
+    manager.registerAction(secondId, &secondAction, secondDefault);
+
+    QString error;
+    QVERIFY(!manager.setShortcut(secondId, firstSequence, &error));
+    QVERIFY(error.contains(firstId));
+    QVERIFY(manager.setShortcut(secondId, secondCustom, &error));
+    QCOMPARE(secondAction.shortcut(), secondCustom);
+
+    QAction restoredAction;
+    ShortcutManager restored;
+    restored.registerAction(secondId, &restoredAction, secondDefault);
+    QCOMPARE(restored.shortcut(secondId), secondCustom);
+    restored.resetToDefaults();
+    QCOMPARE(restored.shortcut(secondId), secondDefault);
+
+}
+
+void CoreTests::asyncEvaluationPublishesLatestGeneration()
+{
+    EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(0.0, 0.0), QStringLiteral("initial"));
+    QVERIFY(!objectId.isEmpty());
+    controller.setText(QStringLiteral("stale generation"));
+    controller.setText(QStringLiteral("latest generation"));
+
+    QTRY_VERIFY_WITH_TIMEOUT(controller.sceneGeometry().objectById(objectId)
+                                 && controller.sceneGeometry().objectById(objectId)->sourceText
+                                        == QStringLiteral("latest generation"),
+                             5000);
+}
+
+void CoreTests::objectFrameRoundTripsPointsAndVectors()
+{
+    ObjectTransform transform;
+    transform.position = QPointF(240.0, -75.0);
+    transform.rotation = 31.0;
+    transform.scale = QPointF(2.0, -0.75);
+    const ObjectFrame frame = ObjectFrame::fromTransform(transform,
+                                                          QRectF(-20.0, 10.0, 120.0, 60.0));
+    const QPointF localPoint(12.5, 44.0);
+    const QPointF localVector(8.0, -3.0);
+    const QPointF pagePoint = frame.localPointToPage(localPoint);
+    const QPointF pageVector = frame.localVectorToPage(localVector);
+    const QPointF pointRoundTrip = frame.pagePointToLocal(pagePoint);
+    const QPointF vectorRoundTrip = frame.pageVectorToLocal(pageVector);
+    QVERIFY(QLineF(pointRoundTrip, localPoint).length() < 1.0e-8);
+    QVERIFY(QLineF(vectorRoundTrip, localVector).length() < 1.0e-8);
+    QVERIFY(QLineF(frame.pageVectorToLocal(frame.localPointToPage(localVector)), localVector).length() > 1.0);
+    QCOMPARE(frame.orientedPageQuad().size(), 4);
+    QVERIFY(frame.pageAabb().contains(pagePoint));
+}
+
+void CoreTests::deformationBrushModesProduceDistinctGeometry()
+{
+    QSet<QByteArray> signatures;
+    for (const BrushMode mode : {BrushMode::Push, BrushMode::Pull, BrushMode::Inflate,
+                                 BrushMode::Pinch, BrushMode::Smooth}) {
+        VectorGeometry geometry = rectangleGeometry();
+        DeformationStroke stroke;
+        stroke.mode = mode;
+        stroke.target = BrushTarget::Shape;
+        stroke.radius = 120.0;
+        stroke.strength = 1.0;
+        stroke.hardness = 0.5;
+        stroke.samples = {{QPointF(30.0, 10.0), QPointF(), 1.0},
+                          {QPointF(40.0, 10.0), QPointF(10.0, 0.0), 1.0}};
+        ManualDeformation deformation;
+        deformation.strokes.push_back(stroke);
+        deformation.apply(geometry);
+        signatures.insert(geometrySignature(geometry));
+    }
+    QCOMPARE(signatures.size(), 5);
 }
 
 int main(int argc, char* argv[])

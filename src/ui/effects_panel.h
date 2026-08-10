@@ -1,6 +1,8 @@
 #pragma once
 
 #include "core/document/document.h"
+#include "ui/collapsible_section.h"
+#include "ui/slider_spin_box.h"
 
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -11,6 +13,9 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+class QLabel;
+class QCheckBox;
+
 namespace vt {
 
 class EffectsPanel final : public QWidget {
@@ -19,7 +24,14 @@ class EffectsPanel final : public QWidget {
 public:
     explicit EffectsPanel(QWidget* parent = nullptr);
 
-    void refresh(const TextObject& object, const QStringList& presetNames);
+    void refresh(const TextObject* object, const QStringList& presetNames);
+    void refresh(const TextObject& object, const QStringList& presetNames)
+    {
+        refresh(&object, presetNames);
+    }
+    void setSelectedEffectId(const QString& effectId);
+    void setTextRange(int start, int end);
+    [[nodiscard]] QString selectedEffectId() const { return m_selectedEffectId; }
 
 signals:
     void addEffectRequested(const QString& typeId);
@@ -27,6 +39,9 @@ signals:
     void moveEffectRequested(int from, int to);
     void effectEnabledChanged(int index, bool enabled);
     void effectParameterChanged(int index, const QString& parameterId, double value);
+    void effectMasterStrengthChanged(int index, double value);
+    void effectSelected(const QString& effectId);
+    void effectScopeChanged(const QString& effectId, const EffectScope& scope);
     void savePresetRequested(const QString& name);
     void applyPresetRequested(const QString& name);
     void deletePresetRequested(const QString& name);
@@ -38,11 +53,16 @@ private slots:
     void requestMoveUp();
     void requestMoveDown();
     void requestRemove();
+    void handleScopeChanged(int index);
+    void resetScope();
 
 private:
     void clearParameterEditor();
+    [[nodiscard]] bool structureMatches(const TextObject* object) const;
+    void refreshEffectListValues();
 
     QListWidget* m_effectList = nullptr;
+    QLineEdit* m_effectSearch = nullptr;
     QComboBox* m_addEffectCombo = nullptr;
     QPushButton* m_addEffectButton = nullptr;
     QPushButton* m_upButton = nullptr;
@@ -57,9 +77,21 @@ private:
     QPushButton* m_deletePresetButton = nullptr;
 
     const TextObject* m_currentObject = nullptr;
-    QVector<QDoubleSpinBox*> m_parameterSpins;
+    QString m_currentObjectId;
+    QStringList m_effectStructure;
+    QVector<QWidget*> m_parameterControls;
+    QDoubleSpinBox* m_masterStrengthSpin = nullptr;
+    SliderSpinBox* m_masterStrengthSlider = nullptr;
+    QCheckBox* m_effectEnabledCheck = nullptr;
+    CollapsibleSection* m_advancedSection = nullptr;
+    QComboBox* m_scopeCombo = nullptr;
+    QLabel* m_scopeLabel = nullptr;
+    QPushButton* m_resetScopeButton = nullptr;
     int m_parameterIndex = -1;
     QString m_parameterType;
+    QString m_selectedEffectId;
+    int m_textRangeStart = -1;
+    int m_textRangeEnd = -1;
 };
 
 } // namespace vt

@@ -9,8 +9,10 @@ namespace {
 constexpr int TextCommandId = 100;
 constexpr int FontSizeCommandId = 101;
 constexpr int TrackingCommandId = 102;
+constexpr int LineSpacingCommandId = 106;
 constexpr int EffectParameterCommandId = 103;
 constexpr int DeformationStrengthCommandId = 104;
+constexpr int EffectMasterStrengthCommandId = 105;
 
 } // namespace
 
@@ -20,6 +22,7 @@ DocumentCommand::DocumentCommand(Document& document,
     : QUndoCommand(description)
     , m_document(document)
     , m_onChanged(std::move(onChanged))
+    , m_objectId(document.activeObjectId)
 {
 }
 
@@ -29,6 +32,21 @@ void DocumentCommand::notifyChanged()
     if (m_onChanged) {
         m_onChanged();
     }
+}
+
+TextObject& DocumentCommand::targetObject()
+{
+    if (!m_objectId.isEmpty()) {
+        if (TextObject* object = m_document.objectById(m_objectId)) {
+            return *object;
+        }
+    }
+    // Commands are bound to the object ID selected when they were created.
+    // A missing target must never be redirected to whichever object is active
+    // now.  The inert sink keeps legacy reference-returning commands harmless
+    // until they can be retired in favour of pointer-returning commands.
+    static TextObject missingTargetSink;
+    return missingTargetSink;
 }
 
 SetTextCommand::SetTextCommand(Document& document,
@@ -43,13 +61,13 @@ SetTextCommand::SetTextCommand(Document& document,
 
 void SetTextCommand::undo()
 {
-    m_document.primaryTextObject().sourceText = m_oldText;
+    targetObject().sourceText = m_oldText;
     notifyChanged();
 }
 
 void SetTextCommand::redo()
 {
-    m_document.primaryTextObject().sourceText = m_newText;
+    targetObject().sourceText = m_newText;
     notifyChanged();
 }
 
@@ -61,7 +79,7 @@ int SetTextCommand::id() const
 bool SetTextCommand::mergeWith(const QUndoCommand* other)
 {
     const auto* command = dynamic_cast<const SetTextCommand*>(other);
-    if (!command) {
+    if (!command || command->m_objectId != m_objectId) {
         return false;
     }
     m_newText = command->m_newText;
@@ -80,13 +98,13 @@ SetFontFamilyCommand::SetFontFamilyCommand(Document& document,
 
 void SetFontFamilyCommand::undo()
 {
-    m_document.primaryTextObject().font.family = m_oldFamily;
+    targetObject().font.family = m_oldFamily;
     notifyChanged();
 }
 
 void SetFontFamilyCommand::redo()
 {
-    m_document.primaryTextObject().font.family = m_newFamily;
+    targetObject().font.family = m_newFamily;
     notifyChanged();
 }
 
@@ -102,13 +120,13 @@ SetFontStyleCommand::SetFontStyleCommand(Document& document,
 
 void SetFontStyleCommand::undo()
 {
-    m_document.primaryTextObject().font.styleName = m_oldStyle;
+    targetObject().font.styleName = m_oldStyle;
     notifyChanged();
 }
 
 void SetFontStyleCommand::redo()
 {
-    m_document.primaryTextObject().font.styleName = m_newStyle;
+    targetObject().font.styleName = m_newStyle;
     notifyChanged();
 }
 
@@ -124,15 +142,66 @@ SetFontWeightCommand::SetFontWeightCommand(Document& document,
 
 void SetFontWeightCommand::undo()
 {
-    m_document.primaryTextObject().font.weight = m_oldWeight;
+    targetObject().font.weight = m_oldWeight;
     notifyChanged();
 }
 
 void SetFontWeightCommand::redo()
 {
-    m_document.primaryTextObject().font.weight = m_newWeight;
+    targetObject().font.weight = m_newWeight;
     notifyChanged();
 }
+
+SetFontItalicCommand::SetFontItalicCommand(Document& document,
+                                           bool oldItalic,
+                                           bool newItalic,
+                                           DocumentChangeCallback onChanged)
+    : DocumentCommand(document, std::move(onChanged), QStringLiteral("Toggle italic"))
+    , m_oldItalic(oldItalic)
+    , m_newItalic(newItalic)
+{
+}
+
+void SetFontItalicCommand::undo()
+{
+    targetObject().font.italic = m_oldItalic;
+    notifyChanged();
+}
+
+void SetFontItalicCommand::redo()
+{
+    targetObject().font.italic = m_newItalic;
+    notifyChanged();
+}
+
+SetFontDecorationCommand::SetFontDecorationCommand(Document& document,
+                                                     FontDecoration decoration,
+                                                     bool oldValue,
+                                                     bool newValue,
+                                                     DocumentChangeCallback onChanged)
+    : DocumentCommand(document,
+                      std::move(onChanged),
+                      decoration == FontDecoration::Underline
+                          ? QStringLiteral("Toggle underline")
+                          : QStringLiteral("Toggle strikeout"))
+    , m_decoration(decoration)
+    , m_oldValue(oldValue)
+    , m_newValue(newValue)
+{
+}
+
+void SetFontDecorationCommand::apply(bool value)
+{
+    if (m_decoration == FontDecoration::Underline) {
+        targetObject().font.underline = value;
+    } else {
+        targetObject().font.strikeOut = value;
+    }
+    notifyChanged();
+}
+
+void SetFontDecorationCommand::undo() { apply(m_oldValue); }
+void SetFontDecorationCommand::redo() { apply(m_newValue); }
 
 SetFontSizeCommand::SetFontSizeCommand(Document& document,
                                        qreal oldSize,
@@ -146,13 +215,13 @@ SetFontSizeCommand::SetFontSizeCommand(Document& document,
 
 void SetFontSizeCommand::undo()
 {
-    m_document.primaryTextObject().typography.fontSize = m_oldSize;
+    targetObject().typography.fontSize = m_oldSize;
     notifyChanged();
 }
 
 void SetFontSizeCommand::redo()
 {
-    m_document.primaryTextObject().typography.fontSize = m_newSize;
+    targetObject().typography.fontSize = m_newSize;
     notifyChanged();
 }
 
@@ -164,7 +233,7 @@ int SetFontSizeCommand::id() const
 bool SetFontSizeCommand::mergeWith(const QUndoCommand* other)
 {
     const auto* command = dynamic_cast<const SetFontSizeCommand*>(other);
-    if (!command) {
+    if (!command || command->m_objectId != m_objectId) {
         return false;
     }
     m_newSize = command->m_newSize;
@@ -183,13 +252,13 @@ SetTrackingCommand::SetTrackingCommand(Document& document,
 
 void SetTrackingCommand::undo()
 {
-    m_document.primaryTextObject().typography.trackingEm = m_oldTrackingEm;
+    targetObject().typography.trackingEm = m_oldTrackingEm;
     notifyChanged();
 }
 
 void SetTrackingCommand::redo()
 {
-    m_document.primaryTextObject().typography.trackingEm = m_newTrackingEm;
+    targetObject().typography.trackingEm = m_newTrackingEm;
     notifyChanged();
 }
 
@@ -201,10 +270,47 @@ int SetTrackingCommand::id() const
 bool SetTrackingCommand::mergeWith(const QUndoCommand* other)
 {
     const auto* command = dynamic_cast<const SetTrackingCommand*>(other);
-    if (!command) {
+    if (!command || command->m_objectId != m_objectId) {
         return false;
     }
     m_newTrackingEm = command->m_newTrackingEm;
+    return true;
+}
+
+SetLineSpacingCommand::SetLineSpacingCommand(Document& document,
+                                             qreal oldValue,
+                                             qreal newValue,
+                                             DocumentChangeCallback onChanged)
+    : DocumentCommand(document, std::move(onChanged), QStringLiteral("Change line spacing"))
+    , m_oldValue(oldValue)
+    , m_newValue(newValue)
+{
+}
+
+void SetLineSpacingCommand::undo()
+{
+    targetObject().typography.lineSpacing = m_oldValue;
+    notifyChanged();
+}
+
+void SetLineSpacingCommand::redo()
+{
+    targetObject().typography.lineSpacing = m_newValue;
+    notifyChanged();
+}
+
+int SetLineSpacingCommand::id() const
+{
+    return LineSpacingCommandId;
+}
+
+bool SetLineSpacingCommand::mergeWith(const QUndoCommand* other)
+{
+    const auto* command = dynamic_cast<const SetLineSpacingCommand*>(other);
+    if (!command || command->m_objectId != m_objectId) {
+        return false;
+    }
+    m_newValue = command->m_newValue;
     return true;
 }
 
@@ -220,13 +326,13 @@ SetFillColorCommand::SetFillColorCommand(Document& document,
 
 void SetFillColorCommand::undo()
 {
-    m_document.primaryTextObject().fill = m_oldColor;
+    targetObject().fill = m_oldColor;
     notifyChanged();
 }
 
 void SetFillColorCommand::redo()
 {
-    m_document.primaryTextObject().fill = m_newColor;
+    targetObject().fill = m_newColor;
     notifyChanged();
 }
 
@@ -243,14 +349,14 @@ AddEffectCommand::AddEffectCommand(Document& document,
 
 void AddEffectCommand::undo()
 {
-    m_document.primaryTextObject().effects.removeAt(m_index);
+    targetObject().effects.removeAt(m_index);
     notifyChanged();
 }
 
 void AddEffectCommand::redo()
 {
     if (m_effect) {
-        m_document.primaryTextObject().effects.insert(m_index, m_effect->clone());
+        targetObject().effects.insert(m_index, m_effect->clone());
         notifyChanged();
     }
 }
@@ -268,14 +374,14 @@ RemoveEffectCommand::RemoveEffectCommand(Document& document,
 void RemoveEffectCommand::undo()
 {
     if (m_effect) {
-        m_document.primaryTextObject().effects.insert(m_index, m_effect->clone());
+        targetObject().effects.insert(m_index, m_effect->clone());
         notifyChanged();
     }
 }
 
 void RemoveEffectCommand::redo()
 {
-    m_document.primaryTextObject().effects.removeAt(m_index);
+    targetObject().effects.removeAt(m_index);
     notifyChanged();
 }
 
@@ -291,13 +397,13 @@ ReorderEffectCommand::ReorderEffectCommand(Document& document,
 
 void ReorderEffectCommand::undo()
 {
-    m_document.primaryTextObject().effects.move(m_to, m_from);
+    targetObject().effects.move(m_to, m_from);
     notifyChanged();
 }
 
 void ReorderEffectCommand::redo()
 {
-    m_document.primaryTextObject().effects.move(m_from, m_to);
+    targetObject().effects.move(m_from, m_to);
     notifyChanged();
 }
 
@@ -315,7 +421,7 @@ SetEffectEnabledCommand::SetEffectEnabledCommand(Document& document,
 
 void SetEffectEnabledCommand::undo()
 {
-    if (Effect* effect = m_document.primaryTextObject().effects.at(m_index)) {
+    if (Effect* effect = targetObject().effects.at(m_index)) {
         effect->enabled = m_oldEnabled;
         notifyChanged();
     }
@@ -323,7 +429,7 @@ void SetEffectEnabledCommand::undo()
 
 void SetEffectEnabledCommand::redo()
 {
-    if (Effect* effect = m_document.primaryTextObject().effects.at(m_index)) {
+    if (Effect* effect = targetObject().effects.at(m_index)) {
         effect->enabled = m_newEnabled;
         notifyChanged();
     }
@@ -345,7 +451,7 @@ SetEffectParameterCommand::SetEffectParameterCommand(Document& document,
 
 void SetEffectParameterCommand::undo()
 {
-    if (Effect* effect = m_document.primaryTextObject().effects.at(m_index)) {
+    if (Effect* effect = targetObject().effects.at(m_index)) {
         if (effect->setParameter(m_parameterId, m_oldValue)) {
             notifyChanged();
         }
@@ -354,7 +460,7 @@ void SetEffectParameterCommand::undo()
 
 void SetEffectParameterCommand::redo()
 {
-    if (Effect* effect = m_document.primaryTextObject().effects.at(m_index)) {
+    if (Effect* effect = targetObject().effects.at(m_index)) {
         if (effect->setParameter(m_parameterId, m_newValue)) {
             notifyChanged();
         }
@@ -369,11 +475,124 @@ int SetEffectParameterCommand::id() const
 bool SetEffectParameterCommand::mergeWith(const QUndoCommand* other)
 {
     const auto* command = dynamic_cast<const SetEffectParameterCommand*>(other);
-    if (!command || command->m_index != m_index || command->m_parameterId != m_parameterId) {
+    if (!command || command->m_objectId != m_objectId || command->m_index != m_index
+        || command->m_parameterId != m_parameterId) {
         return false;
     }
     m_newValue = command->m_newValue;
     return true;
+}
+
+SetEffectMasterStrengthCommand::SetEffectMasterStrengthCommand(Document& document,
+                                                               int index,
+                                                               double oldValue,
+                                                               double newValue,
+                                                               DocumentChangeCallback onChanged)
+    : DocumentCommand(document, std::move(onChanged), QStringLiteral("Change effect strength"))
+    , m_index(index)
+    , m_oldValue(oldValue)
+    , m_newValue(newValue)
+{
+}
+
+void SetEffectMasterStrengthCommand::undo()
+{
+    if (Effect* effect = targetObject().effects.at(m_index)) {
+        effect->masterStrength = m_oldValue;
+        notifyChanged();
+    }
+}
+
+void SetEffectMasterStrengthCommand::redo()
+{
+    if (Effect* effect = targetObject().effects.at(m_index)) {
+        effect->masterStrength = m_newValue;
+        notifyChanged();
+    }
+}
+
+int SetEffectMasterStrengthCommand::id() const
+{
+    return EffectMasterStrengthCommandId;
+}
+
+bool SetEffectMasterStrengthCommand::mergeWith(const QUndoCommand* other)
+{
+    const auto* command = dynamic_cast<const SetEffectMasterStrengthCommand*>(other);
+    if (!command || command->m_objectId != m_objectId || command->m_index != m_index) {
+        return false;
+    }
+    m_newValue = command->m_newValue;
+    return true;
+}
+
+SetEffectScopeCommand::SetEffectScopeCommand(Document& document,
+                                             int index,
+                                             EffectScope oldScope,
+                                             EffectScope newScope,
+                                             DocumentChangeCallback onChanged)
+    : DocumentCommand(document, std::move(onChanged), QStringLiteral("Change effect scope"))
+    , m_index(index)
+    , m_oldScope(std::move(oldScope))
+    , m_newScope(std::move(newScope))
+{
+}
+
+void SetEffectScopeCommand::undo()
+{
+    if (Effect* effect = targetObject().effects.at(m_index)) {
+        effect->scope = m_oldScope;
+        notifyChanged();
+    }
+}
+
+void SetEffectScopeCommand::redo()
+{
+    if (Effect* effect = targetObject().effects.at(m_index)) {
+        effect->scope = m_newScope;
+        notifyChanged();
+    }
+}
+
+AddEffectMaskStrokeCommand::AddEffectMaskStrokeCommand(Document& document,
+                                                       QString objectId,
+                                                       QString effectId,
+                                                       EffectMaskStroke stroke,
+                                                       DocumentChangeCallback onChanged,
+                                                       QString description)
+    : DocumentCommand(document, std::move(onChanged), description)
+    , m_objectId(std::move(objectId))
+    , m_effectId(std::move(effectId))
+    , m_stroke(std::move(stroke))
+{
+}
+
+void AddEffectMaskStrokeCommand::undo()
+{
+    TextObject* object = m_document.objectById(m_objectId);
+    if (!object) {
+        return;
+    }
+    Effect* effect = object->effects.byInstanceId(m_effectId);
+    if (!effect || effect->maskStrokes.isEmpty()) {
+        return;
+    }
+    effect->maskStrokes.removeLast();
+    notifyChanged();
+}
+
+void AddEffectMaskStrokeCommand::redo()
+{
+    TextObject* object = m_document.objectById(m_objectId);
+    if (!object) {
+        return;
+    }
+    Effect* effect = object->effects.byInstanceId(m_effectId);
+    if (!effect) {
+        return;
+    }
+    effect->maskStrokes.push_back(m_stroke);
+    notifyChanged();
 }
 
 ApplyPresetCommand::ApplyPresetCommand(Document& document,
@@ -389,21 +608,23 @@ ApplyPresetCommand::ApplyPresetCommand(Document& document,
 
 void ApplyPresetCommand::undo()
 {
-    m_document.primaryTextObject().effects = m_before;
+    targetObject().effects = m_before;
     notifyChanged();
 }
 
 void ApplyPresetCommand::redo()
 {
-    m_document.primaryTextObject().effects = m_after;
+    targetObject().effects = m_after;
     notifyChanged();
 }
 
 AddDeformationStrokeCommand::AddDeformationStrokeCommand(Document& document,
+                                                         QString objectId,
                                                          int index,
                                                          DeformationStroke stroke,
                                                          DocumentChangeCallback onChanged)
     : DocumentCommand(document, std::move(onChanged), QStringLiteral("Add deformation stroke"))
+    , m_targetObjectId(std::move(objectId))
     , m_index(index)
     , m_stroke(std::move(stroke))
 {
@@ -411,7 +632,11 @@ AddDeformationStrokeCommand::AddDeformationStrokeCommand(Document& document,
 
 void AddDeformationStrokeCommand::undo()
 {
-    auto& strokes = m_document.primaryTextObject().deformation.strokes;
+    TextObject* object = m_document.objectById(m_targetObjectId);
+    if (!object) {
+        return;
+    }
+    auto& strokes = object->deformation.strokes;
     if (m_index >= 0 && m_index < strokes.size()) {
         strokes.removeAt(m_index);
         notifyChanged();
@@ -420,7 +645,11 @@ void AddDeformationStrokeCommand::undo()
 
 void AddDeformationStrokeCommand::redo()
 {
-    auto& strokes = m_document.primaryTextObject().deformation.strokes;
+    TextObject* object = m_document.objectById(m_targetObjectId);
+    if (!object) {
+        return;
+    }
+    auto& strokes = object->deformation.strokes;
     if (m_index < 0) {
         m_index = strokes.size();
     }
@@ -442,13 +671,13 @@ ClearDeformationCommand::ClearDeformationCommand(Document& document,
 
 void ClearDeformationCommand::undo()
 {
-    m_document.primaryTextObject().deformation = m_before;
+    targetObject().deformation = m_before;
     notifyChanged();
 }
 
 void ClearDeformationCommand::redo()
 {
-    m_document.primaryTextObject().deformation = m_after;
+    targetObject().deformation = m_after;
     notifyChanged();
 }
 
@@ -464,13 +693,13 @@ SetDeformationEnabledCommand::SetDeformationEnabledCommand(Document& document,
 
 void SetDeformationEnabledCommand::undo()
 {
-    m_document.primaryTextObject().deformation.enabled = m_oldEnabled;
+    targetObject().deformation.enabled = m_oldEnabled;
     notifyChanged();
 }
 
 void SetDeformationEnabledCommand::redo()
 {
-    m_document.primaryTextObject().deformation.enabled = m_newEnabled;
+    targetObject().deformation.enabled = m_newEnabled;
     notifyChanged();
 }
 
@@ -486,13 +715,13 @@ SetDeformationStrengthCommand::SetDeformationStrengthCommand(Document& document,
 
 void SetDeformationStrengthCommand::undo()
 {
-    m_document.primaryTextObject().deformation.strength = m_oldStrength;
+    targetObject().deformation.strength = m_oldStrength;
     notifyChanged();
 }
 
 void SetDeformationStrengthCommand::redo()
 {
-    m_document.primaryTextObject().deformation.strength = m_newStrength;
+    targetObject().deformation.strength = m_newStrength;
     notifyChanged();
 }
 
@@ -504,7 +733,7 @@ int SetDeformationStrengthCommand::id() const
 bool SetDeformationStrengthCommand::mergeWith(const QUndoCommand* other)
 {
     const auto* command = dynamic_cast<const SetDeformationStrengthCommand*>(other);
-    if (!command) {
+    if (!command || command->m_objectId != m_objectId) {
         return false;
     }
     m_newStrength = command->m_newStrength;

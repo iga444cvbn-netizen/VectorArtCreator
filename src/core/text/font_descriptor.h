@@ -11,6 +11,9 @@ struct FontDescriptor {
     QString family;
     QString styleName;
     int weight = static_cast<int>(QFont::Normal);
+    bool italic = false;
+    bool underline = false;
+    bool strikeOut = false;
 
     // Reserved for a future private embedded-font resource implementation.
     QString fingerprint;
@@ -29,6 +32,9 @@ struct TypographyProperties {
     // Additional letter spacing expressed as an em-relative value. For example,
     // 0.05 means five percent of the current font size.
     qreal trackingEm = 0.0;
+    // Multiplier applied to Qt's natural line height for explicit newline
+    // paragraphs. 1.0 preserves the font's normal leading.
+    qreal lineSpacing = 1.0;
 
     [[nodiscard]] QJsonObject toJson(const QColor& fill) const;
     [[nodiscard]] static TypographyProperties fromJson(const QJsonObject& object,

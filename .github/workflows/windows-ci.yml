@@ -7,6 +7,9 @@ on:
   pull_request:
     branches:
       - main
+      # The Phase 3 repair branch is intentionally reviewed through focused
+      # stacked PRs; validate those fixes with the same Windows job.
+      - codex/phase3-editor-workspace
   workflow_dispatch:
 
 permissions:
@@ -73,6 +76,44 @@ jobs:
           Write-Host "Running tests with Qt runtime PATH: $env:Path"
           Write-Host "Running tests with Qt platform plugin path: $env:QT_QPA_PLATFORM_PLUGIN_PATH"
           ctest --test-dir build --output-on-failure -VV
+          $ctestExit = $LASTEXITCODE
+          if ($ctestExit -ne 0) {
+            Write-Host "CTest failed; replaying the Qt Test executable with verbose output."
+            $testExecutable = Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_tests.exe'
+            $fullReplayLog = Join-Path $env:RUNNER_TEMP 'vector-typography-full-replay.txt'
+            & $testExecutable -vs -o "$fullReplayLog,txt"
+            Write-Host "Full Qt Test replay exit code: $LASTEXITCODE"
+            if (Test-Path -LiteralPath $fullReplayLog) {
+              Get-Content -LiteralPath $fullReplayLog
+            }
+            $uiTestExecutable = Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_ui_tests.exe'
+            $uiReplayLog = Join-Path $env:RUNNER_TEMP 'vector-typography-ui-replay.txt'
+            & $uiTestExecutable -vs -o "$uiReplayLog,txt"
+            Write-Host "UI Qt Test replay exit code: $LASTEXITCODE"
+            if (Test-Path -LiteralPath $uiReplayLog) {
+              Get-Content -LiteralPath $uiReplayLog
+            }
+            $diagnosticCases = @(
+              'documentHierarchyHasStableIds',
+              'legacyFlatProjectMigratesToPageAndLayer',
+              'multilineShapingPreservesLinesAndClusters',
+              'scopedEffectsOnlyTouchSelectedClusters',
+              'proceduralEffectsAreDeterministicAndAvailable',
+              'selectionModelSupportsSingleAndRangeSelection',
+              'controllerSceneCommandsMoveDuplicateAndDeleteObjects',
+              'controllerPageAndLayerCommandsAreUndoable'
+            )
+            foreach ($diagnosticCase in $diagnosticCases) {
+              $caseLog = Join-Path $env:RUNNER_TEMP ("vector-typography-$diagnosticCase.txt")
+              & $testExecutable $diagnosticCase -o "$caseLog,txt"
+              $caseExit = $LASTEXITCODE
+              Write-Host "Diagnostic case $diagnosticCase exit code: $caseExit"
+              if (Test-Path -LiteralPath $caseLog) {
+                Get-Content -LiteralPath $caseLog
+              }
+            }
+            exit $ctestExit
+          }
 
       - name: Package runnable Windows build
         shell: pwsh

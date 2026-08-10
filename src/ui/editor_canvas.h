@@ -1,14 +1,23 @@
 #pragma once
 
 #include "core/deformation/manual_deformation.h"
+#include "core/effects/effect.h"
 #include "core/geometry/vector_geometry.h"
+#include "core/scene/scene_geometry.h"
 #include "ui/deformation_tool_state.h"
 
 #include <QColor>
 #include <QEnterEvent>
+#include <QFont>
 #include <QPoint>
+#include <QPlainTextEdit>
 #include <QTransform>
 #include <QWidget>
+#include <QStringList>
+
+class QGraphicsProxyWidget;
+class QGraphicsScene;
+class QGraphicsView;
 
 namespace vt {
 
@@ -19,22 +28,58 @@ public:
     explicit EditorCanvas(QWidget* parent = nullptr);
 
     void setScene(const VectorGeometry& geometry, const QColor& fill);
+    void setScene(const SceneGeometry& scene,
+                  const QStringList& selectedObjectIds = {},
+                  const QString& activeObjectId = {});
+    void setSelection(const QStringList& selectedObjectIds, const QString& activeObjectId = {});
+    void setTextRange(int start, int end);
     void setTool(EditorTool tool);
     void setBrushSettings(BrushMode mode,
                           BrushTarget target,
                           qreal radius,
                           qreal strength,
                           qreal hardness);
+    void setMaskRestoreMode(bool restore);
+    void setMaskBrushSettings(qreal radius, qreal opacity, qreal hardness, bool restore);
+    void setMaskTarget(const QString& objectId);
+    void setMaskEnabled(bool enabled);
+    void setNavigationSettings(const QString& mode, bool invertZoom);
+    void beginTextEditing(const QString& objectId,
+                          const QString& text,
+                          const QFont& font,
+                          const QRectF& documentBounds);
+    void finishTextEditing();
+    [[nodiscard]] bool isTextEditing() const { return m_textEditor != nullptr && m_textEditor->isVisible(); }
     [[nodiscard]] qreal zoom() const;
+    [[nodiscard]] BrushMode brushMode() const { return m_brushMode; }
+    [[nodiscard]] BrushTarget brushTarget() const { return m_brushTarget; }
 
 public slots:
     void fitContent();
+    void zoomIn();
+    void zoomOut();
+    void zoom100();
 
 signals:
     void zoomChanged(qreal zoom);
-    void deformationPreviewChanged(const DeformationStroke& stroke);
+    void deformationPreviewChanged(const QString& objectId, const DeformationStroke& stroke);
     void deformationPreviewCleared();
-    void deformationStrokeReady(const DeformationStroke& stroke);
+    void deformationStrokeReady(const QString& objectId, const DeformationStroke& stroke);
+    void objectClicked(const QString& objectId, bool additive);
+    void marqueeSelectionRequested(const QRectF& rect, bool additive);
+    void moveCommitted(const QStringList& objectIds, const QPointF& delta);
+    void textCreateRequested(const QPointF& position);
+    void textEditRequested(const QString& objectId);
+    void textEdited(const QString& objectId, const QString& text);
+    void textRangeChanged(const QString& objectId, int start, int end);
+    void textEditingChanged(bool editing);
+    void effectMaskStrokeReady(const QString& objectId, const EffectMaskStroke& stroke);
+    void effectMaskPreviewChanged(const QString& objectId, const EffectMaskStroke& stroke);
+    void effectMaskPreviewCleared();
+    void objectTransformCommitted(const QString& objectId, const ObjectTransform& transform);
+    void nudgeRequested(const QPointF& delta);
+    void deleteRequested();
+    void duplicateRequested();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -47,17 +92,33 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void setZoom(qreal value);
     [[nodiscard]] QTransform viewTransform() const;
     [[nodiscard]] QPointF documentPosition(const QPointF& widgetPosition) const;
     [[nodiscard]] DeformationStroke currentStroke() const;
+    [[nodiscard]] EffectMaskStroke currentMaskStroke() const;
+    [[nodiscard]] QString hitTestObject(const QPointF& documentPoint) const;
+    [[nodiscard]] int scaleHandleAt(const QPointF& documentPoint) const;
+    [[nodiscard]] bool rotationHandleContains(const QPointF& documentPoint) const;
+    [[nodiscard]] QPointF rotationHandleCenter(const SceneObjectGeometry& object) const;
+    bool beginTransform(const QPointF& documentPoint);
+    void updateTransformPreview(const QPointF& documentPoint);
+    void applyPreviewTransform(SceneObjectGeometry* preview,
+                               const SceneObjectGeometry& source,
+                               const ObjectTransform& transform);
+    [[nodiscard]] QRectF selectionRectInDocument() const;
     void updateBrushPreview();
     void cancelBrushStroke();
     void updateCursorShape();
+    void updateTextEditorGeometry();
 
     VectorGeometry m_geometry;
+    SceneGeometry m_sceneGeometry;
+    QStringList m_selectedObjectIds;
+    QString m_activeObjectId;
     QColor m_fill = QColor(24, 24, 28);
     qreal m_zoom = 1.0;
     QPointF m_panOffset;
@@ -71,12 +132,52 @@ private:
     qreal m_brushRadius = 40.0;
     qreal m_brushStrength = 0.7;
     qreal m_brushHardness = 0.5;
+    qreal m_maskRadius = 40.0;
+    qreal m_maskOpacity = 1.0;
+    qreal m_maskHardness = 0.5;
+    bool m_maskRestore = false;
     bool m_panning = false;
     bool m_brushing = false;
     bool m_spacePressed = false;
     bool m_hasCursorPosition = false;
     bool m_hasViewCenter = false;
     bool m_hasInitialFit = false;
+    bool m_marqueeSelecting = false;
+    bool m_marqueeMoved = false;
+    bool m_movingObjects = false;
+    bool m_transforming = false;
+    bool m_rotatingObject = false;
+    int m_scaleHandle = -1;
+    QPointF m_moveStartDocument;
+    QPointF m_lastMoveDocument;
+    QRectF m_marqueeRect;
+    QPointF m_marqueeStartWidget;
+    QStringList m_moveObjectIds;
+    SceneGeometry m_sceneBeforeMove;
+    SceneGeometry m_sceneBeforeTransform;
+    ObjectTransform m_transformBefore;
+    ObjectTransform m_transformPreview;
+    QPointF m_transformPivotPage;
+    QPointF m_transformStartLocal;
+    qreal m_transformStartAngle = 0.0;
+    QString m_transformObjectId;
+    // The native editor is hosted in a graphics proxy so its Qt text document,
+    // caret, selection and IME support share the object's page transform.
+    QPlainTextEdit* m_textEditor = nullptr;
+    QGraphicsView* m_editorView = nullptr;
+    QGraphicsScene* m_editorScene = nullptr;
+    QGraphicsProxyWidget* m_editorProxy = nullptr;
+    QString m_editingObjectId;
+    QString m_editingPageId;
+    QRectF m_editingDocumentBounds;
+    bool m_updatingTextEditor = false;
+    QString m_maskTargetId;
+    bool m_maskEnabled = false;
+    QString m_brushTargetId;
+    int m_textRangeStart = -1;
+    int m_textRangeEnd = -1;
+    QString m_navigationMode = QStringLiteral("middleSpace");
+    bool m_invertZoom = false;
 };
 
 } // namespace vt

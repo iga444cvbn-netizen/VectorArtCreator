@@ -11,11 +11,14 @@ namespace vt {
 // persistent deformation operation by accident.
 enum class EditorTool {
     Select,
+    Move,
+    Text,
     Push,
     Pull,
     Inflate,
     Pinch,
     Smooth,
+    EffectMask,
 };
 
 class DeformationToolState {
@@ -34,7 +37,8 @@ public:
 
     [[nodiscard]] bool acceptsCanvasStroke() const
     {
-        return m_tool != EditorTool::Select;
+        return m_tool != EditorTool::Select && m_tool != EditorTool::Move
+            && m_tool != EditorTool::Text;
     }
 
     [[nodiscard]] bool targetSelectionEnabled() const
@@ -56,6 +60,8 @@ public:
     {
         switch (m_tool) {
         case EditorTool::Select:
+        case EditorTool::Move:
+        case EditorTool::Text:
             return std::nullopt;
         case EditorTool::Push:
             return BrushMode::Push;
@@ -67,6 +73,8 @@ public:
             return BrushMode::Pinch;
         case EditorTool::Smooth:
             return BrushMode::Smooth;
+        case EditorTool::EffectMask:
+            return std::nullopt;
         }
         return std::nullopt;
     }

@@ -21,6 +21,15 @@ enum class BrushTarget {
     Shape,
 };
 
+// New strokes are authored in object-local coordinates.  LegacyPageAmbiguous
+// is retained only to identify pre-v5 files: its numeric samples are left
+// untouched on load because their original object transform was not saved with
+// each stroke and therefore cannot be recovered safely.
+enum class DeformationCoordinateSpace {
+    ObjectLocal,
+    LegacyPageAmbiguous,
+};
+
 struct BrushSample {
     QPointF position;
     QPointF delta;
@@ -35,6 +44,7 @@ struct DeformationStroke {
     qreal radius = 40.0;
     qreal strength = 0.7;
     qreal hardness = 0.5;
+    DeformationCoordinateSpace coordinateSpace = DeformationCoordinateSpace::ObjectLocal;
     QVector<BrushSample> samples;
 };
 
