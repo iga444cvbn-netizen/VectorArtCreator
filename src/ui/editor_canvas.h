@@ -43,6 +43,7 @@ public:
     void setMaskBrushSettings(qreal radius, qreal opacity, qreal hardness, bool restore);
     void setMaskTarget(const QString& objectId);
     void setMaskEnabled(bool enabled);
+    void setMaskEffectId(const QString& effectId);
     void setNavigationSettings(const QString& mode, bool invertZoom);
     void beginTextEditing(const QString& objectId,
                           const QString& text,
@@ -50,6 +51,8 @@ public:
                           const QRectF& documentBounds);
     void finishTextEditing();
     [[nodiscard]] bool isTextEditing() const { return m_textEditor != nullptr && m_textEditor->isVisible(); }
+    [[nodiscard]] QString editingObjectId() const { return m_editingObjectId; }
+    [[nodiscard]] QString editingPageId() const { return m_editingPageId; }
     [[nodiscard]] qreal zoom() const;
     [[nodiscard]] BrushMode brushMode() const { return m_brushMode; }
     [[nodiscard]] BrushTarget brushTarget() const { return m_brushTarget; }
@@ -73,8 +76,10 @@ signals:
     void textEdited(const QString& objectId, const QString& text);
     void textRangeChanged(const QString& objectId, int start, int end);
     void textEditingChanged(bool editing);
-    void effectMaskStrokeReady(const QString& objectId, const EffectMaskStroke& stroke);
-    void effectMaskPreviewChanged(const QString& objectId, const EffectMaskStroke& stroke);
+    void effectMaskStrokeReady(const QString& objectId, const QString& effectId,
+                               const EffectMaskStroke& stroke);
+    void effectMaskPreviewChanged(const QString& objectId, const QString& effectId,
+                                  const EffectMaskStroke& stroke);
     void effectMaskPreviewCleared();
     void objectTransformCommitted(const QString& objectId, const ObjectTransform& transform);
     void nudgeRequested(const QPointF& delta);
@@ -114,6 +119,12 @@ private:
     void cancelBrushStroke();
     void updateCursorShape();
     void updateTextEditorGeometry();
+    [[nodiscard]] bool handleCanvasMousePress(Qt::MouseButton button,
+                                              const QPointF& widgetPosition,
+                                              Qt::KeyboardModifiers modifiers);
+    [[nodiscard]] bool handleCanvasWheel(const QPoint& angleDelta,
+                                         Qt::KeyboardModifiers modifiers);
+    [[nodiscard]] bool isOutsideNativeEditor(const QPointF& viewportPosition) const;
 
     VectorGeometry m_geometry;
     SceneGeometry m_sceneGeometry;
@@ -172,8 +183,10 @@ private:
     QRectF m_editingDocumentBounds;
     bool m_updatingTextEditor = false;
     QString m_maskTargetId;
+    QString m_maskEffectId;
     bool m_maskEnabled = false;
     QString m_brushTargetId;
+    QString m_brushEffectId;
     int m_textRangeStart = -1;
     int m_textRangeEnd = -1;
     QString m_navigationMode = QStringLiteral("middleSpace");

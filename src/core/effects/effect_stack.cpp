@@ -20,19 +20,36 @@ qreal distanceToSegment(const QPointF& point, const QPointF& start, const QPoint
     return QLineF(point, start + segment * t).length();
 }
 
-qreal maskInfluence(const Effect& effect, const QPointF& point)
+qreal maskInfluence(const Effect& effect, const QPainterPath& path, const QPointF& anchor)
 {
     qreal influence = 1.0;
     for (const EffectMaskStroke& stroke : effect.maskStrokes) {
         if (stroke.points.isEmpty() || stroke.radius <= 0.0) {
             continue;
         }
-        qreal distance = QLineF(point, stroke.points.front()).length();
+        qreal distance = QLineF(anchor, stroke.points.front()).length();
         for (int index = 1; index < stroke.points.size(); ++index) {
             distance = qMin(distance,
-                            distanceToSegment(point,
+                            distanceToSegment(anchor,
                                               stroke.points.at(index - 1),
                                               stroke.points.at(index)));
+        }
+        // The anchor is only a layout convenience.  Use actual contour
+        // proximity so a brush crossing a large glyph influences that glyph.
+        const QRectF bounds = path.boundingRect();
+        if (!bounds.isEmpty()) {
+            const QRectF expanded = bounds.adjusted(-stroke.radius, -stroke.radius,
+                                                    stroke.radius, stroke.radius);
+            if (expanded.contains(stroke.points.front())) {
+                distance = 0.0;
+            }
+            for (int index = 1; index < stroke.points.size(); ++index) {
+                const QLineF line(stroke.points.at(index - 1), stroke.points.at(index));
+                if (expanded.intersects(QRectF(line.p1(), line.p2()).normalized())) {
+                    distance = 0.0;
+                    break;
+                }
+            }
         }
         if (distance >= stroke.radius) {
             continue;
@@ -94,7 +111,8 @@ void applyMaskedEffect(const Effect& effect,
         if (index < 0 || index >= geometry->pieces.size() || index >= after.pieces.size()) {
             continue;
         }
-        const qreal influence = maskInfluence(effect, before.pieces.at(index).anchor);
+        const qreal influence = maskInfluence(effect, before.pieces.at(index).path,
+                                              before.pieces.at(index).anchor);
         blendPiece(&geometry->pieces[index], before.pieces.at(index), after.pieces.at(index), influence);
     }
 }

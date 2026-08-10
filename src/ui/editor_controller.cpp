@@ -15,6 +15,7 @@
 #include <QLineF>
 #include <QMimeData>
 #include <QStandardPaths>
+#include <QFontDatabase>
 
 #include <cmath>
 #include <utility>
@@ -36,39 +37,26 @@ bool nearlyEqual(double left, double right)
 
 bool effectStacksEqual(const EffectStack& left, const EffectStack& right)
 {
-    if (left.size() != right.size()) {
-        return false;
-    }
-    for (int index = 0; index < left.size(); ++index) {
-        const Effect* leftEffect = left.at(index);
-        const Effect* rightEffect = right.at(index);
-        if (!leftEffect || !rightEffect
-            || leftEffect->typeId() != rightEffect->typeId()
-            || leftEffect->enabled != rightEffect->enabled) {
-            return false;
-        }
+    return QJsonDocument(left.toJson()).toJson(QJsonDocument::Compact)
+        == QJsonDocument(right.toJson()).toJson(QJsonDocument::Compact);
+}
 
-        const QVector<EffectParameter> leftParameters = leftEffect->parameterDefinitions();
-        const QVector<EffectParameter> rightParameters = rightEffect->parameterDefinitions();
-        if (leftParameters.size() != rightParameters.size()) {
-            return false;
-        }
-        for (int parameterIndex = 0; parameterIndex < leftParameters.size(); ++parameterIndex) {
-            if (leftParameters[parameterIndex].id != rightParameters[parameterIndex].id
-                || !nearlyEqual(leftParameters[parameterIndex].value,
-                                rightParameters[parameterIndex].value)) {
-                return false;
-            }
-        }
-    }
-    return true;
+FontDescriptor resolvedExactStyle(FontDescriptor descriptor, const QString& family, const QString& style)
+{
+    descriptor.family = family;
+    descriptor.styleName = style;
+    const QFont resolved = QFontDatabase::font(family, style, 12);
+    descriptor.weight = resolved.weight();
+    descriptor.italic = resolved.italic();
+    return descriptor;
 }
 
 QRectF localReferenceBounds(const TextObject& object)
 {
     TextEngine engine;
     const ShapedText shaped = engine.shape(object);
-    return GlyphGeometryBuilder::build(shaped, object.typography.fontSize).referenceBounds;
+    return GlyphGeometryBuilder::build(shaped, object.typography.fontSize,
+                                       object.font.underline, object.font.strikeOut).referenceBounds;
 }
 
 Layer* currentPageLayerForObject(Document& document, const QString& objectId)
@@ -281,6 +269,7 @@ QStringList EditorController::selectedObjectIds() const
 void EditorController::refreshFonts()
 {
     m_textEngine.clearCache();
+    SceneEvaluator::invalidateFontCaches();
     rebuildScene();
     emit fontsChanged(fontFamilies());
     emit statusMessageChanged(QStringLiteral("System font list refreshed."));
@@ -399,50 +388,58 @@ void EditorController::clearTextRange()
 void EditorController::setFontFamily(const QString& family)
 {
     const TextObject* object = editableActiveObject();
-    if (!object || object->font.family == family) {
+    if (!object || family.isEmpty()) {
         return;
     }
-    m_undoStack.push(new SetFontFamilyCommand(
-        m_document,
-        object->font.family,
-        family,
-        [this] { onCommandChanged(); }));
+    const QString style = QFontDatabase::styles(family).value(0);
+    const FontDescriptor replacement = resolvedExactStyle(object->font, family, style);
+    if (replacement == object->font) return;
+    m_undoStack.push(new SetFontDescriptorCommand(m_document, object->font, replacement,
+                                                  [this] { onCommandChanged(); },
+                                                  QStringLiteral("Change font family")));
 }
 
 void EditorController::setFontStyle(const QString& styleName)
 {
     const TextObject* object = editableActiveObject();
-    if (!object || object->font.styleName == styleName) {
+    if (!object || styleName.isEmpty()) {
         return;
     }
-    m_undoStack.push(new SetFontStyleCommand(
-        m_document,
-        object->font.styleName,
-        styleName,
-        [this] { onCommandChanged(); }));
+    const FontDescriptor replacement = resolvedExactStyle(object->font, object->font.family, styleName);
+    if (replacement == object->font) return;
+    m_undoStack.push(new SetFontDescriptorCommand(m_document, object->font, replacement,
+                                                  [this] { onCommandChanged(); },
+                                                  QStringLiteral("Change font style")));
 }
 
 void EditorController::setFontWeight(int weight)
 {
     const TextObject* object = editableActiveObject();
-    if (!object || object->font.weight == weight) {
+    if (!object) {
         return;
     }
-    m_undoStack.push(new SetFontWeightCommand(
-        m_document,
-        object->font.weight,
-        weight,
-        [this] { onCommandChanged(); }));
+    FontDescriptor replacement = object->font;
+    replacement.weight = qBound(0, weight, 1000);
+    replacement.styleName.clear();
+    if (replacement == object->font) return;
+    m_undoStack.push(new SetFontDescriptorCommand(m_document, object->font, replacement,
+                                                  [this] { onCommandChanged(); },
+                                                  QStringLiteral("Change font weight")));
 }
 
 void EditorController::setFontItalic(bool italic)
 {
     const TextObject* object = editableActiveObject();
-    if (!object || object->font.italic == italic) {
+    if (!object) {
         return;
     }
-    m_undoStack.push(new SetFontItalicCommand(
-        m_document, object->font.italic, italic, [this] { onCommandChanged(); }));
+    FontDescriptor replacement = object->font;
+    replacement.italic = italic;
+    replacement.styleName.clear();
+    if (replacement == object->font) return;
+    m_undoStack.push(new SetFontDescriptorCommand(m_document, object->font, replacement,
+                                                  [this] { onCommandChanged(); },
+                                                  QStringLiteral("Toggle italic")));
 }
 
 void EditorController::setFontUnderline(bool underline)
@@ -735,10 +732,16 @@ void EditorController::moveSelectedObjects(const QPointF& delta)
             ids.push_back(object->id);
         }
     }
+    moveObjects(ids, delta);
+}
+
+void EditorController::moveObjects(const QStringList& objectIds, const QPointF& delta)
+{
     QStringList movableIds;
-    for (const QString& id : ids) {
+    for (const QString& id : objectIds) {
         const Layer* layer = currentPageLayerForObject(m_document, id);
-        if (m_document.objectById(id) && layer && layer->visible && !layer->locked) {
+        if (!movableIds.contains(id) && layer && layer->objectById(id)
+            && layer->visible && !layer->locked) {
             movableIds.push_back(id);
         }
     }
@@ -758,12 +761,20 @@ void EditorController::setObjectTransform(const QString& objectId, const ObjectT
 {
     TextObject* object = m_document.objectById(objectId);
     const Layer* layer = currentPageLayerForObject(m_document, objectId);
+    ObjectTransform normalized = transform;
+    normalized.normalizeScale();
+    if (!normalized.hasPivot) {
+        if (const SceneObjectGeometry* sceneObject = m_sceneGeometry.objectById(objectId)) {
+            normalized.pivotLocal = sceneObject->frame.pivotLocal;
+            normalized.hasPivot = true;
+        }
+    }
     if (!object || !layer || !layer->visible || layer->locked
-        || object->transform.toJson() == transform.toJson()) {
+        || object->transform.toJson() == normalized.toJson()) {
         return;
     }
     m_undoStack.push(new SetObjectTransformCommand(
-        m_document, objectId, object->transform, transform, [this] { onCommandChanged(); }));
+        m_document, objectId, object->transform, normalized, [this] { onCommandChanged(); }));
 }
 
 void EditorController::addPage()
@@ -1021,7 +1032,7 @@ void EditorController::moveActiveLayerUp()
     for (int index = 0; index < static_cast<int>(page->layers.size()); ++index) {
         if (page->layers[static_cast<size_t>(index)]
             && page->layers[static_cast<size_t>(index)]->id == m_document.activeLayerId) {
-            moveLayer(index, index - 1);
+            moveLayer(index, index + 1);
             return;
         }
     }
@@ -1036,7 +1047,7 @@ void EditorController::moveActiveLayerDown()
     for (int index = 0; index < static_cast<int>(page->layers.size()); ++index) {
         if (page->layers[static_cast<size_t>(index)]
             && page->layers[static_cast<size_t>(index)]->id == m_document.activeLayerId) {
-            moveLayer(index, index + 1);
+            moveLayer(index, index - 1);
             return;
         }
     }
@@ -1301,7 +1312,9 @@ void EditorController::addEffectMaskStroke(const QString& objectId,
     }
 
     EffectMaskStroke localStroke = stroke;
-    const ObjectFrame frame = ObjectFrame::fromTransform(object->transform, localReferenceBounds(*object));
+    const ObjectFrame frame = m_sceneGeometry.objectById(objectId)
+        ? m_sceneGeometry.objectById(objectId)->frame
+        : ObjectFrame::fromTransform(object->transform, localReferenceBounds(*object));
     if (!frame.localToPage.isIdentity() || !frame.pageToLocal.isIdentity()) {
         for (QPointF& point : localStroke.points) {
             point = frame.pagePointToLocal(point);
@@ -1328,7 +1341,9 @@ void EditorController::setEffectMaskPreview(const QString& objectId,
         return;
     }
     EffectMaskStroke localStroke = stroke;
-    const ObjectFrame frame = ObjectFrame::fromTransform(object->transform, localReferenceBounds(*object));
+    const ObjectFrame frame = m_sceneGeometry.objectById(objectId)
+        ? m_sceneGeometry.objectById(objectId)->frame
+        : ObjectFrame::fromTransform(object->transform, localReferenceBounds(*object));
     for (QPointF& point : localStroke.points) {
         point = frame.pagePointToLocal(point);
     }

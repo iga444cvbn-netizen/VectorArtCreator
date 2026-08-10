@@ -82,6 +82,7 @@ public:
     void deleteSelectedObjects();
     void duplicateSelectedObjects();
     void moveSelectedObjects(const QPointF& delta);
+    void moveObjects(const QStringList& objectIds, const QPointF& delta);
     void nudgeSelectedObjects(const QPointF& delta);
     void setObjectTransform(const QString& objectId, const ObjectTransform& transform);
 

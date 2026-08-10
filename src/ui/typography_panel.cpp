@@ -18,6 +18,13 @@ namespace vt {
 
 namespace {
 
+const QString TraitModeLabel = QStringLiteral("Auto / Traits");
+
+bool isTraitModeLabel(const QString& value)
+{
+    return value == TraitModeLabel;
+}
+
 QIcon formattingIcon(const QString& letter, bool italic, bool underline, bool strikeOut)
 {
     QPixmap pixmap(24, 24);
@@ -79,6 +86,7 @@ TypographyPanel::TypographyPanel(QWidget* parent)
     layout->addRow(QStringLiteral("Family"), m_familyCombo);
 
     m_styleCombo = new QComboBox(group);
+    m_styleCombo->setObjectName(QStringLiteral("fontStyle"));
     layout->addRow(QStringLiteral("Style"), m_styleCombo);
 
     m_weightCombo = new QComboBox(group);
@@ -89,8 +97,10 @@ TypographyPanel::TypographyPanel(QWidget* parent)
     formattingLayout->setContentsMargins(0, 0, 0, 0);
     m_boldButton = formattingButton(formattingIcon(QStringLiteral("B"), false, false, false),
                                     QStringLiteral("Bold"), formatting);
+    m_boldButton->setObjectName(QStringLiteral("fontBold"));
     m_italicButton = formattingButton(formattingIcon(QStringLiteral("I"), true, false, false),
                                       QStringLiteral("Italic"), formatting);
+    m_italicButton->setObjectName(QStringLiteral("fontItalic"));
     m_underlineButton = formattingButton(formattingIcon(QStringLiteral("U"), false, true, false),
                                          QStringLiteral("Underline"), formatting);
     m_strikeOutButton = formattingButton(formattingIcon(QStringLiteral("S"), false, false, true),
@@ -144,7 +154,9 @@ TypographyPanel::TypographyPanel(QWidget* parent)
         emit fontFamilyChanged(m_familyCombo->currentText());
     });
     connect(m_styleCombo, &QComboBox::currentTextChanged, this, [this](const QString& style) {
-        emit fontStyleChanged(style);
+        if (!isTraitModeLabel(style)) {
+            emit fontStyleChanged(style);
+        }
     });
     connect(m_weightCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
         if (index >= 0) {
@@ -181,9 +193,12 @@ void TypographyPanel::setFontStyles(const QStringList& styles)
     const QString current = m_styleCombo->currentText();
     const QSignalBlocker blocker(m_styleCombo);
     m_styleCombo->clear();
+    m_styleCombo->addItem(TraitModeLabel);
     m_styleCombo->addItems(styles);
-    if (!current.isEmpty()) {
+    if (!isTraitModeLabel(current) && !current.isEmpty() && m_styleCombo->findText(current) >= 0) {
         m_styleCombo->setCurrentText(current);
+    } else {
+        m_styleCombo->setCurrentIndex(0);
     }
 }
 
@@ -215,7 +230,10 @@ void TypographyPanel::refresh(const TextObject* object)
     }
     {
         const QSignalBlocker blocker(m_styleCombo);
-        m_styleCombo->setCurrentText(object->font.styleName);
+        const int styleIndex = object->font.styleName.isEmpty()
+            ? 0
+            : m_styleCombo->findText(object->font.styleName);
+        m_styleCombo->setCurrentIndex(styleIndex >= 0 ? styleIndex : 0);
     }
     {
         const QSignalBlocker blocker(m_weightCombo);

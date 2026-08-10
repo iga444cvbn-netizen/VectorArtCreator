@@ -20,12 +20,20 @@ namespace vt {
 [[nodiscard]] QString createStableId(const QString& prefix);
 
 struct ObjectTransform {
+    static constexpr qreal MinimumScale = 0.0001;
+
     QPointF position;
     qreal rotation = 0.0;
     QPointF scale = QPointF(1.0, 1.0);
+    // A pivot is captured when an object is first transformed.  Unlike a
+    // glyph-bound centre it survives source/layout changes.
+    QPointF pivotLocal;
+    bool hasPivot = false;
 
     [[nodiscard]] QJsonObject toJson() const;
     [[nodiscard]] static ObjectTransform fromJson(const QJsonObject& object);
+    [[nodiscard]] static qreal clampScale(qreal value);
+    void normalizeScale();
 };
 
 struct TextObject {

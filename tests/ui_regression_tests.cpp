@@ -1,16 +1,29 @@
 #include "core/effects/wave_effect.h"
+#include "core/serialization/project_serializer.h"
 #include "ui/editor_canvas.h"
 #include "ui/editor_controller.h"
 #include "ui/effects_panel.h"
 #include "ui/main_window.h"
+#include "ui/transform_panel.h"
+#include "ui/typography_panel.h"
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QDoubleSpinBox>
+#include <QGraphicsView>
+#include <QGraphicsProxyWidget>
+#include <QGraphicsScene>
+#include <QPlainTextEdit>
 #include <QPointer>
+#include <QPushButton>
+#include <QSignalSpy>
 #include <QStyle>
 #include <QStyleOptionSpinBox>
 #include <QTest>
+#include <QWheelEvent>
+
+#include <cmath>
 
 using namespace vt;
 
@@ -21,7 +34,32 @@ private slots:
     void valueRefreshKeepsEmittingControlsAlive();
     void deformationAndMaskStateDoNotOverwriteEachOther();
     void spinBoxArrowHitRegionsIncrementAndDecrement();
+    void selectingAnotherLayerObjectEndsNativeEditorSession();
+    void nativeEditorViewportRoutesOutsideCanvasInput();
+    void traitModeIsShownAfterBoldAndItalic();
+    void scaleControlsPreserveSmallAndMirroredValues();
 };
+
+namespace {
+
+QPoint canvasPositionForDocumentPoint(const EditorCanvas* canvas, const QPointF& documentPoint)
+{
+    const QPointF pageCenter(600.0, 400.0);
+    return (QPointF(canvas->width() * 0.5, canvas->height() * 0.5)
+            + (documentPoint - pageCenter) * canvas->zoom()).toPoint();
+}
+
+void beginNativeEdit(EditorCanvas* canvas, EditorController* controller, const QString& objectId)
+{
+    const TextObject* object = controller->document().objectById(objectId);
+    QVERIFY(object);
+    canvas->beginTextEditing(objectId, object->sourceText,
+                             object->font.toQFont(object->typography.fontSize),
+                             QRectF(object->transform.position, QSizeF(180.0, 60.0)));
+    QVERIFY(canvas->isTextEditing());
+}
+
+} // namespace
 
 void EffectsPanelUiTests::valueRefreshKeepsEmittingControlsAlive()
 {
@@ -144,6 +182,201 @@ void EffectsPanelUiTests::spinBoxArrowHitRegionsIncrementAndDecrement()
     QCOMPARE(spinBox->value(), 5.5);
     QTest::mouseClick(spinBox, Qt::LeftButton, Qt::NoModifier, down.center());
     QCOMPARE(spinBox->value(), 5.0);
+}
+
+void EffectsPanelUiTests::selectingAnotherLayerObjectEndsNativeEditorSession()
+{
+    MainWindow window;
+    auto* controller = window.findChild<EditorController*>();
+    auto* canvas = window.findChild<EditorCanvas*>();
+    QVERIFY(controller);
+    QVERIFY(canvas);
+    const QString first = controller->createTextObject(QPointF(20.0, 20.0), QStringLiteral("A"));
+    const QString second = controller->createTextObject(QPointF(160.0, 20.0), QStringLiteral("B"));
+    QVERIFY(!first.isEmpty());
+    QVERIFY(!second.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(first)
+                                 && controller->sceneGeometry().objectById(second),
+                             5000);
+    controller->selectObject(first);
+    const TextObject* object = controller->activeObject();
+    QVERIFY(object);
+    canvas->beginTextEditing(first, object->sourceText,
+                             object->font.toQFont(object->typography.fontSize),
+                             QRectF(20.0, 20.0, 160.0, 60.0));
+    QVERIFY(canvas->isTextEditing());
+    controller->selectObject(second); // same path used by LayersPanel::objectSelected
+    QCoreApplication::processEvents();
+    QVERIFY(!canvas->isTextEditing());
+}
+
+void EffectsPanelUiTests::nativeEditorViewportRoutesOutsideCanvasInput()
+{
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    auto* controller = window.findChild<EditorController*>();
+    auto* canvas = window.findChild<EditorCanvas*>();
+    QVERIFY(controller);
+    QVERIFY(canvas);
+
+    const QPointF firstPosition(120.0, 400.0);
+    const QPointF secondPosition(1080.0, 400.0);
+    const QString first = controller->createTextObject(firstPosition, QStringLiteral("A"));
+    const QString second = controller->createTextObject(secondPosition, QStringLiteral("B"));
+    QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(first)
+                                 && controller->sceneGeometry().objectById(second),
+                             5000);
+    controller->selectObject(first);
+    beginNativeEdit(canvas, controller, first);
+
+    auto* editorView = canvas->findChild<QGraphicsView*>();
+    QVERIFY(editorView);
+    QPlainTextEdit* editor = nullptr;
+    QGraphicsProxyWidget* editorProxy = nullptr;
+    for (QGraphicsItem* item : editorView->scene()->items()) {
+        auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(item);
+        if (proxy) {
+            editor = qobject_cast<QPlainTextEdit*>(proxy->widget());
+            if (editor) {
+                editorProxy = proxy;
+                break;
+            }
+        }
+    }
+    QVERIFY(editor);
+    QVERIFY(editorProxy);
+    QWidget* viewport = editorView->viewport();
+    QVERIFY(viewport);
+
+    const QPoint insideEditor = viewport->mapFrom(editorView,
+        editorView->mapFromScene(editorProxy->mapToScene(editorProxy->boundingRect().center())));
+    QVERIFY(viewport->rect().contains(insideEditor));
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, insideEditor);
+    QVERIFY(canvas->isTextEditing());
+
+    // Use a simple page-space hit region for B. This keeps the routing test
+    // independent of font availability while still exercising MainWindow's
+    // real objectClicked -> selection path.
+    SceneGeometry hitScene = controller->sceneGeometry();
+    SceneObjectGeometry* secondObject = hitScene.objectById(second);
+    QVERIFY(secondObject);
+    GeometryPiece secondHitRegion;
+    secondHitRegion.path.addRect(QRectF(1020.0, 360.0, 120.0, 80.0));
+    secondObject->geometry = VectorGeometry();
+    secondObject->geometry.pieces.push_back(secondHitRegion);
+    secondObject->geometry.setReferenceBounds(secondHitRegion.path.boundingRect());
+    secondObject->geometry.recomputeBounds();
+    canvas->setScene(hitScene, controller->selectedObjectIds(),
+                     controller->selectionModel()->activeObjectId());
+    const QPoint secondInViewport = viewport->mapFrom(canvas,
+        canvasPositionForDocumentPoint(canvas, QPointF(1080.0, 400.0)));
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, secondInViewport);
+    QTRY_COMPARE(controller->selectionModel()->activeObjectId(), second);
+    QVERIFY(!canvas->isTextEditing());
+
+    controller->selectObject(first);
+    beginNativeEdit(canvas, controller, first);
+    const QPoint emptyInCanvas = canvasPositionForDocumentPoint(canvas, QPointF(600.0, 740.0));
+    const QPoint emptyInViewport = viewport->mapFrom(canvas, emptyInCanvas);
+    QTest::mousePress(viewport, Qt::LeftButton, Qt::NoModifier, emptyInViewport);
+    // The canvas owns the drag after the outside press, so deliver the paired
+    // release to the canvas just as a real mouse grab would.
+    QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, emptyInCanvas);
+    QTRY_VERIFY(!canvas->isTextEditing());
+    QTRY_VERIFY(controller->selectionModel()->selectedObjectIds().isEmpty());
+
+    controller->selectObject(first);
+    beginNativeEdit(canvas, controller, first);
+    QSignalSpy zoomSpy(canvas, &EditorCanvas::zoomChanged);
+    const qreal beforeZoom = canvas->zoom();
+    QWheelEvent wheel(QPointF(emptyInViewport),
+                      QPointF(viewport->mapToGlobal(emptyInViewport)),
+                      QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+                      Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(viewport, &wheel);
+    QTRY_VERIFY(!zoomSpy.isEmpty());
+    QVERIFY(canvas->zoom() > beforeZoom);
+    QVERIFY(canvas->isTextEditing());
+}
+
+void EffectsPanelUiTests::traitModeIsShownAfterBoldAndItalic()
+{
+    MainWindow window;
+    window.show();
+    QCoreApplication::processEvents();
+    auto* controller = window.findChild<EditorController*>();
+    auto* typography = window.findChild<TypographyPanel*>();
+    QVERIFY(controller);
+    QVERIFY(typography);
+
+    const QString objectId = controller->createTextObject(QPointF(100.0, 100.0), QStringLiteral("Traits"));
+    const TextObject* object = controller->document().objectById(objectId);
+    QVERIFY(object);
+    const QString style = controller->fontStyles(object->font.family).value(0);
+    if (style.isEmpty()) {
+        QSKIP("No named font styles are available in this test environment.");
+    }
+    auto* styleCombo = typography->findChild<QComboBox*>(QStringLiteral("fontStyle"));
+    auto* bold = typography->findChild<QPushButton*>(QStringLiteral("fontBold"));
+    auto* italic = typography->findChild<QPushButton*>(QStringLiteral("fontItalic"));
+    QVERIFY(styleCombo);
+    QVERIFY(bold);
+    QVERIFY(italic);
+
+    const auto assertTraitMode = [&] {
+        const TextObject* current = controller->document().objectById(objectId);
+        QVERIFY(current);
+        QVERIFY(current->font.styleName.isEmpty());
+        QCOMPARE(styleCombo->currentText(), QStringLiteral("Auto / Traits"));
+    };
+    const auto restoreExactStyle = [&] {
+        controller->setFontStyle(style);
+        QTRY_COMPARE(controller->document().objectById(objectId)->font.styleName, style);
+        QTRY_COMPARE(styleCombo->currentText(), style);
+    };
+
+    restoreExactStyle();
+    QTest::mouseClick(bold, Qt::LeftButton);
+    QTest::mouseClick(italic, Qt::LeftButton);
+    assertTraitMode();
+
+    restoreExactStyle();
+    QTest::mouseClick(italic, Qt::LeftButton);
+    QTest::mouseClick(bold, Qt::LeftButton);
+    assertTraitMode();
+}
+
+void EffectsPanelUiTests::scaleControlsPreserveSmallAndMirroredValues()
+{
+    MainWindow window;
+    window.show();
+    QCoreApplication::processEvents();
+    auto* controller = window.findChild<EditorController*>();
+    auto* transform = window.findChild<TransformPanel*>();
+    QVERIFY(controller);
+    QVERIFY(transform);
+    const QString objectId = controller->createTextObject(QPointF(100.0, 100.0), QStringLiteral("Scale"));
+    auto* scaleX = transform->findChild<QDoubleSpinBox*>(QStringLiteral("transformScaleX"));
+    QVERIFY(scaleX);
+
+    const QVector<qreal> inputs = {1.0, 0.1, 0.01, 0.001, 0.0, -0.001, -1.0};
+    for (const qreal input : inputs) {
+        scaleX->setValue(input);
+        const qreal expected = qAbs(input) < ObjectTransform::MinimumScale
+            ? ObjectTransform::MinimumScale : input;
+        QTRY_VERIFY(std::abs(controller->document().objectById(objectId)->transform.scale.x() - expected) < 1.0e-8);
+        QVERIFY(std::abs(scaleX->value() - expected) < 1.0e-8);
+
+        Document restored;
+        QString error;
+        QVERIFY2(ProjectSerializer::fromJson(ProjectSerializer::toJson(controller->document()),
+                                              &restored, &error), qPrintable(error));
+        const TextObject* reloaded = restored.objectById(objectId);
+        QVERIFY(reloaded);
+        QVERIFY(std::abs(reloaded->transform.scale.x() - expected) < 1.0e-8);
+    }
 }
 
 QTEST_MAIN(EffectsPanelUiTests)

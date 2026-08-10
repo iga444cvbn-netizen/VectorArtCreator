@@ -5,6 +5,7 @@
 #include <QUuid>
 
 #include <stdexcept>
+#include <cmath>
 #include <utility>
 
 namespace vt {
@@ -21,8 +22,11 @@ QJsonObject ObjectTransform::toJson() const
         {QStringLiteral("x"), position.x()},
         {QStringLiteral("y"), position.y()},
         {QStringLiteral("rotation"), rotation},
-        {QStringLiteral("scaleX"), scale.x()},
-        {QStringLiteral("scaleY"), scale.y()},
+        {QStringLiteral("scaleX"), clampScale(scale.x())},
+        {QStringLiteral("scaleY"), clampScale(scale.y())},
+        {QStringLiteral("pivotX"), pivotLocal.x()},
+        {QStringLiteral("pivotY"), pivotLocal.y()},
+        {QStringLiteral("hasPivot"), hasPivot},
     };
 }
 
@@ -34,13 +38,28 @@ ObjectTransform ObjectTransform::fromJson(const QJsonObject& object)
     transform.rotation = object.value(QStringLiteral("rotation")).toDouble(transform.rotation);
     transform.scale = QPointF(object.value(QStringLiteral("scaleX")).toDouble(transform.scale.x()),
                               object.value(QStringLiteral("scaleY")).toDouble(transform.scale.y()));
-    if (qFuzzyIsNull(transform.scale.x())) {
-        transform.scale.setX(1.0);
-    }
-    if (qFuzzyIsNull(transform.scale.y())) {
-        transform.scale.setY(1.0);
-    }
+    transform.pivotLocal = QPointF(object.value(QStringLiteral("pivotX")).toDouble(),
+                                   object.value(QStringLiteral("pivotY")).toDouble());
+    transform.hasPivot = object.value(QStringLiteral("hasPivot")).toBool(false);
+    transform.normalizeScale();
     return transform;
+}
+
+qreal ObjectTransform::clampScale(qreal value)
+{
+    if (!std::isfinite(value)) {
+        return 1.0;
+    }
+    if (std::abs(value) >= MinimumScale) {
+        return value;
+    }
+    return value < 0.0 ? -MinimumScale : MinimumScale;
+}
+
+void ObjectTransform::normalizeScale()
+{
+    scale.setX(clampScale(scale.x()));
+    scale.setY(clampScale(scale.y()));
 }
 
 TextObject::TextObject()

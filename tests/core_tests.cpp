@@ -24,6 +24,7 @@
 #include <QFile>
 #include <QFont>
 #include <QFontDatabase>
+#include <QFontInfo>
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -175,6 +176,7 @@ private slots:
     void missingFontStatesAreDistinguished();
     void trackingScalesWithFontSize();
     void trackingUsesTrueEmDistance();
+    void decorationsFollowTrackedLineExtents();
     void deformationSerializationRoundTrip();
     void deformationResamplingIsBoundedAndDeterministic();
     void pushStrokeIsDeterministic();
@@ -221,6 +223,11 @@ private slots:
     void geometrySourceMetadataStaysImmutableUnderEffectsAndTransforms();
     void missingUndoTargetDoesNotRedirectToAnotherObject();
     void ambiguousLegacyDeformationStrokeIsSkipped();
+    void capturedMoveIdsDoNotFollowSelectionChanges();
+    void fontDescriptorTraitsAndExactStylesRemainConsistent();
+    void transformScaleDomainAndPivotRoundTrip();
+    void maskUsesPieceGeometryWhenAnchorIsOutsideBrush();
+    void fontCacheEpochInvalidatesWorkerShapingKeys();
 };
 
 void CoreTests::projectSerializationRoundTrip()
@@ -530,6 +537,20 @@ void CoreTests::masterStrengthSupportsAmplificationAndRoundTrip()
     EffectStack restored = EffectStack::fromJson(stack.toJson(), &error);
     QVERIFY2(error.isEmpty(), qPrintable(error));
     QCOMPARE(restored.at(0)->masterStrength, 2.5);
+
+    for (const qreal strength : {0.0, 0.5, 1.0, 2.0, 3.0}) {
+        VectorGeometry stretched = rectangleGeometry();
+        StretchEffect stretch;
+        stretch.horizontal = 0.1;
+        stretch.vertical = 0.2;
+        stretch.masterStrength = strength;
+        stretch.apply(stretched, {stretched.referenceBounds, stretched.referenceHeight});
+        const QRectF bounds = stretched.bounds;
+        QVERIFY(std::isfinite(bounds.width()));
+        QVERIFY(std::isfinite(bounds.height()));
+        QVERIFY(bounds.width() > 0.0);
+        QVERIFY(bounds.height() > 0.0);
+    }
 }
 
 void CoreTests::missingUndoTargetDoesNotRedirectToAnotherObject()
@@ -1729,6 +1750,190 @@ void CoreTests::deformationBrushModesProduceDistinctGeometry()
         signatures.insert(geometrySignature(geometry));
     }
     QCOMPARE(signatures.size(), 5);
+}
+
+void CoreTests::decorationsFollowTrackedLineExtents()
+{
+    TextObject base = configuredText(QStringLiteral("ABCD"));
+    base.typography.trackingEm = 0.0;
+    TextEngine engine;
+    const ShapedText untracked = engine.shape(base);
+    QVERIFY2(untracked.error.isEmpty(), qPrintable(untracked.error));
+    const int glyphCount = std::count_if(untracked.glyphs.cbegin(), untracked.glyphs.cend(),
+                                         [](const ShapedGlyph& glyph) { return glyph.lineIndex == 0; });
+    QVERIFY(glyphCount > 1);
+
+    for (const qreal tracking : {0.05, -0.05, 0.0}) {
+        TextObject object = base;
+        object.typography.trackingEm = tracking;
+        engine.clearCache();
+        const ShapedText shaped = engine.shape(object);
+        QVERIFY2(shaped.error.isEmpty(), qPrintable(shaped.error));
+        const qreal expectedWidth = qMax<qreal>(0.0, untracked.lineBounds.at(0).width()
+            + tracking * shaped.resolvedEmSize * (glyphCount - 1));
+        QVERIFY(shaped.lineBounds.at(0).isValid());
+        QVERIFY(std::abs(shaped.lineBounds.at(0).width() - expectedWidth) < 0.01);
+
+        const VectorGeometry geometry = GlyphGeometryBuilder::build(shaped,
+                                                                      object.typography.fontSize,
+                                                                      true, true);
+        QVector<qreal> decorationWidths;
+        for (const GeometryPiece& piece : geometry.pieces) {
+            if (piece.sourceGlyphIndex == -1 && piece.sourceLineIndex == 0) {
+                decorationWidths.push_back(piece.path.boundingRect().width());
+            }
+        }
+        QCOMPARE(decorationWidths.size(), 2);
+        for (const qreal width : decorationWidths) {
+            QVERIFY(std::abs(width - shaped.lineBounds.at(0).width()) < 0.01);
+        }
+    }
+
+    TextObject multiline = base;
+    multiline.sourceText = QStringLiteral("AB\nWXYZ");
+    multiline.typography.trackingEm = 0.08;
+    engine.clearCache();
+    const ShapedText trackedMultiline = engine.shape(multiline);
+    QVERIFY2(trackedMultiline.error.isEmpty(), qPrintable(trackedMultiline.error));
+    TextObject multilineUntracked = multiline;
+    multilineUntracked.typography.trackingEm = 0.0;
+    engine.clearCache();
+    const ShapedText untrackedMultiline = engine.shape(multilineUntracked);
+    QCOMPARE(trackedMultiline.lineBounds.size(), 2);
+    QCOMPARE(untrackedMultiline.lineBounds.size(), 2);
+    for (int line = 0; line < trackedMultiline.lineBounds.size(); ++line) {
+        const int lineGlyphs = std::count_if(trackedMultiline.glyphs.cbegin(), trackedMultiline.glyphs.cend(),
+                                             [line](const ShapedGlyph& glyph) {
+                                                 return glyph.lineIndex == line;
+                                             });
+        const qreal expectedWidth = untrackedMultiline.lineBounds.at(line).width()
+            + multiline.typography.trackingEm * trackedMultiline.resolvedEmSize * qMax(0, lineGlyphs - 1);
+        QVERIFY(std::abs(trackedMultiline.lineBounds.at(line).width() - expectedWidth) < 0.01);
+    }
+    QVERIFY(trackedMultiline.lineBounds.at(0).width() != trackedMultiline.lineBounds.at(1).width());
+
+    const VectorGeometry decorated = GlyphGeometryBuilder::build(trackedMultiline,
+                                                                   multiline.typography.fontSize,
+                                                                   true, true);
+    for (int line = 0; line < trackedMultiline.lineBounds.size(); ++line) {
+        int decorationCount = 0;
+        for (const GeometryPiece& piece : decorated.pieces) {
+            if (piece.sourceGlyphIndex == -1 && piece.sourceLineIndex == line) {
+                ++decorationCount;
+                QVERIFY(std::abs(piece.path.boundingRect().width()
+                                 - trackedMultiline.lineBounds.at(line).width()) < 0.01);
+            }
+        }
+        QCOMPARE(decorationCount, 2);
+    }
+    Document document;
+    document.primaryTextObject() = multiline;
+    SvgExporter exporter;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString error;
+    const QString filePath = directory.filePath(QStringLiteral("tracked-decorations.svg"));
+    QVERIFY2(exporter.exportGeometry(document, decorated, filePath, &error), qPrintable(error));
+    QFile svg(filePath);
+    QVERIFY(svg.open(QIODevice::ReadOnly | QIODevice::Text));
+    QVERIFY(svg.readAll().contains("<path"));
+}
+
+void CoreTests::capturedMoveIdsDoNotFollowSelectionChanges()
+{
+    EditorController controller;
+    const QString first = controller.createTextObject(QPointF(10.0, 10.0), QStringLiteral("A"));
+    const QString second = controller.createTextObject(QPointF(50.0, 10.0), QStringLiteral("B"));
+    QVERIFY(!first.isEmpty());
+    QVERIFY(!second.isEmpty());
+    controller.selectObject(first);
+    // This models a Layers-panel selection change between mouse press and release.
+    controller.selectObject(second);
+    const QPointF firstBefore = controller.document().objectById(first)->transform.position;
+    const QPointF secondBefore = controller.document().objectById(second)->transform.position;
+    controller.moveObjects({first}, QPointF(23.0, -7.0));
+    QCOMPARE(controller.document().objectById(first)->transform.position, firstBefore + QPointF(23.0, -7.0));
+    QCOMPARE(controller.document().objectById(second)->transform.position, secondBefore);
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().objectById(first)->transform.position, firstBefore);
+    QCOMPARE(controller.document().objectById(second)->transform.position, secondBefore);
+}
+
+void CoreTests::fontDescriptorTraitsAndExactStylesRemainConsistent()
+{
+    const QStringList families = QFontDatabase::families();
+    if (families.isEmpty()) {
+        QSKIP("No installed font family is available in this test environment.");
+    }
+    EditorController controller;
+    const QString id = controller.createTextObject(QPointF(), QStringLiteral("Font"));
+    QVERIFY(!id.isEmpty());
+    const QString family = families.front();
+    controller.setFontFamily(family);
+    const QString style = QFontDatabase::styles(family).value(0);
+    QVERIFY(!style.isEmpty());
+    controller.setFontStyle(style);
+    const TextObject* object = controller.activeObject();
+    QVERIFY(object);
+    QCOMPARE(object->font.styleName, style);
+    const QFontInfo exactInfo(object->font.toQFont(object->typography.fontSize));
+    QCOMPARE(exactInfo.family(), QFontInfo(QFontDatabase::font(family, style, 12)).family());
+    controller.setFontWeight(static_cast<int>(QFont::Bold));
+    controller.setFontItalic(true);
+    object = controller.activeObject();
+    QVERIFY(object->font.styleName.isEmpty());
+    const QFontInfo traitInfo(object->font.toQFont(object->typography.fontSize));
+    QVERIFY(traitInfo.bold() || traitInfo.weight() >= QFont::Bold);
+    QVERIFY(traitInfo.italic() || object->font.italic);
+    controller.undoStack()->undo();
+    controller.undoStack()->undo();
+    QCOMPARE(controller.activeObject()->font.styleName, style);
+}
+
+void CoreTests::transformScaleDomainAndPivotRoundTrip()
+{
+    ObjectTransform transform;
+    transform.scale = QPointF(0.0, -1.0e-12);
+    transform.pivotLocal = QPointF(31.0, -14.0);
+    transform.hasPivot = true;
+    const ObjectTransform restored = ObjectTransform::fromJson(transform.toJson());
+    QVERIFY(std::abs(restored.scale.x()) >= ObjectTransform::MinimumScale);
+    QVERIFY(std::abs(restored.scale.y()) >= ObjectTransform::MinimumScale);
+    QCOMPARE(restored.pivotLocal, transform.pivotLocal);
+    QVERIFY(restored.hasPivot);
+    const ObjectFrame frame = ObjectFrame::fromTransform(restored, QRectF(0, 0, 400, 200));
+    QCOMPARE(frame.pivotLocal, transform.pivotLocal);
+}
+
+void CoreTests::maskUsesPieceGeometryWhenAnchorIsOutsideBrush()
+{
+    VectorGeometry geometry = rectangleGeometry();
+    WaveEffect effect;
+    effect.amplitude = 0.5;
+    effect.frequency = 1.0;
+    effect.phase = 0.25;
+    EffectMaskStroke stroke;
+    stroke.points = {QPointF(19.0, 10.0)}; // intersects the first path, not its anchor at x=10
+    stroke.radius = 3.0;
+    stroke.opacity = 1.0;
+    effect.maskStrokes.push_back(stroke);
+    // A painted stroke normally removes influence.  Inverting it turns this
+    // into a positive assertion: only an intersecting contour receives Wave.
+    effect.maskInverted = true;
+    EffectStack stack;
+    stack.append(effect.clone());
+    stack.apply(geometry);
+    QVERIFY(geometry.pieces.at(0).anchor.y() > 10.0);
+}
+
+void CoreTests::fontCacheEpochInvalidatesWorkerShapingKeys()
+{
+    const TextObject object = configuredText(QStringLiteral("Epoch"));
+    const QByteArray before = SceneEvaluator::shapingCacheKey(object);
+    const quint64 epoch = SceneEvaluator::fontCacheEpoch();
+    SceneEvaluator::invalidateFontCaches();
+    QVERIFY(SceneEvaluator::fontCacheEpoch() > epoch);
+    QVERIFY(SceneEvaluator::shapingCacheKey(object) != before);
 }
 
 int main(int argc, char* argv[])
