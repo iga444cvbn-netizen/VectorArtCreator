@@ -13,6 +13,8 @@ public:
     // worker independent from the mutable editor document.
     [[nodiscard]] static SceneGeometry evaluate(const Page& page);
     [[nodiscard]] static QByteArray shapingCacheKey(const TextObject& object);
+    static void invalidateFontCaches();
+    [[nodiscard]] static quint64 fontCacheEpoch();
 
 private:
     [[nodiscard]] static VectorGeometry evaluateObject(const TextObject& object,

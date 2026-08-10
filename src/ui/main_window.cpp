@@ -173,8 +173,21 @@ MainWindow::MainWindow(QWidget* parent)
                            m_controller->selectionModel()->activeObjectId());
         m_canvas->setMaskTarget(m_controller->selectionModel()->activeObjectId());
         m_canvas->setMaskEnabled(!m_effectsPanel->selectedEffectId().isEmpty());
+        m_canvas->setMaskEffectId(m_effectsPanel->selectedEffectId());
     });
-    connect(m_controller, &EditorController::documentChanged, this, &MainWindow::refreshUi);
+    connect(m_controller, &EditorController::documentChanged, this, [this] {
+        // Commands mutate the document synchronously while scene evaluation is
+        // asynchronous.  End an invalid native session before a stale scene
+        // can briefly keep accepting input for a hidden/locked/old-page item.
+        if (m_canvas->isTextEditing()) {
+            const TextObject* active = m_controller->activeObject();
+            const bool samePage = m_canvas->editingPageId() == m_controller->document().currentPageId;
+            if (!active || active->id != m_canvas->editingObjectId() || !samePage) {
+                m_canvas->finishTextEditing();
+            }
+        }
+        refreshUi();
+    });
     connect(m_controller, &EditorController::statusMessageChanged, this, &MainWindow::setStatus);
     connect(m_controller, &EditorController::fontsChanged, this, [this](const QStringList& families) {
         m_typographyPanel->setFontFamilies(families);
@@ -207,7 +220,9 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_canvas, &EditorCanvas::marqueeSelectionRequested,
             m_controller, &EditorController::selectObjectsInRect);
     connect(m_canvas, &EditorCanvas::moveCommitted, this,
-            [this](const QStringList&, const QPointF& delta) { m_controller->moveSelectedObjects(delta); });
+            [this](const QStringList& objectIds, const QPointF& delta) {
+                m_controller->moveObjects(objectIds, delta);
+            });
     connect(m_canvas, &EditorCanvas::objectTransformCommitted, this,
             [this](const QString& objectId, const ObjectTransform& transform) {
                 m_controller->setObjectTransform(objectId, transform);
@@ -261,8 +276,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_canvas, &EditorCanvas::textEditingChanged,
             this, &MainWindow::handleTextEditingChanged);
     connect(m_canvas, &EditorCanvas::effectMaskStrokeReady, this,
-            [this](const QString& objectId, const EffectMaskStroke& stroke) {
-                const QString effectId = m_effectsPanel->selectedEffectId();
+            [this](const QString& objectId, const QString& effectId, const EffectMaskStroke& stroke) {
                 if (effectId.isEmpty()) {
                     setStatus(QStringLiteral("Select an effect before painting its mask."));
                     return;
@@ -270,8 +284,7 @@ MainWindow::MainWindow(QWidget* parent)
                 m_controller->addEffectMaskStroke(objectId, effectId, stroke);
             });
     connect(m_canvas, &EditorCanvas::effectMaskPreviewChanged, this,
-            [this](const QString& objectId, const EffectMaskStroke& stroke) {
-                const QString effectId = m_effectsPanel->selectedEffectId();
+            [this](const QString& objectId, const QString& effectId, const EffectMaskStroke& stroke) {
                 if (!effectId.isEmpty()) {
                     m_controller->setEffectMaskPreview(objectId, effectId, stroke);
                 }
@@ -329,11 +342,13 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this](const QString& effectId) {
                 m_controller->setSelectedEffectId(effectId);
                 m_canvas->setMaskEnabled(!effectId.isEmpty());
+                m_canvas->setMaskEffectId(effectId);
             });
     connect(m_controller, &EditorController::selectedEffectChanged, this,
             [this](const QString& effectId) {
                 m_effectsPanel->setSelectedEffectId(effectId);
                 m_canvas->setMaskEnabled(!effectId.isEmpty());
+                m_canvas->setMaskEffectId(effectId);
             });
     connect(m_effectsPanel, &EffectsPanel::effectScopeChanged, this,
             [this](const QString& effectId, const EffectScope& scope) {
@@ -471,6 +486,7 @@ void MainWindow::refreshUi()
                            m_controller->selectionModel()->textRange().second);
     m_canvas->setMaskTarget(m_controller->selectionModel()->activeObjectId());
     m_canvas->setMaskEnabled(!m_effectsPanel->selectedEffectId().isEmpty());
+    m_canvas->setMaskEffectId(m_effectsPanel->selectedEffectId());
     m_transformPanel->refresh(object);
     m_typographyPanel->refresh(object);
     m_effectsPanel->refresh(object, m_presetNames);

@@ -26,6 +26,7 @@ private:
     QDoubleSpinBox* m_rotation = nullptr;
     QDoubleSpinBox* m_scaleX = nullptr;
     QDoubleSpinBox* m_scaleY = nullptr;
+    ObjectTransform m_transform;
 };
 
 } // namespace vt

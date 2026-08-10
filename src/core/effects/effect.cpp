@@ -11,8 +11,13 @@ namespace vt {
 
 bool EffectScope::includes(int clusterStart, int clusterLength) const
 {
-    if (kind == EffectScopeKind::WholeObject || clusterStart < 0) {
+    if (kind == EffectScopeKind::WholeObject) {
         return true;
+    }
+    // Decorations deliberately have no text cluster.  A character-range
+    // effect must not transform an entire underline or strikeout line.
+    if (clusterStart < 0) {
+        return false;
     }
     const int clusterEnd = clusterStart + qMax(1, clusterLength);
     return clusterStart < end && clusterEnd > start;

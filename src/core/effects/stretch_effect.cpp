@@ -1,6 +1,7 @@
 #include "core/effects/stretch_effect.h"
 
 #include <QtGlobal>
+#include <cmath>
 
 namespace vt {
 
@@ -77,10 +78,14 @@ void StretchEffect::apply(VectorGeometry& geometry, const EffectContext& context
 
     geometry.recomputeBounds();
     const QPointF center = geometry.bounds.center();
+    // Preserve the parameter's meaning at strength 1 while using exponential
+    // amplification.  This is strictly positive for every supported strength.
+    const auto amplified = [this](qreal parameter) {
+        return std::exp(std::log(qMax<qreal>(0.0001, parameter)) * masterStrength);
+    };
     QTransform transform;
     Q_UNUSED(transform.translate(center.x(), center.y()));
-    Q_UNUSED(transform.scale(1.0 + (horizontal - 1.0) * masterStrength,
-                             1.0 + (vertical - 1.0) * masterStrength));
+    Q_UNUSED(transform.scale(amplified(horizontal), amplified(vertical)));
     Q_UNUSED(transform.translate(-center.x(), -center.y()));
     geometry.transformAll(transform);
 }

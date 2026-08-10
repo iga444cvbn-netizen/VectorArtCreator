@@ -11,12 +11,14 @@ ObjectFrame ObjectFrame::fromTransform(const ObjectTransform& transform,
     ObjectFrame frame;
     frame.baseLocalBounds = baseBounds;
     frame.currentLocalBounds = currentBounds.isNull() ? baseBounds : currentBounds;
-    frame.pivotLocal = baseBounds.center();
+    frame.pivotLocal = transform.hasPivot ? transform.pivotLocal : baseBounds.center();
+    const qreal scaleX = ObjectTransform::clampScale(transform.scale.x());
+    const qreal scaleY = ObjectTransform::clampScale(transform.scale.y());
     QTransform matrix;
     matrix.translate(transform.position.x(), transform.position.y());
     matrix.translate(frame.pivotLocal.x(), frame.pivotLocal.y());
     matrix.rotate(transform.rotation);
-    matrix.scale(transform.scale.x(), transform.scale.y());
+    matrix.scale(scaleX, scaleY);
     matrix.translate(-frame.pivotLocal.x(), -frame.pivotLocal.y());
     frame.localToPage = matrix;
     bool invertible = false;

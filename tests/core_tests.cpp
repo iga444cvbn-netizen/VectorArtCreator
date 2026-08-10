@@ -24,6 +24,7 @@
 #include <QFile>
 #include <QFont>
 #include <QFontDatabase>
+#include <QFontInfo>
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -221,6 +222,11 @@ private slots:
     void geometrySourceMetadataStaysImmutableUnderEffectsAndTransforms();
     void missingUndoTargetDoesNotRedirectToAnotherObject();
     void ambiguousLegacyDeformationStrokeIsSkipped();
+    void capturedMoveIdsDoNotFollowSelectionChanges();
+    void fontDescriptorTraitsAndExactStylesRemainConsistent();
+    void transformScaleDomainAndPivotRoundTrip();
+    void maskUsesPieceGeometryWhenAnchorIsOutsideBrush();
+    void fontCacheEpochInvalidatesWorkerShapingKeys();
 };
 
 void CoreTests::projectSerializationRoundTrip()
@@ -530,6 +536,20 @@ void CoreTests::masterStrengthSupportsAmplificationAndRoundTrip()
     EffectStack restored = EffectStack::fromJson(stack.toJson(), &error);
     QVERIFY2(error.isEmpty(), qPrintable(error));
     QCOMPARE(restored.at(0)->masterStrength, 2.5);
+
+    for (const qreal strength : {0.0, 0.5, 1.0, 2.0, 3.0}) {
+        VectorGeometry stretched = rectangleGeometry();
+        StretchEffect stretch;
+        stretch.horizontal = 0.1;
+        stretch.vertical = 0.2;
+        stretch.masterStrength = strength;
+        stretch.apply(stretched, {stretched.referenceBounds, stretched.referenceHeight});
+        const QRectF bounds = stretched.bounds;
+        QVERIFY(std::isfinite(bounds.width()));
+        QVERIFY(std::isfinite(bounds.height()));
+        QVERIFY(bounds.width() > 0.0);
+        QVERIFY(bounds.height() > 0.0);
+    }
 }
 
 void CoreTests::missingUndoTargetDoesNotRedirectToAnotherObject()
@@ -1729,6 +1749,96 @@ void CoreTests::deformationBrushModesProduceDistinctGeometry()
         signatures.insert(geometrySignature(geometry));
     }
     QCOMPARE(signatures.size(), 5);
+}
+
+void CoreTests::capturedMoveIdsDoNotFollowSelectionChanges()
+{
+    EditorController controller;
+    const QString first = controller.createTextObject(QPointF(10.0, 10.0), QStringLiteral("A"));
+    const QString second = controller.createTextObject(QPointF(50.0, 10.0), QStringLiteral("B"));
+    QVERIFY(!first.isEmpty());
+    QVERIFY(!second.isEmpty());
+    controller.selectObject(first);
+    // This models a Layers-panel selection change between mouse press and release.
+    controller.selectObject(second);
+    const QPointF firstBefore = controller.document().objectById(first)->transform.position;
+    const QPointF secondBefore = controller.document().objectById(second)->transform.position;
+    controller.moveObjects({first}, QPointF(23.0, -7.0));
+    QCOMPARE(controller.document().objectById(first)->transform.position, firstBefore + QPointF(23.0, -7.0));
+    QCOMPARE(controller.document().objectById(second)->transform.position, secondBefore);
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().objectById(first)->transform.position, firstBefore);
+    QCOMPARE(controller.document().objectById(second)->transform.position, secondBefore);
+}
+
+void CoreTests::fontDescriptorTraitsAndExactStylesRemainConsistent()
+{
+    const QStringList families = QFontDatabase::families();
+    QVERIFY(!families.isEmpty());
+    EditorController controller;
+    const QString id = controller.createTextObject(QPointF(), QStringLiteral("Font"));
+    QVERIFY(!id.isEmpty());
+    const QString family = families.front();
+    controller.setFontFamily(family);
+    const QString style = QFontDatabase::styles(family).value(0);
+    QVERIFY(!style.isEmpty());
+    controller.setFontStyle(style);
+    const TextObject* object = controller.activeObject();
+    QVERIFY(object);
+    QCOMPARE(object->font.styleName, style);
+    const QFontInfo exactInfo(object->font.toQFont(object->typography.fontSize));
+    QCOMPARE(exactInfo.family(), QFontInfo(QFontDatabase::font(family, style, 12)).family());
+    controller.setFontWeight(static_cast<int>(QFont::Bold));
+    controller.setFontItalic(true);
+    object = controller.activeObject();
+    QVERIFY(object->font.styleName.isEmpty());
+    const QFontInfo traitInfo(object->font.toQFont(object->typography.fontSize));
+    QVERIFY(traitInfo.bold() || traitInfo.weight() >= QFont::Bold);
+    QVERIFY(traitInfo.italic() || object->font.italic);
+    controller.undoStack()->undo();
+    controller.undoStack()->undo();
+    QCOMPARE(controller.activeObject()->font.styleName, style);
+}
+
+void CoreTests::transformScaleDomainAndPivotRoundTrip()
+{
+    ObjectTransform transform;
+    transform.scale = QPointF(0.0, -1.0e-12);
+    transform.pivotLocal = QPointF(31.0, -14.0);
+    transform.hasPivot = true;
+    const ObjectTransform restored = ObjectTransform::fromJson(transform.toJson());
+    QVERIFY(std::abs(restored.scale.x()) >= ObjectTransform::MinimumScale);
+    QVERIFY(std::abs(restored.scale.y()) >= ObjectTransform::MinimumScale);
+    QCOMPARE(restored.pivotLocal, transform.pivotLocal);
+    QVERIFY(restored.hasPivot);
+    const ObjectFrame frame = ObjectFrame::fromTransform(restored, QRectF(0, 0, 400, 200));
+    QCOMPARE(frame.pivotLocal, transform.pivotLocal);
+}
+
+void CoreTests::maskUsesPieceGeometryWhenAnchorIsOutsideBrush()
+{
+    VectorGeometry geometry = rectangleGeometry();
+    StretchEffect effect;
+    effect.horizontal = 2.0;
+    EffectMaskStroke stroke;
+    stroke.points = {QPointF(19.0, 10.0)}; // intersects the first path, not its anchor at x=10
+    stroke.radius = 3.0;
+    stroke.opacity = 1.0;
+    effect.maskStrokes.push_back(stroke);
+    EffectStack stack;
+    stack.append(effect.clone());
+    stack.apply(geometry);
+    QVERIFY(geometry.pieces.at(0).path.boundingRect().width() > 20.0);
+}
+
+void CoreTests::fontCacheEpochInvalidatesWorkerShapingKeys()
+{
+    const TextObject object = configuredText(QStringLiteral("Epoch"));
+    const QByteArray before = SceneEvaluator::shapingCacheKey(object);
+    const quint64 epoch = SceneEvaluator::fontCacheEpoch();
+    SceneEvaluator::invalidateFontCaches();
+    QVERIFY(SceneEvaluator::fontCacheEpoch() > epoch);
+    QVERIFY(SceneEvaluator::shapingCacheKey(object) != before);
 }
 
 int main(int argc, char* argv[])

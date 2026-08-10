@@ -58,6 +58,7 @@ void TransformPanel::refresh(const TextObject* object)
     if (!object) {
         return;
     }
+    m_transform = object->transform;
     const QSignalBlocker xBlocker(m_x);
     const QSignalBlocker yBlocker(m_y);
     const QSignalBlocker rotationBlocker(m_rotation);
@@ -72,11 +73,11 @@ void TransformPanel::refresh(const TextObject* object)
 
 void TransformPanel::emitTransform()
 {
-    ObjectTransform transform;
-    transform.position = QPointF(m_x->value(), m_y->value());
-    transform.rotation = m_rotation->value();
-    transform.scale = QPointF(m_scaleX->value(), m_scaleY->value());
-    emit transformChanged(transform);
+    m_transform.position = QPointF(m_x->value(), m_y->value());
+    m_transform.rotation = m_rotation->value();
+    m_transform.scale = QPointF(m_scaleX->value(), m_scaleY->value());
+    m_transform.normalizeScale();
+    emit transformChanged(m_transform);
 }
 
 } // namespace vt

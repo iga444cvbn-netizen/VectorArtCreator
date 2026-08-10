@@ -142,7 +142,10 @@ void LayersPanel::refresh(const Page& page,
     const QSignalBlocker blocker(m_tree);
     m_tree->clear();
     QTreeWidgetItem* activeItem = nullptr;
-    for (const auto& layer : page.layers) {
+    // Painting walks the model from first to last, so the last layer is on
+    // top.  Present that same top-to-bottom stack in the panel.
+    for (auto iterator = page.layers.rbegin(); iterator != page.layers.rend(); ++iterator) {
+        const auto& layer = *iterator;
         if (!layer) {
             continue;
         }

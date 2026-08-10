@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 
 #include <utility>
+#include <atomic>
 
 namespace vt {
 
@@ -33,6 +34,8 @@ struct CachedObjectStages {
 
 thread_local TextEngine workerTextEngine;
 thread_local QHash<QString, CachedObjectStages> workerCache;
+thread_local quint64 workerFontEpoch = 0;
+std::atomic<quint64> globalFontEpoch{1};
 
 QByteArray hashKey(const QString& value)
 {
@@ -47,6 +50,9 @@ QByteArray hashKey(const QByteArray& value)
 QByteArray shapingKey(const TextObject& object)
 {
     QByteArray key;
+    key += QByteArrayLiteral("fontEpoch=");
+    key += QByteArray::number(globalFontEpoch.load(std::memory_order_acquire));
+    key += '\0';
     key += QByteArrayLiteral("text=");
     key += object.sourceText.toUtf8();
     key += '\0';
@@ -104,6 +110,12 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
     evaluated.visible = object.visible;
     evaluated.locked = locked;
 
+    const quint64 fontEpoch = globalFontEpoch.load(std::memory_order_acquire);
+    if (workerFontEpoch != fontEpoch) {
+        workerTextEngine.clearCache();
+        workerCache.clear();
+        workerFontEpoch = fontEpoch;
+    }
     if (workerCache.size() > 64) {
         workerCache.clear();
     }
@@ -170,6 +182,16 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
 QByteArray SceneEvaluator::shapingCacheKey(const TextObject& object)
 {
     return shapingKey(object);
+}
+
+void SceneEvaluator::invalidateFontCaches()
+{
+    globalFontEpoch.fetch_add(1, std::memory_order_acq_rel);
+}
+
+quint64 SceneEvaluator::fontCacheEpoch()
+{
+    return globalFontEpoch.load(std::memory_order_acquire);
 }
 
 VectorGeometry SceneEvaluator::evaluateObject(const TextObject& object,

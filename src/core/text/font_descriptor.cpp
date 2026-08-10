@@ -1,6 +1,7 @@
 #include "core/text/font_descriptor.h"
 
 #include <QJsonValue>
+#include <QFontDatabase>
 
 namespace vt {
 
@@ -8,12 +9,16 @@ QFont FontDescriptor::toQFont(qreal pointSize) const
 {
     QFont font = family.isEmpty() ? QFont() : QFont(family);
     font.setPointSizeF(pointSize);
+    // An exact style and synthetic weight/italic flags are competing Qt font
+    // requests.  Exact styles are authoritative; B/I clear styleName before
+    // reaching this method and therefore use the traits path below.
     if (!styleName.isEmpty()) {
         font.setStyleName(styleName);
+    } else {
+        const int boundedWeight = qBound(0, weight, 1000);
+        font.setWeight(static_cast<QFont::Weight>(boundedWeight));
+        font.setItalic(italic);
     }
-    const int boundedWeight = qBound(0, weight, 1000);
-    font.setWeight(static_cast<QFont::Weight>(boundedWeight));
-    font.setItalic(italic);
     font.setUnderline(underline);
     font.setStrikeOut(strikeOut);
     return font;
@@ -47,6 +52,11 @@ FontDescriptor FontDescriptor::fromJson(const QJsonObject& object)
     descriptor.fingerprint = object.value(QStringLiteral("fingerprint")).toString();
     descriptor.embeddedResourceId = object.value(QStringLiteral("embeddedResourceId")).toString();
     descriptor.embeddingPermission = object.value(QStringLiteral("embeddingPermission")).toString();
+    if (!descriptor.styleName.isEmpty()) {
+        const QFont resolved = QFontDatabase::font(descriptor.family, descriptor.styleName, 12);
+        descriptor.weight = resolved.weight();
+        descriptor.italic = resolved.italic();
+    }
     return descriptor;
 }
 

@@ -69,7 +69,8 @@ void EditorCanvas::setScene(const SceneGeometry& scene,
     }
     if (!m_editingObjectId.isEmpty()) {
         const SceneObjectGeometry* editing = m_sceneGeometry.objectById(m_editingObjectId);
-        if (m_editingPageId != m_sceneGeometry.pageId || !editing || !editing->visible || editing->locked) {
+        if (m_editingPageId != m_sceneGeometry.pageId || m_activeObjectId != m_editingObjectId
+            || !editing || !editing->visible || editing->locked) {
             finishTextEditing();
         }
     }
@@ -81,6 +82,9 @@ void EditorCanvas::setSelection(const QStringList& selectedObjectIds, const QStr
 {
     m_selectedObjectIds = selectedObjectIds;
     m_activeObjectId = activeObjectId.isEmpty() ? selectedObjectIds.value(0) : activeObjectId;
+    if (isTextEditing() && m_activeObjectId != m_editingObjectId) {
+        finishTextEditing();
+    }
     update();
 }
 
@@ -153,6 +157,11 @@ void EditorCanvas::setMaskEnabled(bool enabled)
     m_maskEnabled = enabled;
 }
 
+void EditorCanvas::setMaskEffectId(const QString& effectId)
+{
+    m_maskEffectId = effectId;
+}
+
 void EditorCanvas::setNavigationSettings(const QString& mode, bool invertZoom)
 {
     m_navigationMode = mode;
@@ -167,6 +176,9 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
     if (objectId.isEmpty()) {
         return;
     }
+    if (isTextEditing() && m_editingObjectId != objectId) {
+        finishTextEditing();
+    }
     if (!m_textEditor) {
         m_editorView = new QGraphicsView(this);
         m_editorView->setFrameShape(QFrame::NoFrame);
@@ -177,6 +189,7 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
         m_editorScene = new QGraphicsScene(m_editorView);
         m_editorView->setScene(m_editorScene);
         m_editorView->setVisible(false);
+        m_editorView->installEventFilter(this);
 
         m_textEditor = new QPlainTextEdit;
         m_textEditor->setFrameShape(QFrame::NoFrame);
@@ -388,12 +401,14 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
                                 : QColor(85, 160, 255, 210),
                             1.0));
         painter.setBrush(Qt::NoBrush);
-        const SceneObjectGeometry* target = m_sceneGeometry.objectById(
-            m_brushing ? m_brushTargetId : m_activeObjectId);
-        if (target && m_tool != EditorTool::EffectMask) {
+        const QString cursorTarget = m_brushing ? m_brushTargetId
+            : (m_tool == EditorTool::EffectMask ? m_maskTargetId : m_activeObjectId);
+        const SceneObjectGeometry* target = m_sceneGeometry.objectById(cursorTarget);
+        if (target) {
             const QPointF localCenter = target->frame.pagePointToLocal(documentPosition(m_cursorPosition));
             QPainterPath localCircle;
-            const qreal localRadius = target->frame.pageRadiusToLocalEquivalentArea(m_brushRadius);
+            const qreal pageRadius = m_tool == EditorTool::EffectMask ? m_maskRadius : m_brushRadius;
+            const qreal localRadius = target->frame.pageRadiusToLocalEquivalentArea(pageRadius);
             localCircle.addEllipse(localCenter, localRadius, localRadius);
             painter.drawPath(viewTransform().map(target->frame.localToPage.map(localCircle)));
         } else {
@@ -504,10 +519,11 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
         m_hasCursorPosition = true;
         m_brushing = true;
         m_brushTargetId = m_maskTargetId;
+        m_brushEffectId = m_maskEffectId;
         m_brushPositions.clear();
         m_brushPositions.push_back(documentPoint);
         grabMouse();
-        emit effectMaskPreviewChanged(m_brushTargetId, currentMaskStroke());
+        emit effectMaskPreviewChanged(m_brushTargetId, m_brushEffectId, currentMaskStroke());
         update();
         event->accept();
         return;
@@ -585,7 +601,7 @@ void EditorCanvas::mouseMoveEvent(QMouseEvent* event)
         if (m_brushPositions.isEmpty() || m_brushPositions.last() != position) {
             m_brushPositions.push_back(position);
             if (m_tool == EditorTool::EffectMask) {
-                emit effectMaskPreviewChanged(m_brushTargetId, currentMaskStroke());
+                emit effectMaskPreviewChanged(m_brushTargetId, m_brushEffectId, currentMaskStroke());
             } else {
                 updateBrushPreview();
             }
@@ -657,12 +673,13 @@ void EditorCanvas::mouseReleaseEvent(QMouseEvent* event)
         if (m_tool == EditorTool::EffectMask) {
             emit effectMaskPreviewCleared();
             if (!maskStroke.points.isEmpty()) {
-                emit effectMaskStrokeReady(targetId, maskStroke);
+            emit effectMaskStrokeReady(targetId, m_brushEffectId, maskStroke);
             }
         } else if (!stroke.samples.isEmpty()) {
             emit deformationStrokeReady(targetId, stroke);
         }
         m_brushTargetId.clear();
+        m_brushEffectId.clear();
         updateCursorShape();
         update();
         event->accept();
@@ -757,6 +774,27 @@ void EditorCanvas::leaveEvent(QEvent* event)
 
 bool EditorCanvas::eventFilter(QObject* watched, QEvent* event)
 {
+    if (watched == m_editorView && isTextEditing()) {
+        const auto outsideEditor = [this](const QPointF& viewPosition) {
+            if (!m_editorProxy) return true;
+            const QPointF proxyPosition = m_editorProxy->mapFromScene(m_editorView->mapToScene(viewPosition.toPoint()));
+            return !m_editorProxy->boundingRect().contains(proxyPosition);
+        };
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto* mouseEvent = static_cast<QMouseEvent*>(event);
+            if (outsideEditor(mouseEvent->position())) {
+                finishTextEditing();
+                mousePressEvent(mouseEvent);
+                return true;
+            }
+        } else if (event->type() == QEvent::Wheel) {
+            auto* wheel = static_cast<QWheelEvent*>(event);
+            if (outsideEditor(wheel->position())) {
+                wheelEvent(wheel);
+                return true;
+            }
+        }
+    }
     if (watched == m_textEditor && event->type() == QEvent::KeyPress) {
         auto* keyEvent = static_cast<QKeyEvent*>(event);
         if (keyEvent->key() == Qt::Key_Escape && !keyEvent->isAutoRepeat()) {
@@ -857,6 +895,7 @@ void EditorCanvas::cancelBrushStroke()
     releaseMouse();
     m_brushPositions.clear();
     m_brushTargetId.clear();
+    m_brushEffectId.clear();
     emit deformationPreviewCleared();
     if (m_tool == EditorTool::EffectMask) {
         emit effectMaskPreviewCleared();
@@ -890,7 +929,8 @@ void EditorCanvas::updateTextEditorGeometry()
     m_editorView->setGeometry(rect());
     m_editorScene->setSceneRect(QRectF(rect()));
     if (const SceneObjectGeometry* object = m_sceneGeometry.objectById(m_editingObjectId)) {
-        QRectF localBounds = object->frame.currentLocalBounds;
+        // Native editing follows the source frame, never the effected geometry.
+        QRectF localBounds = object->frame.baseLocalBounds;
         if (localBounds.isEmpty()) {
             localBounds = object->frame.baseLocalBounds;
         }
@@ -923,7 +963,8 @@ QString EditorCanvas::hitTestObject(const QPointF& documentPoint) const
             continue;
         }
         if (object.geometry.combinedPath().contains(documentPoint)
-            || object.visualBounds.contains(documentPoint)) {
+            || (!object.geometry.hasVisibleGeometry()
+                && object.frame.orientedPageQuad().containsPoint(documentPoint, Qt::OddEvenFill))) {
             return object.objectId;
         }
     }
@@ -1016,8 +1057,7 @@ void EditorCanvas::updateTransformPreview(const QPointF& documentPoint)
         if (std::abs(initial.y()) > 1.0e-5) {
             transform.scale.setY(m_transformBefore.scale.y() * current.y() / initial.y());
         }
-        if (qFuzzyIsNull(transform.scale.x())) transform.scale.setX(0.01);
-        if (qFuzzyIsNull(transform.scale.y())) transform.scale.setY(0.01);
+        transform.normalizeScale();
     }
     m_transformPreview = transform;
     m_sceneGeometry = m_sceneBeforeTransform;

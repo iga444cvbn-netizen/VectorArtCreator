@@ -60,6 +60,23 @@ private:
     QString m_newFamily;
 };
 
+class SetFontDescriptorCommand final : public DocumentCommand {
+public:
+    SetFontDescriptorCommand(Document& document,
+                             FontDescriptor oldFont,
+                             FontDescriptor newFont,
+                             DocumentChangeCallback onChanged,
+                             QString description = QStringLiteral("Change font"));
+
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(const FontDescriptor& font);
+    FontDescriptor m_oldFont;
+    FontDescriptor m_newFont;
+};
+
 class SetFontStyleCommand final : public DocumentCommand {
 public:
     SetFontStyleCommand(Document& document,

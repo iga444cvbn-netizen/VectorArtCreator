@@ -108,6 +108,26 @@ void SetFontFamilyCommand::redo()
     notifyChanged();
 }
 
+SetFontDescriptorCommand::SetFontDescriptorCommand(Document& document,
+                                                   FontDescriptor oldFont,
+                                                   FontDescriptor newFont,
+                                                   DocumentChangeCallback onChanged,
+                                                   QString description)
+    : DocumentCommand(document, std::move(onChanged), description)
+    , m_oldFont(std::move(oldFont))
+    , m_newFont(std::move(newFont))
+{
+}
+
+void SetFontDescriptorCommand::apply(const FontDescriptor& font)
+{
+    targetObject().font = font;
+    notifyChanged();
+}
+
+void SetFontDescriptorCommand::undo() { apply(m_oldFont); }
+void SetFontDescriptorCommand::redo() { apply(m_newFont); }
+
 SetFontStyleCommand::SetFontStyleCommand(Document& document,
                                          QString oldStyle,
                                          QString newStyle,

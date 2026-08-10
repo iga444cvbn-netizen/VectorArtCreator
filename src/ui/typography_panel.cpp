@@ -182,8 +182,10 @@ void TypographyPanel::setFontStyles(const QStringList& styles)
     const QSignalBlocker blocker(m_styleCombo);
     m_styleCombo->clear();
     m_styleCombo->addItems(styles);
-    if (!current.isEmpty()) {
+    if (!current.isEmpty() && m_styleCombo->findText(current) >= 0) {
         m_styleCombo->setCurrentText(current);
+    } else if (!styles.isEmpty()) {
+        m_styleCombo->setCurrentIndex(0);
     }
 }
 

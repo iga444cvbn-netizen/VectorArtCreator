@@ -157,6 +157,20 @@ bool PresetManager::savePreset(Preset preset, QString* error) const
         return false;
     }
 
+    const QVector<PresetRecord> existing = readPresetRecords(error);
+    if (error && !error->isEmpty()) {
+        return false;
+    }
+    for (const PresetRecord& record : existing) {
+        if (record.info.name == preset.name
+            && (!isStorageId(preset.id) || record.info.id != preset.id)) {
+            if (error) {
+                *error = QStringLiteral("A preset named '%1' already exists.").arg(preset.name);
+            }
+            return false;
+        }
+    }
+
     if (!isStorageId(preset.id)) {
         preset.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     }

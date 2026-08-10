@@ -21,6 +21,7 @@ private slots:
     void valueRefreshKeepsEmittingControlsAlive();
     void deformationAndMaskStateDoNotOverwriteEachOther();
     void spinBoxArrowHitRegionsIncrementAndDecrement();
+    void selectingAnotherLayerObjectEndsNativeEditorSession();
 };
 
 void EffectsPanelUiTests::valueRefreshKeepsEmittingControlsAlive()
@@ -144,6 +145,29 @@ void EffectsPanelUiTests::spinBoxArrowHitRegionsIncrementAndDecrement()
     QCOMPARE(spinBox->value(), 5.5);
     QTest::mouseClick(spinBox, Qt::LeftButton, Qt::NoModifier, down.center());
     QCOMPARE(spinBox->value(), 5.0);
+}
+
+void EffectsPanelUiTests::selectingAnotherLayerObjectEndsNativeEditorSession()
+{
+    MainWindow window;
+    auto* controller = window.findChild<EditorController*>();
+    auto* canvas = window.findChild<EditorCanvas*>();
+    QVERIFY(controller);
+    QVERIFY(canvas);
+    const QString first = controller->createTextObject(QPointF(20.0, 20.0), QStringLiteral("A"));
+    const QString second = controller->createTextObject(QPointF(160.0, 20.0), QStringLiteral("B"));
+    QVERIFY(!first.isEmpty());
+    QVERIFY(!second.isEmpty());
+    controller->selectObject(first);
+    const TextObject* object = controller->activeObject();
+    QVERIFY(object);
+    canvas->beginTextEditing(first, object->sourceText,
+                             object->font.toQFont(object->typography.fontSize),
+                             QRectF(20.0, 20.0, 160.0, 60.0));
+    QVERIFY(canvas->isTextEditing());
+    controller->selectObject(second); // same path used by LayersPanel::objectSelected
+    QCoreApplication::processEvents();
+    QVERIFY(!canvas->isTextEditing());
 }
 
 QTEST_MAIN(EffectsPanelUiTests)
