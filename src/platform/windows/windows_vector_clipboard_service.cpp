@@ -101,7 +101,7 @@ HENHMETAFILE renderEmf(const VectorExportPayload& payload)
                                static_cast<Gdiplus::REAL>(payload.bounds.height() * unitsPerLogicalPixel));
     HENHMETAFILE result = nullptr;
     {
-        Gdiplus::Metafile metafile(reference, &frame, Gdiplus::MetafileFrameUnitGdi,
+        Gdiplus::Metafile metafile(reference, frame, Gdiplus::MetafileFrameUnitGdi,
                                    Gdiplus::EmfTypeEmfPlusDual, L"VectorTypographyEditor");
         ReleaseDC(nullptr, reference);
         Gdiplus::Graphics graphics(&metafile);
