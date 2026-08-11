@@ -98,7 +98,9 @@ HENHMETAFILE renderEmf(const VectorExportPayload& payload)
 {
     GdiplusProcess gdiplus;
     if (!gdiplus.ok()) return nullptr;
-    HDC reference = GetDC(nullptr);
+    // A compatible memory DC avoids depending on a visible desktop surface;
+    // Copy for Word must remain usable from headless/offscreen Qt sessions.
+    HDC reference = CreateCompatibleDC(nullptr);
     if (!reference) return nullptr;
     const qreal unitsPerLogicalPixel = 2540.0 / VectorExportPayload::LogicalDpi;
     const Gdiplus::RectF frame(0.0f, 0.0f,
@@ -108,7 +110,7 @@ HENHMETAFILE renderEmf(const VectorExportPayload& payload)
     {
         Gdiplus::Metafile metafile(reference, frame, Gdiplus::MetafileFrameUnitGdi,
                                    Gdiplus::EmfTypeEmfPlusDual, L"VectorTypographyEditor");
-        ReleaseDC(nullptr, reference);
+        DeleteDC(reference);
         Gdiplus::Graphics graphics(&metafile);
         graphics.SetSmoothingMode(Gdiplus::SmoothingModeHighQuality);
         graphics.ScaleTransform(static_cast<Gdiplus::REAL>(unitsPerLogicalPixel),

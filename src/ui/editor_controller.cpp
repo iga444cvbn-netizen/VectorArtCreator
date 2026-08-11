@@ -1867,6 +1867,10 @@ bool EditorController::buildExportPayload(ExportScope scope,
 
 void EditorController::onCommandChanged()
 {
+    // Undo/redo may remove the object that was selected when the command was
+    // created (notably Duplicate).  Never leave the UI model pointing at a
+    // deleted object while publishing the next asynchronous scene.
+    synchronizeSelectionWithDocument();
     rebuildScene();
     emit documentChanged();
 }
