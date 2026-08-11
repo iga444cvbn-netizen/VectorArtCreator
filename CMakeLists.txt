@@ -186,6 +186,7 @@ add_executable(vector_typography_ui_smoke_tests
     tests/support/ui_test_driver.cpp
     ${UI_SOURCES}
 )
+set_target_properties(vector_typography_ui_smoke_tests PROPERTIES AUTOUIC OFF)
 target_include_directories(vector_typography_ui_smoke_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vector_typography_ui_smoke_tests PRIVATE vector_typography_test_support vector_typography_core Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test Qt6::Concurrent)
 add_test(NAME vector_typography_ui_smoke_tests COMMAND vector_typography_ui_smoke_tests)
