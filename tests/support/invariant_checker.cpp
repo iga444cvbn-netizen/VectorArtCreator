@@ -85,17 +85,24 @@ InvariantReport checkInvariants(const Document& document, const SceneGeometry* s
                     || !object->fill.isValid()) {
                     report.failures << QStringLiteral("invalid persistent object state on %1").arg(object->id);
                 }
-                if (!std::isfinite(object->deformation.strength)) {
+                if (!std::isfinite(object->deformation.strength)
+                    || object->deformation.strength < 0.0
+                    || object->deformation.strength > 4.0) {
                     report.failures << QStringLiteral("invalid deformation strength on %1").arg(object->id);
                 }
                 for (int strokeIndex = 0; strokeIndex < object->deformation.strokes.size(); ++strokeIndex) {
                     const DeformationStroke& stroke = object->deformation.strokes.at(strokeIndex);
-                    bool validStroke = std::isfinite(stroke.radius) && stroke.radius > 0.0
-                        && std::isfinite(stroke.strength) && std::isfinite(stroke.hardness)
-                        && stroke.hardness >= 0.0 && stroke.hardness <= 1.0;
+                    bool validStroke = std::isfinite(stroke.radius)
+                        && stroke.radius >= 0.01 && stroke.radius <= 100000.0
+                        && std::isfinite(stroke.strength)
+                        && stroke.strength >= 0.0 && stroke.strength <= 4.0
+                        && std::isfinite(stroke.hardness)
+                        && stroke.hardness >= 0.0 && stroke.hardness <= 1.0
+                        && !stroke.samples.isEmpty() && stroke.samples.size() <= 4096;
                     for (const BrushSample& sample : stroke.samples) {
                         validStroke = validStroke && isFinite(sample.position) && isFinite(sample.delta)
-                            && std::isfinite(sample.pressure) && sample.pressure >= 0.0;
+                            && std::isfinite(sample.pressure)
+                            && sample.pressure >= 0.0 && sample.pressure <= 4.0;
                     }
                     if (!validStroke) {
                         report.failures << QStringLiteral("invalid deformation stroke %1 on %2")

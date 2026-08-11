@@ -1,5 +1,6 @@
 #include "core/effects/wave_effect.h"
 #include "core/serialization/project_serializer.h"
+#include "tests/support/state_fingerprint.h"
 #include "ui/editor_canvas.h"
 #include "ui/editor_controller.h"
 #include "ui/effects_panel.h"
@@ -419,11 +420,13 @@ void EffectsPanelUiTests::inspectorEditEndsCanvasSessionWithoutStaleOverwrite()
     auto* addText = window.findChild<QPushButton*>(QStringLiteral("addTextButton"));
     auto* inspectorText = window.findChild<QPlainTextEdit*>(QStringLiteral("textSource"));
     auto* italic = window.findChild<QPushButton*>(QStringLiteral("fontItalic"));
+    auto* fontSize = window.findChild<SliderSpinBox*>(QStringLiteral("fontSize"));
     QVERIFY(controller);
     QVERIFY(canvas);
     QVERIFY(addText);
     QVERIFY(inspectorText);
     QVERIFY(italic);
+    QVERIFY(fontSize);
 
     QTest::mouseClick(addText, Qt::LeftButton);
     QTRY_VERIFY(canvas->isTextEditing());
@@ -444,8 +447,22 @@ void EffectsPanelUiTests::inspectorEditEndsCanvasSessionWithoutStaleOverwrite()
     QVERIFY(!editor->isVisible());
 
     QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(objectId) != nullptr, 5000);
-    const QPoint objectPoint = canvasPositionForDocumentPoint(
-        canvas, controller->sceneGeometry().objectById(objectId)->visualBounds.center());
+    const QPainterPath currentInk = controller->sceneGeometry().objectById(objectId)
+                                         ->geometry.combinedPath();
+    QPointF hitPoint;
+    const QRectF inkBounds = currentInk.boundingRect();
+    for (int y = 0; hitPoint.isNull() && y < 20; ++y) {
+        for (int x = 0; x < 20; ++x) {
+            const QPointF candidate(inkBounds.left() + (x + 0.5) * inkBounds.width() / 20.0,
+                                    inkBounds.top() + (y + 0.5) * inkBounds.height() / 20.0);
+            if (currentInk.contains(candidate)) {
+                hitPoint = candidate;
+                break;
+            }
+        }
+    }
+    QVERIFY2(!hitPoint.isNull(), "evaluated text fixture needs an ink hit point");
+    const QPoint objectPoint = canvas->mapDocumentToViewport(hitPoint).toPoint();
     QTest::mouseDClick(canvas, Qt::LeftButton, Qt::NoModifier, objectPoint);
     QTRY_VERIFY(canvas->isTextEditing());
     QTRY_COMPARE(editor->toPlainText(), QStringLiteral("XYZ"));
@@ -459,6 +476,16 @@ void EffectsPanelUiTests::inspectorEditEndsCanvasSessionWithoutStaleOverwrite()
     controller->undoStack()->undo();
     QTRY_COMPARE(controller->document().objectById(objectId)->font.italic, originalItalic);
     QCOMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("XYZ!"));
+
+    QTest::mouseDClick(canvas, Qt::LeftButton, Qt::NoModifier, objectPoint);
+    QTRY_VERIFY(canvas->isTextEditing());
+    QDoubleSpinBox* sizeSpin = fontSize->spinBox();
+    QTest::mouseClick(sizeSpin, Qt::LeftButton);
+    sizeSpin->selectAll();
+    QTest::keyClicks(sizeSpin, QStringLiteral("88"));
+    QTest::keyClick(sizeSpin, Qt::Key_Enter);
+    QTRY_COMPARE(controller->document().objectById(objectId)->typography.fontSize, 88.0);
+    QVERIFY(!canvas->isTextEditing());
 }
 
 void EffectsPanelUiTests::styleIntensityGestureHasImmediateDirtyTruthAndOneUndoStep()
@@ -480,7 +507,9 @@ void EffectsPanelUiTests::styleIntensityGestureHasImmediateDirtyTruthAndOneUndoS
                                  && controller->sceneGeometry().objectById(second), 5000);
     controller->selectObject(first);
     controller->undoStack()->setClean();
-    const QString saved = ProjectSerializer::toJson(controller->document()).toJson(QJsonDocument::Compact);
+    const QString saved = test::semanticFingerprint(controller->document());
+    const int savedIndex = controller->undoStack()->index();
+    const int savedCount = controller->undoStack()->count();
 
     const QPoint start(slider->width() / 2, slider->height() / 2);
     const QPoint away(slider->width() * 3 / 4, slider->height() / 2);
@@ -492,9 +521,16 @@ void EffectsPanelUiTests::styleIntensityGestureHasImmediateDirtyTruthAndOneUndoS
     QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, away);
     QVERIFY(controller->isModified());
     QVERIFY(controller->undoStack()->canUndo());
+    QCOMPARE(controller->undoStack()->count(), savedCount + 1);
     controller->undoStack()->undo();
     QVERIFY(controller->undoStack()->isClean());
-    QCOMPARE(ProjectSerializer::toJson(controller->document()).toJson(QJsonDocument::Compact), saved);
+    QCOMPARE(test::semanticFingerprint(controller->document()), saved);
+    QCOMPARE(controller->undoStack()->index(), savedIndex);
+
+    // Remove the intentional redo branch so the following no-op assertion
+    // measures only the gesture under test, not earlier setup history.
+    controller->undoStack()->clear();
+    controller->undoStack()->setClean();
 
     // Returning to the exact slider start is a semantic no-op and must not
     // create a misleading dirty/undo entry.
@@ -504,6 +540,8 @@ void EffectsPanelUiTests::styleIntensityGestureHasImmediateDirtyTruthAndOneUndoS
     QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, start);
     QVERIFY(!controller->isModified());
     QVERIFY(controller->undoStack()->isClean());
+    QCOMPARE(controller->undoStack()->index(), 0);
+    QCOMPARE(controller->undoStack()->count(), 0);
     QVERIFY(!controller->undoStack()->canUndo());
 
     // Selection change is an explicit interruption boundary: it commits the

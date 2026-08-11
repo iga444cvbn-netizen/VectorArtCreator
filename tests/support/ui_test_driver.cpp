@@ -182,10 +182,15 @@ void UiTestDriver::waitForSceneGeneration(const QString& objectId) const
         const SceneGeometry expected = SceneEvaluator::evaluate(*m_controller->document().currentPage());
         const SceneObjectGeometry* expectedObject = expected.objectById(objectId);
         QVERIFY(expectedObject);
+        const SceneObjectSignature expectedSignature = sceneObjectSignature(*expectedObject);
         QString difference;
-        QVERIFY2(compareSceneObject(sceneObjectSignature(*expectedObject),
-                                    sceneObjectSignature(*m_controller->sceneGeometry().objectById(objectId)),
-                                    &difference), qPrintable(difference));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            m_controller->sceneGeometry().objectById(objectId)
+                && compareSceneObject(
+                    expectedSignature,
+                    sceneObjectSignature(*m_controller->sceneGeometry().objectById(objectId)),
+                    &difference),
+            5000);
     }
 }
 

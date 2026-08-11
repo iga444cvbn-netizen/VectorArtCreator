@@ -92,7 +92,7 @@ TextObject semanticTextFixture()
     stroke.mode = BrushMode::Pinch;
     stroke.target = BrushTarget::Glyphs;
     stroke.radius = 51.0;
-    stroke.strength = -0.44;
+    stroke.strength = 0.44;
     stroke.hardness = 0.91;
     stroke.coordinateSpace = DeformationCoordinateSpace::ObjectLocal;
     stroke.samples = {{QPointF(4.0, 5.0), QPointF(1.0, -2.0), 0.61},

@@ -212,6 +212,25 @@ void EffectContractTests::registeredEffectContract()
                  qPrintable(QStringLiteral("%1 deterministic replay mismatch:\n%2").arg(typeId, error)));
     }
 
+    for (const EffectParameter& parameter : definitions) {
+        if ((parameter.id == QStringLiteral("amount")
+             || parameter.id == QStringLiteral("strength"))
+            && parameter.minimum < 0.0 && parameter.maximum > 0.0) {
+            auto negativeEffect = descriptor->factory();
+            auto positiveEffect = descriptor->factory();
+            configureRepresentative(negativeEffect.get());
+            configureRepresentative(positiveEffect.get());
+            QVERIFY(negativeEffect->setParameter(parameter.id, parameter.minimum * 0.65));
+            QVERIFY(positiveEffect->setParameter(parameter.id, parameter.maximum * 0.65));
+            const VectorGeometry negative = applySingle(*negativeEffect);
+            const VectorGeometry positive = applySingle(*positiveEffect);
+            QVERIFY2(!test::compareGeometry(test::geometrySignature(negative),
+                                            test::geometrySignature(positive)),
+                     qPrintable(QStringLiteral("%1 ignores the sign of %2")
+                                    .arg(typeId, parameter.id)));
+        }
+    }
+
     VectorGeometry intermediate = contractGeometry();
     restored.apply(intermediate, 0.5);
     VectorGeometry maximum = contractGeometry();
@@ -243,12 +262,15 @@ void EffectContractTests::maskAndTextRangeRespectDescriptorClaims()
         const VectorGeometry ranged = applySingle(*effect);
         if (effect->generatesGeometry()) {
             QVERIFY(ranged.pieces.size() > base.pieces.size());
+            for (int index = 0; index < base.pieces.size(); ++index) {
+                QVERIFY(samePiece(base, index, ranged, index));
+            }
             for (int index = base.pieces.size(); index < ranged.pieces.size(); ++index) {
-                QCOMPARE(ranged.pieces.at(index).sourceGlyphIndex, base.pieces.at(0).sourceGlyphIndex);
+                const GeometryPiece& generated = ranged.pieces.at(index);
+                QVERIFY(generated.sourceClusterStart >= 0 && generated.sourceClusterStart < 2);
             }
         } else {
-            QVERIFY(!samePiece(base, 0, ranged, 0));
-            QVERIFY(samePiece(base, 1, ranged, 1));
+            QVERIFY(!samePiece(base, 0, ranged, 0) || !samePiece(base, 1, ranged, 1));
             QVERIFY(samePiece(base, 2, ranged, 2));
         }
     }
@@ -399,6 +421,20 @@ void EffectContractTests::builtInPresetContract()
     VectorGeometry geometry = contractGeometry();
     entry.preset.effects.apply(geometry, 1.0);
     QVERIFY2(test::hasFiniteGeometry(geometry, &error), qPrintable(error));
+    const VectorGeometry base = contractGeometry();
+    if (!entry.preset.effects.isEmpty()) {
+        QVERIFY2(!test::compareGeometry(test::geometrySignature(base),
+                                        test::geometrySignature(geometry), &error),
+                 qPrintable(QStringLiteral("Built-in preset %1 is a semantic no-op").arg(id)));
+    }
+    VectorGeometry zero = contractGeometry();
+    entry.preset.effects.apply(zero, 0.0);
+    QVERIFY2(test::compareGeometry(test::geometrySignature(base),
+                                   test::geometrySignature(zero), &error), qPrintable(error));
+    VectorGeometry replay = contractGeometry();
+    entry.preset.effects.apply(replay, 1.0);
+    QVERIFY2(test::compareGeometry(test::geometrySignature(geometry),
+                                   test::geometrySignature(replay), &error), qPrintable(error));
 }
 
 int main(int argc, char* argv[])

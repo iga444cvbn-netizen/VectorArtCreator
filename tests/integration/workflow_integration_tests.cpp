@@ -38,6 +38,8 @@ private slots:
     void realFileLifecyclePreservesComplexSemantics();
     void exportPlainTextPreservesEqualObjectMultiplicity();
     void unsupportedEffectMaskIsRefusedWithoutMutation();
+    void duplicatePasteAndPresetFreshenEffectIdentities();
+    void effectReorderDeleteUndoRestoresSemanticOrder();
     void seededValidWorkflows_data();
     void seededValidWorkflows();
 };
@@ -287,6 +289,8 @@ void WorkflowIntegrationTests::mergeableCommandReturningToStartRestoresClean()
     controller.addEffect(QStringLiteral("wave"));
     controller.undoStack()->setClean();
     const QString saved = test::semanticFingerprint(controller.document());
+    const int savedIndex = controller.undoStack()->index();
+    const int savedCount = controller.undoStack()->count();
 
     if (family == QStringLiteral("text")) {
         controller.setText(QStringLiteral("away"));
@@ -313,7 +317,8 @@ void WorkflowIntegrationTests::mergeableCommandReturningToStartRestoresClean()
     QCOMPARE(test::semanticFingerprint(controller.document()), saved);
     QVERIFY2(controller.undoStack()->isClean(), qPrintable(family + QStringLiteral(" left the clean index dirty")));
     QVERIFY(!controller.isModified());
-    QVERIFY(!controller.undoStack()->canUndo());
+    QCOMPARE(controller.undoStack()->index(), savedIndex);
+    QCOMPARE(controller.undoStack()->count(), savedCount);
 
     controller.setFillColor(QColor(90, 80, 70));
     QVERIFY(controller.undoStack()->canUndo());
@@ -488,6 +493,103 @@ void WorkflowIntegrationTests::unsupportedEffectMaskIsRefusedWithoutMutation()
     QCOMPARE(wave->maskStrokes.size(), 1);
 }
 
+void WorkflowIntegrationTests::duplicatePasteAndPresetFreshenEffectIdentities()
+{
+    EditorController controller;
+    const QString originalId = controller.createTextObject(QPointF(100, 100), QStringLiteral("clone matrix"));
+    controller.addEffect(QStringLiteral("wave"));
+    controller.addEffect(QStringLiteral("echo"));
+    const TextObject originalSnapshot(*controller.document().objectById(originalId));
+
+    controller.duplicateSelectedObjects();
+    const auto afterDuplicate = controller.document().objectsOnCurrentPage();
+    QCOMPARE(afterDuplicate.size(), 2);
+    TextObject* duplicate = afterDuplicate.at(0)->id == originalId
+        ? afterDuplicate.at(1) : afterDuplicate.at(0);
+    QVERIFY(duplicate->id != originalId);
+    for (int index = 0; index < duplicate->effects.size(); ++index) {
+        QVERIFY(duplicate->effects.at(index)->instanceId
+                != originalSnapshot.effects.at(index)->instanceId);
+        QCOMPARE(duplicate->effects.at(index)->parametersToJson(),
+                 originalSnapshot.effects.at(index)->parametersToJson());
+    }
+    const QString duplicateId = duplicate->id;
+    controller.undoStack()->undo();
+    QVERIFY(controller.document().objectById(duplicateId) == nullptr);
+    controller.undoStack()->redo();
+    QVERIFY(controller.document().objectById(duplicateId));
+
+    controller.selectObject(originalId);
+    controller.copySelectedObjects();
+    controller.pasteObjects();
+    const auto afterPaste = controller.document().objectsOnCurrentPage();
+    QCOMPARE(afterPaste.size(), 3);
+    QSet<QString> objectIds;
+    QSet<QString> effectIds;
+    for (const TextObject* object : afterPaste) {
+        objectIds.insert(object->id);
+        for (int index = 0; index < object->effects.size(); ++index) {
+            effectIds.insert(object->effects.at(index)->instanceId);
+        }
+    }
+    QCOMPARE(objectIds.size(), 3);
+    QCOMPARE(effectIds.size(), 6);
+    QTRY_VERIFY_WITH_TIMEOUT(controller.sceneGeometry().objectById(originalId)
+                                 && controller.sceneGeometry().objectById(duplicateId), 5000);
+
+    QString error;
+    controller.selectObject(originalId);
+    QVERIFY2(controller.applyPresetById(QStringLiteral("builtin.whisper.v1"), &error), qPrintable(error));
+    controller.selectObject(duplicateId);
+    QVERIFY2(controller.applyPresetById(QStringLiteral("builtin.whisper.v1"), &error), qPrintable(error));
+    QSet<QString> presetIds;
+    for (const QString& id : {originalId, duplicateId}) {
+        const TextObject* object = controller.document().objectById(id);
+        QVERIFY(object);
+        QCOMPARE(object->effects.size(), 3);
+        for (int index = 0; index < object->effects.size(); ++index) {
+            presetIds.insert(object->effects.at(index)->instanceId);
+        }
+    }
+    QCOMPARE(presetIds.size(), 6);
+    QVERIFY2(test::checkInvariants(controller.document()).ok(),
+             qPrintable(test::checkInvariants(controller.document()).summary()));
+}
+
+void WorkflowIntegrationTests::effectReorderDeleteUndoRestoresSemanticOrder()
+{
+    EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(100, 100), QStringLiteral("order contract"));
+    controller.addEffect(QStringLiteral("wave"));
+    controller.addEffect(QStringLiteral("bend"));
+    controller.addEffect(QStringLiteral("echo"));
+    TextObject* object = controller.document().objectById(objectId);
+    QVERIFY(object);
+    const QJsonArray originalStack = object->effects.toJson();
+    const test::GeometrySignature originalGeometry = test::geometrySignature(
+        SceneEvaluator::evaluate(*controller.document().currentPage()).objectById(objectId)->geometry);
+
+    controller.moveEffect(0, 2);
+    QVERIFY(object->effects.toJson() != originalStack);
+    controller.undoStack()->undo();
+    QCOMPARE(object->effects.toJson(), originalStack);
+    QString difference;
+    QVERIFY2(test::compareGeometry(
+                 originalGeometry,
+                 test::geometrySignature(
+                     SceneEvaluator::evaluate(*controller.document().currentPage()).objectById(objectId)->geometry),
+                 &difference), qPrintable(difference));
+
+    controller.removeEffect(1);
+    QCOMPARE(object->effects.size(), 2);
+    controller.undoStack()->undo();
+    QCOMPARE(object->effects.toJson(), originalStack);
+    controller.undoStack()->redo();
+    QCOMPARE(object->effects.size(), 2);
+    controller.undoStack()->undo();
+    QCOMPARE(object->effects.toJson(), originalStack);
+}
+
 void WorkflowIntegrationTests::seededValidWorkflows_data()
 {
     QTest::addColumn<quint32>("seed");
@@ -627,7 +729,7 @@ void WorkflowIntegrationTests::seededValidWorkflows()
                 deformation.mode = static_cast<BrushMode>(step % 5);
                 deformation.target = step % 2 ? BrushTarget::Shape : BrushTarget::Glyphs;
                 deformation.radius = 20.0 + random.bounded(80);
-                deformation.strength = -0.8 + random.generateDouble() * 1.6;
+                deformation.strength = 0.2 + random.generateDouble() * 1.6;
                 deformation.samples = {{QPointF(15.0, 15.0), QPointF(3.0, -2.0), 0.8}};
                 controller.addDeformationStroke(active->id, deformation);
                 controller.setDeformationStrength(0.2 + random.generateDouble() * 1.6);
