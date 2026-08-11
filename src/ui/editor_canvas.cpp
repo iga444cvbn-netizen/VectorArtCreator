@@ -182,6 +182,7 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
     }
     if (!m_textEditor) {
         m_editorView = new QGraphicsView(this);
+        m_editorView->setFocusPolicy(Qt::StrongFocus);
         m_editorView->setFrameShape(QFrame::NoFrame);
         m_editorView->setAlignment(Qt::AlignLeft | Qt::AlignTop);
         m_editorView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -194,6 +195,7 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
         // QGraphicsView object.  Filtering the viewport keeps the full-canvas
         // overlay from swallowing input outside the native editor.
         m_editorView->viewport()->installEventFilter(this);
+        m_editorView->viewport()->setFocusPolicy(Qt::StrongFocus);
 
         m_textEditor = new QPlainTextEdit;
         m_textEditor->setFrameShape(QFrame::NoFrame);
@@ -204,6 +206,9 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
             "QPlainTextEdit { background: rgba(18, 21, 27, 190); color: #f4f7fb; "
             "border: 1px solid #79bfff; padding: 0px; selection-background-color: #2e76ba; }"));
         m_editorProxy = m_editorScene->addWidget(m_textEditor);
+        m_editorProxy->setFlag(QGraphicsItem::ItemIsFocusable, true);
+        m_editorProxy->setFocusPolicy(Qt::StrongFocus);
+        m_editorScene->setStickyFocus(true);
         m_textEditor->installEventFilter(this);
         connect(m_textEditor, &QPlainTextEdit::textChanged, this, [this] {
             if (!m_updatingTextEditor && !m_editingObjectId.isEmpty()) {
@@ -239,6 +244,7 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
     // returns.  Focus the graphics view, proxy and native widget as one
     // session, then repeat after the originating event has unwound.
     m_editorView->setFocus(Qt::OtherFocusReason);
+    m_editorView->viewport()->setFocus(Qt::OtherFocusReason);
     m_editorScene->setFocusItem(m_editorProxy, Qt::OtherFocusReason);
     m_editorProxy->setFocus(Qt::OtherFocusReason);
     m_textEditor->setFocus(Qt::OtherFocusReason);
@@ -246,6 +252,7 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
     QTimer::singleShot(0, this, [this, editingId] {
         if (!isTextEditing() || m_editingObjectId != editingId) return;
         m_editorView->setFocus(Qt::OtherFocusReason);
+        m_editorView->viewport()->setFocus(Qt::OtherFocusReason);
         m_editorScene->setFocusItem(m_editorProxy, Qt::OtherFocusReason);
         m_editorProxy->setFocus(Qt::OtherFocusReason);
         m_textEditor->setFocus(Qt::OtherFocusReason);
