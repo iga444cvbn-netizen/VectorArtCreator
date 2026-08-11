@@ -14,6 +14,7 @@
 #include <QFile>
 #include <QFont>
 #include <QGuiApplication>
+#include <QHash>
 #include <QJsonArray>
 #include <QRandomGenerator>
 #include <QSet>
@@ -822,14 +823,21 @@ void WorkflowIntegrationTests::seededValidWorkflows()
                 controller.clearSelection();
                 history << "ClearSelection";
             } else if (action == 28) {
-                QSet<QString> currentObjectIds;
-                for (const TextObject* object : currentObjects()) {
-                    if (object) currentObjectIds.insert(object->id);
+                QHash<QString, QString> currentLayerForObject;
+                if (const Page* page = controller.document().currentPage()) {
+                    for (const auto& layer : page->layers) {
+                        if (!layer || !layer->visible || layer->locked) continue;
+                        for (const auto& object : layer->objects) {
+                            if (object && object->visible) {
+                                currentLayerForObject.insert(object->id, layer->id);
+                            }
+                        }
+                    }
                 }
                 QStringList eligible;
                 for (const SceneObjectGeometry& sceneObject : controller.sceneGeometry().objects) {
                     if (sceneObject.pageId == controller.document().currentPageId
-                        && currentObjectIds.contains(sceneObject.objectId)
+                        && currentLayerForObject.value(sceneObject.objectId) == sceneObject.layerId
                         && sceneObject.visible && !sceneObject.locked) {
                         eligible.push_back(sceneObject.objectId);
                     }
