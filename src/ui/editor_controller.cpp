@@ -1828,9 +1828,22 @@ bool EditorController::copyForWord(ExportScope scope, QString* error) const
 
 bool EditorController::canExport(ExportScope scope) const
 {
-    QString error;
-    VectorExportPayload payload;
-    return buildExportPayload(scope, &payload, &error);
+    const Page* page = m_document.currentPage();
+    if (!page) return false;
+    const QStringList selected = selectedObjectIds();
+    for (const auto& layer : page->layers) {
+        if (!layer || !layer->visible) continue;
+        for (const auto& object : layer->objects) {
+            if (!object || !object->visible) continue;
+            if (scope == ExportScope::CurrentPage || selected.contains(object->id)) {
+                // This is deliberately eligibility-only.  Rebuilding a page
+                // here would make every MainWindow::refreshUi() a potentially
+                // expensive synchronous effect/generator evaluation.
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 bool EditorController::buildExportPayload(ExportScope scope,

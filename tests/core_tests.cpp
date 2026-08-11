@@ -177,6 +177,7 @@ private slots:
     void svgExportContainsPaths();
     void portableExportPayloadScopesAndOpacity();
     void payloadSvgPreservesRecordsAndWinding();
+    void exportEligibilityDoesNotEvaluateEmptyText();
     void cyrillicTextProducesGeometry();
     void glyphFallbackIsReportedWhenAvailable();
     void missingFontStatesAreDistinguished();
@@ -753,6 +754,18 @@ void CoreTests::payloadSvgPreservesRecordsAndWinding()
     QVERIFY(svg.contains("fill-rule=\"nonzero\""));
     QVERIFY(svg.contains("viewBox=\""));
     QVERIFY(svg.contains("40"));
+}
+
+void CoreTests::exportEligibilityDoesNotEvaluateEmptyText()
+{
+    EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(140.0, 120.0));
+    QVERIFY(!objectId.isEmpty());
+    // An empty object has no renderable outline.  Eligibility must nevertheless
+    // be cheap and true; a call through buildExportPayload would synchronously
+    // evaluate and reject it, which is exactly what refreshUi must not do.
+    QVERIFY(controller.canExport(ExportScope::Selection));
+    QVERIFY(controller.canExport(ExportScope::CurrentPage));
 }
 
 void CoreTests::cyrillicTextProducesGeometry()

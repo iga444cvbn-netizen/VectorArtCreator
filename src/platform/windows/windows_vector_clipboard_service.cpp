@@ -4,8 +4,10 @@
 #include <gdiplus.h>
 
 #include <QBuffer>
+#include <QGuiApplication>
 #include <QImage>
 #include <QPainter>
+#include <QWindow>
 
 #include <algorithm>
 #include <cstring>
@@ -31,10 +33,10 @@ private:
 
 class ClipboardTransaction final {
 public:
-    ClipboardTransaction()
+    explicit ClipboardTransaction(HWND owner)
     {
         for (int attempt = 0; attempt != 8 && !m_open; ++attempt) {
-            m_open = OpenClipboard(nullptr) != FALSE;
+            m_open = OpenClipboard(owner) != FALSE;
             if (!m_open) Sleep(12);
         }
     }
@@ -54,13 +56,16 @@ public:
 
 bool setBytes(UINT format, const QByteArray& bytes)
 {
+    if (format == 0) return false;
     GlobalMemory memory(static_cast<SIZE_T>(bytes.size()));
     if (!memory.handle) return false;
     void* destination = GlobalLock(memory.handle);
     if (!destination) return false;
     memcpy(destination, bytes.constData(), static_cast<size_t>(bytes.size()));
     GlobalUnlock(memory.handle);
-    return SetClipboardData(format, memory.release()) != nullptr;
+    if (!SetClipboardData(format, memory.handle)) return false;
+    static_cast<void>(memory.release()); // ownership transfers only on success
+    return true;
 }
 
 void addPath(Gdiplus::GraphicsPath& target, const QPainterPath& path)
@@ -205,7 +210,10 @@ bool WindowsVectorClipboardService::copyForOffice(const VectorExportPayload& pay
         return false;
     }
     const QByteArray svg = svgFallback(payload);
-    ClipboardTransaction transaction;
+    const QWindow* activeWindow = QGuiApplication::focusWindow()
+        ? QGuiApplication::focusWindow() : QGuiApplication::activeWindow();
+    const HWND owner = activeWindow ? reinterpret_cast<HWND>(activeWindow->winId()) : nullptr;
+    ClipboardTransaction transaction(owner);
     if (!transaction.open() || !EmptyClipboard()) {
         DeleteEnhMetaFile(metafile);
         if (error) *error = QStringLiteral("The clipboard is busy. Close the app using it and try again.");
@@ -216,7 +224,7 @@ bool WindowsVectorClipboardService::copyForOffice(const VectorExportPayload& pay
         if (error) *error = QStringLiteral("Windows rejected the enhanced metafile clipboard format.");
         return false;
     }
-    metafile = nullptr; // Clipboard owns the handle after a successful transfer.
+    metafile = nullptr; // Clipboard owns the handle only after a successful transfer.
     const UINT svgFormat = RegisterClipboardFormatW(L"image/svg+xml");
     const UINT pngFormat = RegisterClipboardFormatW(L"PNG");
     bool fallbackOk = setBytes(svgFormat, svg) && setBytes(pngFormat, png);
@@ -227,8 +235,16 @@ bool WindowsVectorClipboardService::copyForOffice(const VectorExportPayload& pay
         if (data) {
             memcpy(data, wideText.c_str(), (wideText.size() + 1) * sizeof(wchar_t));
             GlobalUnlock(unicode.handle);
-            fallbackOk = SetClipboardData(CF_UNICODETEXT, unicode.release()) != nullptr && fallbackOk;
+            if (SetClipboardData(CF_UNICODETEXT, unicode.handle)) {
+                static_cast<void>(unicode.release()); // success transfers ownership
+            } else {
+                fallbackOk = false;
+            }
+        } else {
+            fallbackOk = false;
         }
+    } else {
+        fallbackOk = false;
     }
     if (!fallbackOk && error) *error = QStringLiteral("Vector copied, but one or more SVG/PNG/text fallbacks could not be published.");
     return true;
