@@ -2,7 +2,11 @@
 
 #include <QBuffer>
 #include <QImage>
+#include <QSemaphore>
 #include <QTest>
+
+#include <atomic>
+#include <thread>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -14,8 +18,32 @@ class WindowsClipboardTests final : public QObject {
     Q_OBJECT
 
 private slots:
+    void publicationResultClassification();
     void copyForWordPublishesPortableFormats();
+    void busyClipboardIsAProductionFailure();
+    void oversizedRasterFallbackIsAProductionFailure();
 };
+
+void WindowsClipboardTests::publicationResultClassification()
+{
+    const auto complete = ClipboardPublicationResult::fromFormats(true, true, true, true);
+    QCOMPARE(complete.status, ClipboardPublicationStatus::Complete);
+    QVERIFY(complete.succeeded());
+    QVERIFY(complete.complete());
+
+    const auto partial = ClipboardPublicationResult::fromFormats(true, false, true, false);
+    QCOMPARE(partial.status, ClipboardPublicationStatus::Partial);
+    QVERIFY(partial.succeeded());
+    QVERIFY(!partial.complete());
+    QVERIFY(partial.message.contains(QStringLiteral("SVG")));
+    QVERIFY(partial.message.contains(QStringLiteral("Unicode text")));
+
+    const auto failure = ClipboardPublicationResult::fromFormats(
+        false, false, false, false, QStringLiteral("injected failure"));
+    QCOMPARE(failure.status, ClipboardPublicationStatus::Failure);
+    QVERIFY(!failure.succeeded());
+    QCOMPARE(failure.message, QStringLiteral("injected failure"));
+}
 
 void WindowsClipboardTests::copyForWordPublishesPortableFormats()
 {
@@ -32,10 +60,10 @@ void WindowsClipboardTests::copyForWordPublishesPortableFormats()
     record.opacity = 0.7;
     record.sourceText = payload.plainText;
     payload.records.push_back(record);
-    QString error;
-    if (!VectorClipboardService::copyForOffice(payload, &error)) {
-        QSKIP(qPrintable(QStringLiteral("Headless Windows runner cannot create an EMF device context: %1").arg(error)));
-    }
+    const ClipboardPublicationResult result = VectorClipboardService::copyForOfficeResult(payload);
+    QVERIFY2(result.complete(), qPrintable(result.message));
+    const ClipboardPublicationResult repeated = VectorClipboardService::copyForOfficeResult(payload);
+    QVERIFY2(repeated.complete(), qPrintable(repeated.message));
     QVERIFY(OpenClipboard(nullptr));
     const UINT svgFormat = RegisterClipboardFormatW(L"image/svg+xml");
     const UINT pngFormat = RegisterClipboardFormatW(L"PNG");
@@ -68,6 +96,58 @@ void WindowsClipboardTests::copyForWordPublishesPortableFormats()
     QVERIFY(svg.contains("<svg"));
     QVERIFY(svg.contains("<path"));
     QVERIFY(CloseClipboard());
+#endif
+}
+
+void WindowsClipboardTests::busyClipboardIsAProductionFailure()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows clipboard formats are only meaningful on Windows.");
+#else
+    VectorExportPayload payload;
+    payload.bounds = QRectF(0, 0, 32, 16);
+    VectorExportRecord record;
+    record.path.addRect(payload.bounds);
+    record.fill = Qt::black;
+    payload.records = {record};
+    QSemaphore opened;
+    QSemaphore release;
+    std::atomic_bool holderOpened = false;
+    std::thread holder([&] {
+        holderOpened.store(OpenClipboard(nullptr) != FALSE, std::memory_order_release);
+        opened.release();
+        release.acquire();
+        if (holderOpened.load(std::memory_order_acquire)) CloseClipboard();
+    });
+    const bool holderResponded = opened.tryAcquire(1, 3000);
+    const bool clipboardHeld = holderOpened.load(std::memory_order_acquire);
+    if (!holderResponded || !clipboardHeld) {
+        release.release();
+        holder.join();
+        QVERIFY2(holderResponded && clipboardHeld, "Could not establish the clipboard-busy precondition");
+    }
+    const ClipboardPublicationResult result = VectorClipboardService::copyForOfficeResult(payload);
+    release.release();
+    holder.join();
+    QCOMPARE(result.status, ClipboardPublicationStatus::Failure);
+    QVERIFY(result.message.contains(QStringLiteral("busy"), Qt::CaseInsensitive));
+#endif
+}
+
+void WindowsClipboardTests::oversizedRasterFallbackIsAProductionFailure()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows clipboard formats are only meaningful on Windows.");
+#else
+    VectorExportPayload payload;
+    payload.bounds = QRectF(0, 0, 10000, 10000);
+    VectorExportRecord record;
+    record.path.addRect(payload.bounds);
+    record.fill = Qt::black;
+    payload.records = {record};
+    const ClipboardPublicationResult result = VectorClipboardService::copyForOfficeResult(payload);
+    QCOMPARE(result.status, ClipboardPublicationStatus::Failure);
+    QVERIFY(result.message.contains(QStringLiteral("size limit")));
 #endif
 }
 

@@ -194,22 +194,25 @@ QByteArray svgFallback(const VectorExportPayload& payload)
 
 } // namespace
 
-bool WindowsVectorClipboardService::copyForOffice(const VectorExportPayload& payload, QString* error)
+ClipboardPublicationResult WindowsVectorClipboardService::copyForOffice(
+    const VectorExportPayload& payload)
 {
     if (payload.records.isEmpty() || payload.bounds.isEmpty()) {
-        if (error) *error = QStringLiteral("There is no valid vector geometry to copy.");
-        return false;
+        return ClipboardPublicationResult::fromFormats(
+            false, false, false, false, QStringLiteral("There is no valid vector geometry to copy."));
     }
     HENHMETAFILE metafile = renderEmf(payload);
     if (!metafile) {
-        if (error) *error = QStringLiteral("Could not create the Windows EMF+ clipboard artwork.");
-        return false;
+        return ClipboardPublicationResult::fromFormats(
+            false, false, false, false,
+            QStringLiteral("Could not create the Windows EMF+ clipboard artwork."));
     }
     const QByteArray png = renderPng(payload);
     if (png.isEmpty()) {
         DeleteEnhMetaFile(metafile);
-        if (error) *error = QStringLiteral("The raster fallback would exceed the production size limit.");
-        return false;
+        return ClipboardPublicationResult::fromFormats(
+            false, false, false, false,
+            QStringLiteral("The raster fallback would exceed the production size limit."));
     }
     const QByteArray svg = svgFallback(payload);
     QWindow* activeWindow = QGuiApplication::focusWindow();
@@ -221,18 +224,22 @@ bool WindowsVectorClipboardService::copyForOffice(const VectorExportPayload& pay
     ClipboardTransaction transaction(owner);
     if (!transaction.open() || !EmptyClipboard()) {
         DeleteEnhMetaFile(metafile);
-        if (error) *error = QStringLiteral("The clipboard is busy. Close the app using it and try again.");
-        return false;
+        return ClipboardPublicationResult::fromFormats(
+            false, false, false, false,
+            QStringLiteral("The clipboard is busy. Close the app using it and try again."));
     }
     if (!SetClipboardData(CF_ENHMETAFILE, metafile)) {
         DeleteEnhMetaFile(metafile);
-        if (error) *error = QStringLiteral("Windows rejected the enhanced metafile clipboard format.");
-        return false;
+        return ClipboardPublicationResult::fromFormats(
+            false, false, false, false,
+            QStringLiteral("Windows rejected the enhanced metafile clipboard format."));
     }
     metafile = nullptr; // Clipboard owns the handle only after a successful transfer.
     const UINT svgFormat = RegisterClipboardFormatW(L"image/svg+xml");
     const UINT pngFormat = RegisterClipboardFormatW(L"PNG");
-    bool fallbackOk = setBytes(svgFormat, svg) && setBytes(pngFormat, png);
+    const bool svgPublished = setBytes(svgFormat, svg);
+    const bool pngPublished = setBytes(pngFormat, png);
+    bool textPublished = false;
     const std::wstring wideText = payload.plainText.toStdWString();
     GlobalMemory unicode((wideText.size() + 1) * sizeof(wchar_t));
     if (unicode.handle) {
@@ -242,17 +249,12 @@ bool WindowsVectorClipboardService::copyForOffice(const VectorExportPayload& pay
             GlobalUnlock(unicode.handle);
             if (SetClipboardData(CF_UNICODETEXT, unicode.handle)) {
                 static_cast<void>(unicode.release()); // success transfers ownership
-            } else {
-                fallbackOk = false;
+                textPublished = true;
             }
-        } else {
-            fallbackOk = false;
         }
-    } else {
-        fallbackOk = false;
     }
-    if (!fallbackOk && error) *error = QStringLiteral("Vector copied, but one or more SVG/PNG/text fallbacks could not be published.");
-    return true;
+    return ClipboardPublicationResult::fromFormats(
+        true, svgPublished, pngPublished, textPublished);
 }
 
 } // namespace vt

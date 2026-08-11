@@ -1,6 +1,7 @@
 #include "ui/slider_spin_box.h"
 
 #include <QDoubleSpinBox>
+#include <QEvent>
 #include <QHBoxLayout>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -33,13 +34,35 @@ SliderSpinBox::SliderSpinBox(QWidget* parent)
     m_spinBox->setKeyboardTracking(true);
     m_spinBox->setMinimumWidth(82);
 
-    connect(m_slider, &QSlider::sliderPressed, this, &SliderSpinBox::interactionStarted);
-    connect(m_slider, &QSlider::sliderReleased, this, &SliderSpinBox::interactionFinished);
+    m_slider->installEventFilter(this);
+    connect(m_slider, &QSlider::sliderPressed, this, [this] {
+        if (m_interactionActive) return;
+        m_interactionActive = true;
+        emit interactionStarted();
+    });
+    connect(m_slider, &QSlider::sliderReleased, this, &SliderSpinBox::finishActiveInteraction);
     connect(m_slider, &QSlider::valueChanged, this, &SliderSpinBox::updateSpinFromSlider);
     connect(m_spinBox, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         updateSliderFromValue(value);
         emit valueChanged(value);
     });
+}
+
+bool SliderSpinBox::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_slider && m_interactionActive
+        && (event->type() == QEvent::FocusOut || event->type() == QEvent::Hide
+            || event->type() == QEvent::UngrabMouse)) {
+        finishActiveInteraction();
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void SliderSpinBox::finishActiveInteraction()
+{
+    if (!m_interactionActive) return;
+    m_interactionActive = false;
+    emit interactionFinished();
 }
 
 void SliderSpinBox::setRange(double minimum, double maximum)

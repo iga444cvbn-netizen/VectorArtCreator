@@ -29,6 +29,7 @@ public:
     void clickCanvasAtDocumentPoint(const QPointF& point);
     void typeText(const QString& text);
     void pressKey(Qt::Key key, Qt::KeyboardModifiers modifiers = Qt::NoModifier);
+    void forceEditorFocusForSetup();
     void exitTextEditing();
     void selectObject(const QString& id);
     void applyBuiltInStyle(const QString& name);

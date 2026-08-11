@@ -1,6 +1,7 @@
 #include "ui/editor_controller.h"
 
 #include "core/effects/effect.h"
+#include "core/effects/effect_registry.h"
 #include "core/scene/scene_evaluator.h"
 #include "core/scene/object_frame.h"
 #include "core/serialization/project_serializer.h"
@@ -118,6 +119,9 @@ EditorController::EditorController(QObject* parent)
 {
     m_selectionModel = new SelectionModel(this);
     connect(m_selectionModel, &SelectionModel::selectionChanged, this, [this] {
+        // A held style gesture belongs to the object selected at press time.
+        // Selection changes commit that transaction before authority moves.
+        endEffectStackStrengthGesture();
         const QString previousObjectId = m_document.activeObjectId;
         if (!m_selectionModel->activeObjectId().isEmpty()) {
             if (TextObject* object = m_document.objectById(m_selectionModel->activeObjectId())) {
@@ -175,7 +179,10 @@ QUndoStack* EditorController::undoStack()
 
 bool EditorController::isModified() const
 {
-    return !m_undoStack.isClean();
+    if (!m_undoStack.isClean()) return true;
+    if (!m_effectStackStrengthGestureActive) return false;
+    const TextObject* object = m_document.objectById(m_effectStackStrengthGestureObjectId);
+    return object && !nearlyEqual(object->effectStackStrength, m_effectStackStrengthGestureStart);
 }
 
 QStringList EditorController::fontFamilies() const
@@ -351,6 +358,8 @@ void EditorController::setSelectedEffectId(const QString& effectId)
 
 void EditorController::newDocument()
 {
+    m_effectStackStrengthGestureActive = false;
+    m_effectStackStrengthGestureObjectId.clear();
     m_document = Document();
     m_previewStroke.reset();
     m_previewObjectId.clear();
@@ -633,11 +642,21 @@ void EditorController::clearSelection()
 void EditorController::selectObjectsInRect(const QRectF& rect, bool additive)
 {
     QStringList ids = additive ? m_selectionModel->selectedObjectIds() : QStringList();
+    QPainterPath marquee;
+    marquee.addRect(rect.normalized());
     for (const SceneObjectGeometry& sceneObject : m_sceneGeometry.objects) {
-        if (sceneObject.visible && !sceneObject.locked && rect.intersects(sceneObject.visualBounds)) {
-            if (!ids.contains(sceneObject.objectId)) {
-                ids.push_back(sceneObject.objectId);
-            }
+        if (!sceneObject.visible || sceneObject.locked
+            || !rect.intersects(sceneObject.frame.pageAabb())) {
+            continue;
+        }
+        QPainterPath selectableShape = sceneObject.geometry.combinedPath();
+        if (selectableShape.isEmpty()) {
+            selectableShape.addPolygon(sceneObject.frame.orientedPageQuad());
+            selectableShape.closeSubpath();
+        }
+        if ((marquee.intersects(selectableShape) || marquee.contains(selectableShape))
+            && !ids.contains(sceneObject.objectId)) {
+            ids.push_back(sceneObject.objectId);
         }
     }
     m_selectionModel->setSelectedObjectIds(ids, ids.value(0));
@@ -691,6 +710,10 @@ void EditorController::cancelNewTextObject(const QString& objectId)
 
 void EditorController::deleteObject(const QString& objectId)
 {
+    if (m_effectStackStrengthGestureActive
+        && m_effectStackStrengthGestureObjectId == objectId) {
+        endEffectStackStrengthGesture();
+    }
     Layer* layer = currentPageLayerForObject(m_document, objectId);
     if (!layer || !layer->visible || layer->locked) {
         return;
@@ -751,6 +774,7 @@ void EditorController::deleteSelectedObjects()
 
 void EditorController::duplicateSelectedObjects()
 {
+    endEffectStackStrengthGesture();
     const QStringList ids = selectedObjectIds();
     if (ids.isEmpty()) {
         return;
@@ -908,6 +932,7 @@ void EditorController::duplicateCurrentPage()
         for (const auto& object : layer->objects) {
             if (object) {
                 object->id = createStableId(QStringLiteral("text"));
+                assignFreshEffectInstanceIds(&object->effects);
             }
         }
     }
@@ -969,6 +994,7 @@ void EditorController::removeCurrentPage()
 
 void EditorController::switchPage(const QString& pageId)
 {
+    endEffectStackStrengthGesture();
     Page* page = m_document.pageById(pageId);
     if (!page || pageId == m_document.currentPageId) {
         return;
@@ -1318,6 +1344,13 @@ void EditorController::setEffectScope(int index, const EffectScope& scope)
         return;
     }
     Effect* effect = object->effects.at(index);
+    const EffectDescriptor* descriptor = effect
+        ? EffectRegistry::instance().descriptor(effect->typeId()) : nullptr;
+    if (scope.kind == EffectScopeKind::TextRange
+        && (!descriptor || !descriptor->supportsTextRange)) {
+        publishError(QStringLiteral("This effect does not support text-range targeting."));
+        return;
+    }
     if (!effect || effect->scope.toJson() == scope.toJson()) {
         return;
     }
@@ -1363,8 +1396,14 @@ void EditorController::addEffectMaskStroke(const QString& objectId,
     if (!editable) {
         return;
     }
-    if (!object->effects.byInstanceId(effectId)) {
+    Effect* effect = object->effects.byInstanceId(effectId);
+    if (!effect) {
         publishError(QStringLiteral("Select an effect before painting its mask."));
+        return;
+    }
+    const EffectDescriptor* descriptor = EffectRegistry::instance().descriptor(effect->typeId());
+    if (!descriptor || !descriptor->supportsMask) {
+        publishError(QStringLiteral("%1 does not support effect masks.").arg(effect->displayName()));
         return;
     }
 
@@ -1393,7 +1432,10 @@ void EditorController::setEffectMaskPreview(const QString& objectId,
         return;
     }
     TextObject* object = m_document.objectById(objectId);
-    if (!object || !object->effects.byInstanceId(effectId)) {
+    Effect* effect = object ? object->effects.byInstanceId(effectId) : nullptr;
+    const EffectDescriptor* descriptor = effect
+        ? EffectRegistry::instance().descriptor(effect->typeId()) : nullptr;
+    if (!effect || !descriptor || !descriptor->supportsMask) {
         clearEffectMaskPreview();
         return;
     }
@@ -1791,6 +1833,7 @@ bool EditorController::deletePreset(const QString& name, QString* error)
 
 bool EditorController::saveProject(const QString& filePath, QString* error)
 {
+    endEffectStackStrengthGesture();
     if (!ProjectSerializer::saveToFile(m_document, filePath, error)) {
         return false;
     }
@@ -1806,6 +1849,8 @@ bool EditorController::openProject(const QString& filePath, QString* error)
     if (!ProjectSerializer::loadFromFile(filePath, &loaded, error)) {
         return false;
     }
+    m_effectStackStrengthGestureActive = false;
+    m_effectStackStrengthGestureObjectId.clear();
     m_document = std::move(loaded);
     m_previewStroke.reset();
     m_previewObjectId.clear();
@@ -1834,9 +1879,19 @@ bool EditorController::exportSvg(const QString& filePath, ExportScope scope, QSt
 
 bool EditorController::copyForWord(ExportScope scope, QString* error) const
 {
+    const ClipboardPublicationResult result = copyForWordResult(scope);
+    if (error) *error = result.message;
+    return result.succeeded();
+}
+
+ClipboardPublicationResult EditorController::copyForWordResult(ExportScope scope) const
+{
     VectorExportPayload payload;
-    if (!buildExportPayload(scope, &payload, error)) return false;
-    return VectorClipboardService::copyForOffice(payload, error);
+    QString error;
+    if (!buildExportPayload(scope, &payload, &error)) {
+        return {ClipboardPublicationStatus::Failure, error};
+    }
+    return VectorClipboardService::copyForOfficeResult(payload);
 }
 
 bool EditorController::canExport(ExportScope scope) const

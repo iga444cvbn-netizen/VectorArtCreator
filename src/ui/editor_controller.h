@@ -152,6 +152,7 @@ public:
     [[nodiscard]] bool exportSvg(const QString& filePath, QString* error = nullptr) const;
     [[nodiscard]] bool exportSvg(const QString& filePath, ExportScope scope, QString* error) const;
     [[nodiscard]] bool copyForWord(ExportScope scope, QString* error = nullptr) const;
+    [[nodiscard]] ClipboardPublicationResult copyForWordResult(ExportScope scope) const;
     [[nodiscard]] bool canExport(ExportScope scope) const;
 
 public slots:

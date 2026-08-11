@@ -2,15 +2,18 @@
 #include "tests/support/semantic_equality.h"
 #include "tests/support/semantic_geometry.h"
 #include "tests/support/state_fingerprint.h"
+#include "tests/support/workload_builder.h"
 
 #include "core/effects/effect_registry.h"
 #include "core/scene/object_frame.h"
+#include "core/scene/scene_evaluator.h"
 #include "core/serialization/project_serializer.h"
 
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLineF>
+#include <QElapsedTimer>
 #include <QTest>
 
 #include <limits>
@@ -168,6 +171,7 @@ private slots:
     void invariantCheckerRejectsSyntheticCorruption();
     void currentSchemaLoaderRejectsIdentityCorruption();
     void frameRoundTripIsStableForStaticSnapshots();
+    void workloadBuildersAreDeterministicAndInspectable();
 };
 
 void OracleSelfTests::geometrySignatureRejectsMeaningfulDifferences()
@@ -387,6 +391,43 @@ void OracleSelfTests::frameRoundTripIsStableForStaticSnapshots()
         QVERIFY2(QLineF(local, restored).length() < 1.0e-8,
                  qPrintable(QStringLiteral("frame round-trip drifted: local=(%1,%2), restored=(%3,%4)")
                                 .arg(local.x()).arg(local.y()).arg(restored.x()).arg(restored.y())));
+    }
+}
+
+void OracleSelfTests::workloadBuildersAreDeterministicAndInspectable()
+{
+    const QVector<test::WorkloadParameters> matrix = {
+        {1, 0, 0, 0},
+        {10, 4, 8, 2},
+        {100, 2, 3, 1},
+    };
+    for (const test::WorkloadParameters& parameters : matrix) {
+        const Document first = test::buildDeterministicWorkload(parameters);
+        const Document replay = test::buildDeterministicWorkload(parameters);
+        QCOMPARE(test::semanticFingerprint(first), test::semanticFingerprint(replay));
+        const test::WorkloadSummary summary = test::inspectWorkload(first);
+        QCOMPARE(summary.objects, parameters.objectCount);
+        QCOMPARE(summary.maskStrokes,
+                 parameters.maskSegmentsPerObject > 0 ? parameters.objectCount : 0);
+        QCOMPARE(summary.maskPoints,
+                 parameters.maskSegmentsPerObject > 0
+                     ? parameters.objectCount * (parameters.maskSegmentsPerObject + 1) : 0);
+        QCOMPARE(summary.deformationSamples,
+                 parameters.objectCount * parameters.deformationSamplesPerObject);
+        QCOMPARE(summary.requestedGeneratorCopies,
+                 parameters.objectCount * parameters.generatorCopies);
+        QVERIFY2(test::checkInvariants(first).ok(), qPrintable(test::checkInvariants(first).summary()));
+
+        QElapsedTimer timer;
+        timer.start();
+        const SceneGeometry scene = SceneEvaluator::evaluate(*first.currentPage());
+        const qint64 elapsed = timer.elapsed();
+        QCOMPARE(scene.objects.size(), parameters.objectCount);
+        qInfo().noquote() << QStringLiteral(
+            "workload objects=%1 maskSegments/object=%2 deformationSamples/object=%3 generatorCopies=%4 elapsedMs=%5")
+            .arg(parameters.objectCount).arg(parameters.maskSegmentsPerObject)
+            .arg(parameters.deformationSamplesPerObject).arg(parameters.generatorCopies)
+            .arg(elapsed);
     }
 }
 

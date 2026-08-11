@@ -2,12 +2,15 @@
 
 #include "tests/support/geometry_assertions.h"
 #include "tests/support/invariant_checker.h"
+#include "tests/support/semantic_geometry.h"
+#include "core/scene/scene_evaluator.h"
 #include "ui/editor_canvas.h"
 #include "ui/editor_controller.h"
 #include "ui/main_window.h"
 #include "ui/slider_spin_box.h"
 
 #include <QCoreApplication>
+#include <QApplication>
 #include <QDir>
 #include <QGraphicsProxyWidget>
 #include <QGraphicsScene>
@@ -100,24 +103,31 @@ void UiTestDriver::clickCanvasAtDocumentPoint(const QPointF& point)
 
 void UiTestDriver::typeText(const QString& text)
 {
-    auto* editor = nativeEditor();
-    QVERIFY2(editor, "native editor is missing");
-    editor->setFocus(Qt::OtherFocusReason);
+    QWidget* target = QApplication::focusWidget();
+    QVERIFY2(target && target->isVisible(), "user typing requires an actual visible focus widget");
     if (text.isEmpty()) return;
     const bool ascii = std::all_of(text.cbegin(), text.cend(), [](QChar value) { return value.unicode() < 0x80; });
     if (ascii) {
-        QTest::keyClicks(editor, text);
+        QTest::keyClicks(target, text);
     } else {
         QInputMethodEvent commit;
         commit.setCommitString(text);
-        QCoreApplication::sendEvent(editor, &commit);
+        QCoreApplication::sendEvent(target, &commit);
     }
 }
 
 void UiTestDriver::pressKey(Qt::Key key, Qt::KeyboardModifiers modifiers)
 {
-    QWidget* target = nativeEditor() ? static_cast<QWidget*>(nativeEditor()) : static_cast<QWidget*>(m_canvas);
+    QWidget* target = QApplication::focusWidget();
+    QVERIFY2(target && target->isVisible(), "user key input requires an actual visible focus widget");
     QTest::keyClick(target, key, modifiers);
+}
+
+void UiTestDriver::forceEditorFocusForSetup()
+{
+    QPlainTextEdit* editor = nativeEditor();
+    QVERIFY2(editor && editor->isVisible(), "visible native editor is required for forced setup focus");
+    editor->setFocus(Qt::OtherFocusReason);
 }
 
 void UiTestDriver::exitTextEditing()
@@ -169,6 +179,13 @@ void UiTestDriver::waitForSceneGeneration(const QString& objectId) const
             QTRY_VERIFY_WITH_TIMEOUT(m_controller->sceneGeometry().objectById(objectId)
                                      ->geometry.hasVisibleGeometry(), 5000);
         }
+        const SceneGeometry expected = SceneEvaluator::evaluate(*m_controller->document().currentPage());
+        const SceneObjectGeometry* expectedObject = expected.objectById(objectId);
+        QVERIFY(expectedObject);
+        QString difference;
+        QVERIFY2(compareSceneObject(sceneObjectSignature(*expectedObject),
+                                    sceneObjectSignature(*m_controller->sceneGeometry().objectById(objectId)),
+                                    &difference), qPrintable(difference));
     }
 }
 

@@ -35,6 +35,8 @@ LayersPanel::LayersPanel(QWidget* parent)
     auto* rename = new QPushButton(QStringLiteral("Rename"), this);
     auto* visible = new QPushButton(QStringLiteral("Visible"), this);
     auto* lock = new QPushButton(QStringLiteral("Lock"), this);
+    visible->setObjectName(QStringLiteral("layerVisibleButton"));
+    lock->setObjectName(QStringLiteral("layerLockButton"));
     buttons->addWidget(add);
     buttons->addWidget(remove);
     buttons->addWidget(moveUp);
@@ -81,12 +83,16 @@ LayersPanel::LayersPanel(QWidget* parent)
     });
     connect(visible, &QPushButton::clicked, this, [this] {
         if (QTreeWidgetItem* item = m_tree->currentItem()) {
+            if (!item->data(0, Qt::UserRole + 1).toString().isEmpty()) item = item->parent();
+            if (!item) return;
             const bool next = item->data(0, Qt::UserRole + 2).toBool();
             emit visibilityToggled(!next);
         }
     });
     connect(lock, &QPushButton::clicked, this, [this] {
         if (QTreeWidgetItem* item = m_tree->currentItem()) {
+            if (!item->data(0, Qt::UserRole + 1).toString().isEmpty()) item = item->parent();
+            if (!item) return;
             const bool next = item->data(0, Qt::UserRole + 3).toBool();
             emit lockToggled(!next);
         }

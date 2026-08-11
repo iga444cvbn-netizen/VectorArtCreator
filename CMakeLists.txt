@@ -116,12 +116,14 @@ endif()
 enable_testing()
 
 set(TEST_SUPPORT_SOURCES
+    tests/support/async_evaluation_gate.cpp
     tests/support/geometry_assertions.cpp
     tests/support/invariant_checker.cpp
     tests/support/semantic_equality.cpp
     tests/support/semantic_geometry.cpp
     tests/support/state_fingerprint.cpp
     tests/support/test_fonts.cpp
+    tests/support/workload_builder.cpp
 )
 
 add_library(vector_typography_test_support STATIC ${TEST_SUPPORT_SOURCES})

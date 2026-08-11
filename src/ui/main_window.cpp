@@ -1,5 +1,7 @@
 #include "ui/main_window.h"
 
+#include "core/effects/effect_registry.h"
+
 #include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
@@ -336,30 +338,55 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_canvas, &EditorCanvas::effectMaskPreviewCleared,
             m_controller, &EditorController::clearEffectMaskPreview);
 
-    connect(m_typographyPanel, &TypographyPanel::textChangedByUser,
-            m_controller, &EditorController::setText);
+    const auto finishCanvasTextEditingForInspector = [this] {
+        if (m_canvas->isTextEditing()) m_canvas->finishTextEditing();
+    };
+    connect(m_typographyPanel, &TypographyPanel::textChangedByUser, this,
+            [this, finishCanvasTextEditingForInspector](const QString& text) {
+                finishCanvasTextEditingForInspector();
+                m_controller->setText(text);
+            });
     connect(m_typographyPanel, &TypographyPanel::fontFamilyChanged, this, [this](const QString& family) {
+        if (m_canvas->isTextEditing()) m_canvas->finishTextEditing();
         m_controller->setFontFamily(family);
         updateStylesForFamily(family);
     });
-    connect(m_typographyPanel, &TypographyPanel::fontStyleChanged,
-            m_controller, &EditorController::setFontStyle);
-    connect(m_typographyPanel, &TypographyPanel::fontWeightChanged,
-            m_controller, &EditorController::setFontWeight);
-    connect(m_typographyPanel, &TypographyPanel::fontItalicChanged,
-            m_controller, &EditorController::setFontItalic);
-    connect(m_typographyPanel, &TypographyPanel::fontUnderlineChanged,
-            m_controller, &EditorController::setFontUnderline);
-    connect(m_typographyPanel, &TypographyPanel::fontStrikeOutChanged,
-            m_controller, &EditorController::setFontStrikeOut);
-    connect(m_typographyPanel, &TypographyPanel::fontSizeChanged,
-            m_controller, &EditorController::setFontSize);
-    connect(m_typographyPanel, &TypographyPanel::trackingChanged,
-            m_controller, &EditorController::setTracking);
-    connect(m_typographyPanel, &TypographyPanel::lineSpacingChanged,
-            m_controller, &EditorController::setLineSpacing);
-    connect(m_typographyPanel, &TypographyPanel::fillColorChanged,
-            m_controller, &EditorController::setFillColor);
+    connect(m_typographyPanel, &TypographyPanel::fontStyleChanged, this,
+            [this, finishCanvasTextEditingForInspector](const QString& style) {
+                finishCanvasTextEditingForInspector(); m_controller->setFontStyle(style);
+            });
+    connect(m_typographyPanel, &TypographyPanel::fontWeightChanged, this,
+            [this, finishCanvasTextEditingForInspector](int weight) {
+                finishCanvasTextEditingForInspector(); m_controller->setFontWeight(weight);
+            });
+    connect(m_typographyPanel, &TypographyPanel::fontItalicChanged, this,
+            [this, finishCanvasTextEditingForInspector](bool italic) {
+                finishCanvasTextEditingForInspector(); m_controller->setFontItalic(italic);
+            });
+    connect(m_typographyPanel, &TypographyPanel::fontUnderlineChanged, this,
+            [this, finishCanvasTextEditingForInspector](bool underline) {
+                finishCanvasTextEditingForInspector(); m_controller->setFontUnderline(underline);
+            });
+    connect(m_typographyPanel, &TypographyPanel::fontStrikeOutChanged, this,
+            [this, finishCanvasTextEditingForInspector](bool strikeOut) {
+                finishCanvasTextEditingForInspector(); m_controller->setFontStrikeOut(strikeOut);
+            });
+    connect(m_typographyPanel, &TypographyPanel::fontSizeChanged, this,
+            [this, finishCanvasTextEditingForInspector](qreal size) {
+                finishCanvasTextEditingForInspector(); m_controller->setFontSize(size);
+            });
+    connect(m_typographyPanel, &TypographyPanel::trackingChanged, this,
+            [this, finishCanvasTextEditingForInspector](qreal tracking) {
+                finishCanvasTextEditingForInspector(); m_controller->setTracking(tracking);
+            });
+    connect(m_typographyPanel, &TypographyPanel::lineSpacingChanged, this,
+            [this, finishCanvasTextEditingForInspector](qreal spacing) {
+                finishCanvasTextEditingForInspector(); m_controller->setLineSpacing(spacing);
+            });
+    connect(m_typographyPanel, &TypographyPanel::fillColorChanged, this,
+            [this, finishCanvasTextEditingForInspector](const QColor& color) {
+                finishCanvasTextEditingForInspector(); m_controller->setFillColor(color);
+            });
     connect(m_typographyPanel, &TypographyPanel::refreshFontsRequested,
             m_controller, &EditorController::refreshFonts);
 
@@ -400,14 +427,24 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_effectsPanel, &EffectsPanel::effectSelected,
             this, [this](const QString& effectId) {
                 m_controller->setSelectedEffectId(effectId);
-                m_canvas->setMaskEnabled(!effectId.isEmpty());
-                m_canvas->setMaskEffectId(effectId);
+                const TextObject* object = m_controller->activeObject();
+                const Effect* effect = object ? object->effects.byInstanceId(effectId) : nullptr;
+                const EffectDescriptor* descriptor = effect
+                    ? EffectRegistry::instance().descriptor(effect->typeId()) : nullptr;
+                const bool supportsMask = descriptor && descriptor->supportsMask;
+                m_canvas->setMaskEnabled(supportsMask);
+                m_canvas->setMaskEffectId(supportsMask ? effectId : QString());
             });
     connect(m_controller, &EditorController::selectedEffectChanged, this,
             [this](const QString& effectId) {
                 m_effectsPanel->setSelectedEffectId(effectId);
-                m_canvas->setMaskEnabled(!effectId.isEmpty());
-                m_canvas->setMaskEffectId(effectId);
+                const TextObject* object = m_controller->activeObject();
+                const Effect* effect = object ? object->effects.byInstanceId(effectId) : nullptr;
+                const EffectDescriptor* descriptor = effect
+                    ? EffectRegistry::instance().descriptor(effect->typeId()) : nullptr;
+                const bool supportsMask = descriptor && descriptor->supportsMask;
+                m_canvas->setMaskEnabled(supportsMask);
+                m_canvas->setMaskEffectId(supportsMask ? effectId : QString());
             });
     connect(m_effectsPanel, &EffectsPanel::effectScopeChanged, this,
             [this](const QString& effectId, const EffectScope& scope) {
@@ -728,10 +765,14 @@ void MainWindow::exportSvg()
 
 void MainWindow::copyForWord()
 {
-    QString error;
     const ExportScope scope = outputScope();
-    if (!m_controller->copyForWord(scope, &error)) {
-        QMessageBox::warning(this, QStringLiteral("Copy for Word"), error);
+    const ClipboardPublicationResult result = m_controller->copyForWordResult(scope);
+    if (!result.succeeded()) {
+        QMessageBox::warning(this, QStringLiteral("Copy for Word"), result.message);
+        return;
+    }
+    if (!result.complete()) {
+        setStatus(result.message);
         return;
     }
     setStatus(QStringLiteral("Copied %1 for Word, PowerPoint, and other Office apps.")
