@@ -24,6 +24,7 @@
 #include <QStringList>
 #include <QToolBar>
 #include <QToolButton>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <functional>
@@ -278,10 +279,13 @@ MainWindow::MainWindow(QWidget* parent)
         if (object && object->id == objectId) {
             m_newTextEditObjectId = objectId;
             m_newTextEditTouched = false;
-            m_canvas->beginTextEditing(objectId,
-                                       object->sourceText,
-                                       object->font.toQFont(object->typography.fontSize),
-                                       emptyTextEditorBounds(*object));
+            QTimer::singleShot(0, m_canvas, [this, objectId] {
+                const TextObject* pending = m_controller->document().objectById(objectId);
+                if (!pending || m_controller->selectionModel()->activeObjectId() != objectId) return;
+                m_canvas->beginTextEditing(objectId, pending->sourceText,
+                                           pending->font.toQFont(pending->typography.fontSize),
+                                           emptyTextEditorBounds(*pending));
+            });
         }
     });
     connect(m_canvas, &EditorCanvas::textEditRequested, this, [this](const QString& objectId) {
@@ -619,9 +623,13 @@ void MainWindow::addTextAtPageCenter()
     if (!object || object->id != objectId) return;
     m_newTextEditObjectId = objectId;
     m_newTextEditTouched = false;
-    m_canvas->beginTextEditing(objectId, object->sourceText,
-                               object->font.toQFont(object->typography.fontSize),
-                               emptyTextEditorBounds(*object));
+    QTimer::singleShot(0, m_canvas, [this, objectId] {
+        const TextObject* pending = m_controller->document().objectById(objectId);
+        if (!pending || m_controller->selectionModel()->activeObjectId() != objectId) return;
+        m_canvas->beginTextEditing(objectId, pending->sourceText,
+                                   pending->font.toQFont(pending->typography.fontSize),
+                                   emptyTextEditorBounds(*pending));
+    });
 }
 
 void MainWindow::updateStylesForFamily(const QString& family)
