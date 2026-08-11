@@ -187,7 +187,10 @@ QVector<BrushSample> resampleBrushStroke(const QVector<QPointF>& positions,
     if (samples.size() < boundedMaximum && lastOutput != cleanPositions.last()) {
         samples.push_back({cleanPositions.last(), cleanPositions.last() - lastOutput, boundedPressure});
     } else if (samples.size() == boundedMaximum && samples.last().position != cleanPositions.last()) {
-        samples.last().delta = cleanPositions.last() - samples.last().position;
+        const QPointF previousPosition = samples.size() > 1
+            ? samples.at(samples.size() - 2).position
+            : cleanPositions.last();
+        samples.last().delta = cleanPositions.last() - previousPosition;
         samples.last().position = cleanPositions.last();
     }
     return samples;

@@ -247,6 +247,7 @@ void CoreTests::projectSerializationRoundTrip()
     original.title = QStringLiteral("Round trip");
     TextObject& object = original.primaryTextObject();
     object = configuredText();
+    original.activeObjectId = object.id;
 
     auto wave = std::make_unique<WaveEffect>();
     wave->amplitude = 0.21;
@@ -956,6 +957,11 @@ void CoreTests::deformationResamplingIsBoundedAndDeterministic()
     QCOMPARE(first, second);
     QCOMPARE(first.first().position, positions.first());
     QCOMPARE(first.last().position, positions.last());
+    QCOMPARE(first.first().delta, QPointF());
+    for (int index = 1; index < first.size(); ++index) {
+        QCOMPARE(first.at(index).delta,
+                 first.at(index).position - first.at(index - 1).position);
+    }
 }
 
 void CoreTests::pushStrokeIsDeterministic()

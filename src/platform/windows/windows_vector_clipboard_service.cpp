@@ -110,22 +110,31 @@ HENHMETAFILE renderEmf(const VectorExportPayload& payload)
     {
         Gdiplus::Metafile metafile(reference, frame, Gdiplus::MetafileFrameUnitGdi,
                                    Gdiplus::EmfTypeEmfPlusDual, L"VectorTypographyEditor");
-        DeleteDC(reference);
-        Gdiplus::Graphics graphics(&metafile);
-        graphics.SetSmoothingMode(Gdiplus::SmoothingModeHighQuality);
-        graphics.ScaleTransform(static_cast<Gdiplus::REAL>(unitsPerLogicalPixel),
-                                static_cast<Gdiplus::REAL>(unitsPerLogicalPixel));
-        for (const VectorExportRecord& record : payload.records) {
-            Gdiplus::GraphicsPath path(Gdiplus::FillModeWinding);
-            addPath(path, record.path);
-            const QColor color = record.fill;
-            const BYTE alpha = static_cast<BYTE>(qBound(0, qRound(record.opacity * 255.0), 255));
-            Gdiplus::SolidBrush brush(Gdiplus::Color(alpha, color.red(), color.green(), color.blue()));
-            graphics.FillPath(&brush, &path);
+        if (metafile.GetLastStatus() == Gdiplus::Ok) {
+            // GDI+ finalizes the recording when Graphics is destroyed.  Calling
+            // GetHENHMETAFILE while Graphics is still alive returns null on the
+            // headless Windows runner and can do the same in production.
+            {
+                Gdiplus::Graphics graphics(&metafile);
+                graphics.SetSmoothingMode(Gdiplus::SmoothingModeHighQuality);
+                graphics.ScaleTransform(static_cast<Gdiplus::REAL>(unitsPerLogicalPixel),
+                                        static_cast<Gdiplus::REAL>(unitsPerLogicalPixel));
+                for (const VectorExportRecord& record : payload.records) {
+                    Gdiplus::GraphicsPath path(Gdiplus::FillModeWinding);
+                    addPath(path, record.path);
+                    const QColor color = record.fill;
+                    const BYTE alpha = static_cast<BYTE>(
+                        qBound(0, qRound(record.opacity * 255.0), 255));
+                    Gdiplus::SolidBrush brush(
+                        Gdiplus::Color(alpha, color.red(), color.green(), color.blue()));
+                    graphics.FillPath(&brush, &path);
+                }
+                graphics.Flush(Gdiplus::FlushIntentionSync);
+            }
+            result = metafile.GetHENHMETAFILE();
         }
-        graphics.Flush(Gdiplus::FlushIntentionSync);
-        result = metafile.GetHENHMETAFILE();
     }
+    DeleteDC(reference);
     return result;
 }
 
