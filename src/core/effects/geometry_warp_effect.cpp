@@ -1,6 +1,7 @@
 #include "core/effects/geometry_warp_effect.h"
 
 #include <cmath>
+#include <utility>
 
 namespace vt {
 
@@ -45,7 +46,7 @@ QPointF GeometryWarpEffect::warp(const QPointF& p, const EffectContext& c) const
     }
     if (m_mode==Mode::Bulge || m_mode==Mode::Pinch) {
         const QPointF center(r.left()+m_centerX*w,r.top()+m_centerY*h); const QPointF d=p-center;
-        const qreal distance=std::sqrt(d.x()*d.x()+d.y()*d.y); const qreal limit=qMax<qreal>(1,m_radius*h);
+        const qreal distance=std::sqrt(d.x()*d.x()+d.y()*d.y()); const qreal limit=qMax<qreal>(1,m_radius*h);
         const qreal t=qBound<qreal>(0,1-distance/limit,1); const qreal sign=m_mode==Mode::Bulge?1:-1;
         return center+d*(1+sign*m_amount*strength*std::pow(t,m_falloff)*0.6);
     }
