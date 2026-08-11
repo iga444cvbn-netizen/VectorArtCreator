@@ -298,6 +298,8 @@ void EffectsPanelUiTests::textToolStartsFocusedAtCurrentZoom()
     typeUnicode(editor, QStringLiteral("Test 123"));
     const QString objectId = canvas->editingObjectId();
     QTRY_COMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("Test 123"));
+    QTRY_VERIFY(controller->sceneGeometry().objectById(objectId) != nullptr);
+    QTRY_VERIFY(controller->sceneGeometry().objectById(objectId)->geometry.hasVisibleGeometry());
     canvas->finishTextEditing();
     QCoreApplication::processEvents();
 }
