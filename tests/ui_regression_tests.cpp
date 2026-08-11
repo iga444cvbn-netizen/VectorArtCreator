@@ -14,7 +14,7 @@
 #include <QGraphicsView>
 #include <QGraphicsProxyWidget>
 #include <QGraphicsScene>
-#include <QKeyEvent>
+#include <QInputMethodEvent>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
@@ -75,12 +75,9 @@ QPlainTextEdit* nativeTextEditor(QGraphicsView* editorView)
 
 void typeUnicode(QPlainTextEdit* editor, const QString& text)
 {
-    for (const QChar character : text) {
-        QKeyEvent press(QEvent::KeyPress, Qt::Key_unknown, Qt::NoModifier, QString(character));
-        QCoreApplication::sendEvent(editor, &press);
-        QKeyEvent release(QEvent::KeyRelease, Qt::Key_unknown, Qt::NoModifier, QString(character));
-        QCoreApplication::sendEvent(editor, &release);
-    }
+    QInputMethodEvent commit;
+    commit.setCommitString(text);
+    QCoreApplication::sendEvent(editor, &commit);
 }
 
 } // namespace
