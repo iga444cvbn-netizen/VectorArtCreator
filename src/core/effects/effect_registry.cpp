@@ -2,6 +2,7 @@
 
 #include "core/effects/glyph_jitter_effect.h"
 #include "core/effects/geometry_warp_effect.h"
+#include "core/effects/trail_effect.h"
 #include "core/effects/procedural_effect.h"
 #include "core/effects/stretch_effect.h"
 #include "core/effects/wave_effect.h"
@@ -97,6 +98,9 @@ EffectRegistry::EffectRegistry()
         warp("noiseWarp", "Noise Warp", GeometryWarpEffect::Mode::NoiseWarp, "Applies deterministic contour noise.", {QStringLiteral("amount"),QStringLiteral("frequency"),QStringLiteral("seed")}),
         warp("melt", "Melt", GeometryWarpEffect::Mode::Melt, "Applies a bounded downward contour displacement.", {QStringLiteral("amount"),QStringLiteral("frequency"),QStringLiteral("seed")}),
         warp("smear", "Smear", GeometryWarpEffect::Mode::Smear, "Applies a bounded directional contour displacement.", {QStringLiteral("amount"),QStringLiteral("frequency"),QStringLiteral("seed")}),
+        {QStringLiteral("echo"),QStringLiteral("Echo"),QStringLiteral("Generator"),QStringLiteral("Creates bounded fading vector copies."),{QStringLiteral("echo"),QStringLiteral("trail")},EffectDomain::Generator,false,true,true,false,true,{QStringLiteral("copyCount"),QStringLiteral("offsetX"),QStringLiteral("offsetY")},{0,2},QStringLiteral("effect-echo"),[]{return std::make_unique<TrailEffect>(QStringLiteral("echo"),QStringLiteral("Echo"));}},
+        {QStringLiteral("ghost"),QStringLiteral("Ghost"),QStringLiteral("Generator"),QStringLiteral("Creates bounded translucent vector copies."),{QStringLiteral("ghost"),QStringLiteral("trail")},EffectDomain::Generator,false,true,true,false,true,{QStringLiteral("copyCount"),QStringLiteral("opacityDecay")},{0,2},QStringLiteral("effect-ghost"),[]{return std::make_unique<TrailEffect>(QStringLiteral("ghost"),QStringLiteral("Ghost"));}},
+        {QStringLiteral("afterimage"),QStringLiteral("Afterimage"),QStringLiteral("Generator"),QStringLiteral("Creates bounded fading afterimages."),{QStringLiteral("afterimage"),QStringLiteral("trail")},EffectDomain::Generator,false,true,true,false,true,{QStringLiteral("copyCount"),QStringLiteral("rotationStep")},{0,2},QStringLiteral("effect-afterimage"),[]{return std::make_unique<TrailEffect>(QStringLiteral("afterimage"),QStringLiteral("Afterimage"));}},
     };
 }
 

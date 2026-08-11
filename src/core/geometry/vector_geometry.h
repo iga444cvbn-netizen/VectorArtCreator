@@ -5,6 +5,7 @@
 #include <QRectF>
 #include <QTransform>
 #include <QVector>
+#include <QString>
 
 namespace vt {
 
@@ -18,6 +19,9 @@ struct GeometryPiece {
     // Immutable source-layout anchor. Effects may move anchor, but never this
     // reference used by later effect normalization/order semantics.
     QPointF originalAnchor;
+    qreal opacityMultiplier = 1.0;
+    int generationDepth = 0;
+    QString generatorEffectId;
 };
 
 class VectorGeometry {

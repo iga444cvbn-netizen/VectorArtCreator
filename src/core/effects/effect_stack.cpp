@@ -260,6 +260,7 @@ void EffectStack::apply(VectorGeometry& geometry, qreal stackStrength) const
         if (!effect || !effect->enabled) {
             continue;
         }
+        if (effect->generatesGeometry()) { effect->apply(geometry, context); continue; }
         if (effect->scope.kind == EffectScopeKind::WholeObject && effect->maskStrokes.isEmpty()) {
             effect->apply(geometry, context);
             continue;

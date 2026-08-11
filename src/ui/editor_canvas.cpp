@@ -329,8 +329,13 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
         }
         if (object.geometry.hasVisibleGeometry()) {
             painter.setPen(Qt::NoPen);
-            painter.setBrush(object.fill.isValid() ? object.fill : m_fill);
-            painter.drawPath(object.geometry.combinedPath());
+            const QColor baseFill = object.fill.isValid() ? object.fill : m_fill;
+            for (const GeometryPiece& piece : object.geometry.pieces) {
+                QColor fill = baseFill;
+                fill.setAlphaF(baseFill.alphaF() * qBound<qreal>(0.0, piece.opacityMultiplier, 1.0));
+                painter.setBrush(fill);
+                painter.drawPath(piece.path);
+            }
         } else {
             painter.setPen(QPen(QColor(125, 145, 165, 170), 1.0 / qMax<qreal>(0.01, m_zoom), Qt::DashLine));
             painter.setBrush(Qt::NoBrush);

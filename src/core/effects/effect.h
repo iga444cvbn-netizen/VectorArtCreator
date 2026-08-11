@@ -79,6 +79,7 @@ public:
     [[nodiscard]] virtual bool setParameter(const QString& id, double value) = 0;
     [[nodiscard]] virtual QJsonObject parametersToJson() const = 0;
     [[nodiscard]] virtual bool parametersFromJson(const QJsonObject& object, QString* error) = 0;
+    [[nodiscard]] virtual bool generatesGeometry() const { return false; }
 
     QString instanceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     bool enabled = true;
