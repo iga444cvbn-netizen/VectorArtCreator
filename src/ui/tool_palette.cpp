@@ -144,6 +144,7 @@ ToolPalette::ToolPalette(QWidget* parent)
         button->setMaximumSize(46, 46);
         button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         button->setAccessibleName(toolName(tool));
+        button->setObjectName(QStringLiteral("tool/%1").arg(toolName(tool).toLower()));
         m_group->addButton(button, static_cast<int>(tool));
         m_buttons.insert(static_cast<int>(tool), button);
         layout->addWidget(button, 0, Qt::AlignHCenter);

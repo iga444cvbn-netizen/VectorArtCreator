@@ -13,6 +13,9 @@ on:
       # Phase 4C is stacked on the corrected Phase 4B branch until the review
       # chain reaches main.
       - codex/phase-4b-expressive-geometry
+      # Phase 4T is reviewed on top of the repaired Phase 4C branch until the
+      # stack lands on main.
+      - codex/phase-4c-production-export
       # The Phase 3 repair branch is intentionally reviewed through focused
       # stacked PRs; validate those fixes with the same Windows job.
       - codex/phase3-editor-workspace
@@ -81,45 +84,39 @@ jobs:
           $env:QT_QPA_PLATFORM_PLUGIN_PATH = $qtPlatforms
           Write-Host "Running tests with Qt runtime PATH: $env:Path"
           Write-Host "Running tests with Qt platform plugin path: $env:QT_QPA_PLATFORM_PLUGIN_PATH"
-          ctest --test-dir build --output-on-failure -VV
+          Write-Host "CTest layers: core, integration, UI smoke/regression, Windows platform."
+          ctest --test-dir build --output-on-failure -VV -L "core|integration|ui|windows"
           $ctestExit = $LASTEXITCODE
           if ($ctestExit -ne 0) {
             Write-Host "CTest failed; replaying the Qt Test executable with verbose output."
-            $testExecutable = Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_tests.exe'
-            $fullReplayLog = Join-Path $env:RUNNER_TEMP 'vector-typography-full-replay.txt'
-            & $testExecutable -vs -o "$fullReplayLog,txt"
-            Write-Host "Full Qt Test replay exit code: $LASTEXITCODE"
-            if (Test-Path -LiteralPath $fullReplayLog) {
-              Get-Content -LiteralPath $fullReplayLog
-            }
-            $uiTestExecutable = Join-Path $env:GITHUB_WORKSPACE 'build\vector_typography_ui_tests.exe'
-            $uiReplayLog = Join-Path $env:RUNNER_TEMP 'vector-typography-ui-replay.txt'
-            & $uiTestExecutable -vs -o "$uiReplayLog,txt"
-            Write-Host "UI Qt Test replay exit code: $LASTEXITCODE"
-            if (Test-Path -LiteralPath $uiReplayLog) {
-              Get-Content -LiteralPath $uiReplayLog
-            }
-            $diagnosticCases = @(
-              'documentHierarchyHasStableIds',
-              'legacyFlatProjectMigratesToPageAndLayer',
-              'multilineShapingPreservesLinesAndClusters',
-              'scopedEffectsOnlyTouchSelectedClusters',
-              'proceduralEffectsAreDeterministicAndAvailable',
-              'selectionModelSupportsSingleAndRangeSelection',
-              'controllerSceneCommandsMoveDuplicateAndDeleteObjects',
-              'controllerPageAndLayerCommandsAreUndoable'
+            $executables = @(
+              'vector_typography_tests.exe',
+              'vector_typography_effect_contract_tests.exe',
+              'vector_typography_integration_tests.exe',
+              'vector_typography_ui_smoke_tests.exe',
+              'vector_typography_ui_tests.exe',
+              'vector_typography_windows_tests.exe'
             )
-            foreach ($diagnosticCase in $diagnosticCases) {
-              $caseLog = Join-Path $env:RUNNER_TEMP ("vector-typography-$diagnosticCase.txt")
-              & $testExecutable $diagnosticCase -o "$caseLog,txt"
-              $caseExit = $LASTEXITCODE
-              Write-Host "Diagnostic case $diagnosticCase exit code: $caseExit"
-              if (Test-Path -LiteralPath $caseLog) {
-                Get-Content -LiteralPath $caseLog
-              }
+            foreach ($executableName in $executables) {
+              $testExecutable = Join-Path $env:GITHUB_WORKSPACE ("build\$executableName")
+              if (-not (Test-Path -LiteralPath $testExecutable)) { continue }
+              $replayLog = Join-Path $env:RUNNER_TEMP ("$executableName-replay.txt")
+              & $testExecutable -vs -o "$replayLog,txt"
+              Write-Host "$executableName replay exit code: $LASTEXITCODE"
+              if (Test-Path -LiteralPath $replayLog) { Get-Content -LiteralPath $replayLog }
             }
             exit $ctestExit
           }
+
+      - name: Upload test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VectorTypographyEditor-test-diagnostics
+          path: |
+            build/Testing/Temporary
+            build/test-artifacts
+          if-no-files-found: warn
 
       - name: Package runnable Windows build
         shell: pwsh

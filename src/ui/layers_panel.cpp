@@ -20,6 +20,7 @@ LayersPanel::LayersPanel(QWidget* parent)
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     m_tree = new QTreeWidget(this);
+    m_tree->setObjectName(QStringLiteral("layersTree"));
     m_tree->setHeaderHidden(true);
     m_tree->setRootIsDecorated(true);
     m_tree->setIndentation(16);

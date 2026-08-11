@@ -73,6 +73,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     auto* pageHeader = new QHBoxLayout();
     m_pageTabs = new QTabBar(canvasColumn);
+    m_pageTabs->setObjectName(QStringLiteral("pageTabs"));
     m_pageTabs->setExpanding(false);
     m_pageTabs->setUsesScrollButtons(true);
     m_pageTabs->setMovable(true);
@@ -110,7 +111,7 @@ MainWindow::MainWindow(QWidget* parent)
     sidebarLayout->setContentsMargins(4, 4, 4, 4);
     sidebarLayout->setSpacing(4);
     m_addTextButton = new QPushButton(QStringLiteral("Add Text"), sidebar);
-    m_addTextButton->setObjectName(QStringLiteral("emptyAddText"));
+    m_addTextButton->setObjectName(QStringLiteral("addTextButton"));
     m_addTextButton->setToolTip(QStringLiteral("Create editable text at the page centre"));
     sidebarLayout->addWidget(m_addTextButton);
 
@@ -931,6 +932,7 @@ void MainWindow::createActions()
     fileToolBar->addAction(m_actions.value(QStringLiteral("file.exportSvg")));
     fileToolBar->addAction(m_copyForWordAction);
     m_outputScope = new QComboBox(fileToolBar);
+    m_outputScope->setObjectName(QStringLiteral("exportScope"));
     m_outputScope->addItem(QStringLiteral("Selection"), static_cast<int>(ExportScope::Selection));
     m_outputScope->addItem(QStringLiteral("Current Page"), static_cast<int>(ExportScope::CurrentPage));
     const int scopeValue = QSettings().value(QStringLiteral("output/scope"),

@@ -54,6 +54,9 @@ public:
     [[nodiscard]] QString editingObjectId() const { return m_editingObjectId; }
     [[nodiscard]] QString editingPageId() const { return m_editingPageId; }
     [[nodiscard]] qreal zoom() const;
+    // Read-only coordinate seam used by diagnostics and accessibility tooling.
+    // It exposes the same page-to-widget transform used to paint the canvas.
+    [[nodiscard]] QPointF mapDocumentToViewport(const QPointF& documentPoint) const;
     [[nodiscard]] BrushMode brushMode() const { return m_brushMode; }
     [[nodiscard]] BrushTarget brushTarget() const { return m_brushTarget; }
 
