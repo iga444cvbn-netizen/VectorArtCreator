@@ -78,9 +78,11 @@ build\vector_typography_integration_tests.exe seededValidWorkflows:1337 -vs
 
 Windows CI uploads CTest output plus `build/test-artifacts` even when tests
 fail.  Smoke scenarios can save a PNG snapshot without making snapshots a
-font-sensitive pass/fail oracle.  Manual testing remains responsible for
-subjective UX/visual quality and actual Word/PowerPoint paste behavior; CI
-does validate the EMF, SVG, PNG and Unicode clipboard formats without Office.
+font-sensitive pass/fail oracle.  The Windows clipboard test validates EMF,
+SVG, PNG and Unicode formats when the runner can allocate an EMF device
+context; it records an explicit skip on headless Windows runners where GDI+
+cannot create one. Manual testing remains responsible for subjective UX/visual
+quality and actual Word/PowerPoint paste behavior.
 
 ## Historical regression coverage
 

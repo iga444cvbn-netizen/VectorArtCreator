@@ -36,6 +36,16 @@ bool nearlyEqual(double left, double right)
     return std::abs(left - right) < 1.0e-12;
 }
 
+void assignFreshEffectInstanceIds(EffectStack* stack)
+{
+    if (!stack) return;
+    for (int index = 0; index < stack->size(); ++index) {
+        if (Effect* effect = stack->at(index)) {
+            effect->instanceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        }
+    }
+}
+
 bool effectStacksEqual(const EffectStack& left, const EffectStack& right)
 {
     return QJsonDocument(left.toJson()).toJson(QJsonDocument::Compact)
@@ -758,6 +768,7 @@ void EditorController::duplicateSelectedObjects()
         }
         TextObject duplicate(*source);
         duplicate.id = createStableId(QStringLiteral("text"));
+        assignFreshEffectInstanceIds(&duplicate.effects);
         duplicate.transform.position += QPointF(24.0, 24.0);
         duplicateIds.push_back(duplicate.id);
         m_undoStack.push(new AddTextObjectCommand(
@@ -1625,6 +1636,7 @@ void EditorController::pasteObjects()
             continue;
         }
         object.id = createStableId(QStringLiteral("text"));
+        assignFreshEffectInstanceIds(&object.effects);
         object.transform.position += QPointF(24.0, 24.0);
         pastedIds.push_back(object.id);
         m_undoStack.push(new AddTextObjectCommand(
@@ -1722,6 +1734,7 @@ bool EditorController::applyPresetById(const QString& id, QString* error)
             }
         } else {
             next = entry.preset.effects;
+            assignFreshEffectInstanceIds(&next);
         }
         const qreal nextStrength = hasRange ? object->effectStackStrength : 1.0;
         if (!effectStacksEqual(object->effects, next)

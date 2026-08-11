@@ -70,22 +70,25 @@ bool editorOverlayAttached(const QGraphicsProxyWidget* proxy,
     }
     const QRectF local = object.frame.baseLocalBounds.isEmpty()
         ? QRectF(0.0, 0.0, 120.0, 36.0) : object.frame.baseLocalBounds;
-    const QPolygonF expected = documentToView.map(object.frame.localToPage.map(QPolygonF(local)));
-    const QRectF actualRect = proxy->sceneBoundingRect();
-    const QRectF expectedRect = expected.boundingRect();
-    if (!isFinite(actualRect) || !isFinite(expectedRect)) {
-        if (error) *error = QStringLiteral("editor or expected overlay bounds are non-finite");
+    QTransform localOffset;
+    localOffset.translate(local.x(), local.y());
+    const QTransform expectedTransform = documentToView * object.frame.localToPage * localOffset;
+    const QTransform actualTransform = proxy->transform();
+    if (!isFinite(actualTransform) || !isFinite(expectedTransform)) {
+        if (error) *error = QStringLiteral("editor or expected overlay transform is non-finite");
         return false;
     }
-    const QPointF delta = actualRect.center() - expectedRect.center();
-    const qreal permitted = tolerance + qMax(actualRect.width() - expectedRect.width(), 0.0) * 0.5
-        + qMax(actualRect.height() - expectedRect.height(), 0.0) * 0.5;
-    if (QLineF(QPointF(), delta).length() > permitted) {
+    const QPointF actualOrigin = actualTransform.map(QPointF());
+    const QPointF expectedOrigin = expectedTransform.map(QPointF());
+    if (!approximatelyEqual(actualOrigin, expectedOrigin, tolerance)
+        || !approximatelyEqual(actualTransform.map(QPointF(1.0, 0.0)),
+                               expectedTransform.map(QPointF(1.0, 0.0)), tolerance)
+        || !approximatelyEqual(actualTransform.map(QPointF(0.0, 1.0)),
+                               expectedTransform.map(QPointF(0.0, 1.0)), tolerance)) {
         if (error) {
-            *error = QStringLiteral("editor detached: expected center (%1,%2), actual (%3,%4), distance %5")
-                .arg(expectedRect.center().x()).arg(expectedRect.center().y())
-                .arg(actualRect.center().x()).arg(actualRect.center().y())
-                .arg(QLineF(QPointF(), delta).length());
+            *error = QStringLiteral("editor detached: expected origin (%1,%2), actual (%3,%4)")
+                .arg(expectedOrigin.x()).arg(expectedOrigin.y())
+                .arg(actualOrigin.x()).arg(actualOrigin.y());
         }
         return false;
     }

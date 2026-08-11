@@ -10,9 +10,11 @@ namespace {
 
 void removeTransient(QJsonObject* document)
 {
-    document->remove(QStringLiteral("createdAt"));
-    document->remove(QStringLiteral("modifiedAt"));
     document->remove(QStringLiteral("activeObjectId"));
+    QJsonObject metadata = document->value(QStringLiteral("metadata")).toObject();
+    metadata.remove(QStringLiteral("createdAt"));
+    metadata.remove(QStringLiteral("modifiedAt"));
+    document->insert(QStringLiteral("metadata"), metadata);
 }
 
 } // namespace
