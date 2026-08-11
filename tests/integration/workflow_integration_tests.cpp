@@ -824,7 +824,8 @@ void WorkflowIntegrationTests::seededValidWorkflows()
             } else if (action == 28) {
                 QStringList eligible;
                 for (const SceneObjectGeometry& sceneObject : controller.sceneGeometry().objects) {
-                    if (sceneObject.visible && !sceneObject.locked) {
+                    if (sceneObject.pageId == controller.document().currentPageId
+                        && sceneObject.visible && !sceneObject.locked) {
                         eligible.push_back(sceneObject.objectId);
                     }
                 }
