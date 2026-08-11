@@ -632,6 +632,8 @@ void WorkflowIntegrationTests::seededValidWorkflows()
     bool explicitSteps = false;
     const int requestedSteps = qEnvironmentVariableIntValue("VT_WORKFLOW_STEPS", &explicitSteps);
     const int steps = explicitSteps ? qBound(1, requestedSteps, 2000) : 200;
+    QTemporaryDir exportDirectory;
+    QVERIFY(exportDirectory.isValid());
     const QStringList effectTypes = {
         QStringLiteral("wave"), QStringLiteral("glyphJitter"), QStringLiteral("stretch"),
         QStringLiteral("bend"), QStringLiteral("noiseWarp"), QStringLiteral("melt"),
@@ -658,7 +660,7 @@ void WorkflowIntegrationTests::seededValidWorkflows()
     };
 
     for (int step = 0; step < steps; ++step) {
-        const int action = random.bounded(26);
+        const int action = random.bounded(31);
         if (action == 0 || currentObjects().isEmpty()) {
             const QString id = controller.createTextObject(QPointF(random.bounded(500), random.bounded(300)),
                                                            QStringLiteral("Seed %1 step %2").arg(seed).arg(step));
@@ -793,6 +795,85 @@ void WorkflowIntegrationTests::seededValidWorkflows()
                     controller.undoStack()->undo(); history << "Undo";
                 } else if (controller.undoStack()->canRedo()) {
                     controller.undoStack()->redo(); history << "Redo";
+                }
+            } else if (action == 26 && active) {
+                const QStringList families = controller.fontFamilies();
+                if (!families.isEmpty()) {
+                    QString family;
+                    const QStringList preferred = {QStringLiteral("Segoe UI"), QStringLiteral("Arial"),
+                                                   QStringLiteral("Noto Sans"), QStringLiteral("DejaVu Sans")};
+                    for (int offset = 0; offset < preferred.size(); ++offset) {
+                        const QString candidate = preferred.at((step + offset) % preferred.size());
+                        const int available = families.indexOf(candidate, 0, Qt::CaseInsensitive);
+                        if (available >= 0) {
+                            family = families.at(available);
+                            break;
+                        }
+                    }
+                    if (family.isEmpty()) family = families.front();
+                    controller.setFontFamily(family);
+                    const QStringList styles = controller.fontStyles(family);
+                    if (!styles.isEmpty()) {
+                        controller.setFontStyle(styles.at(step % styles.size()));
+                    }
+                    history << QStringLiteral("FontFamilyStyle(%1)").arg(family);
+                }
+            } else if (action == 27) {
+                controller.clearSelection();
+                history << "ClearSelection";
+            } else if (action == 28) {
+                QStringList eligible;
+                for (const SceneObjectGeometry& sceneObject : controller.sceneGeometry().objects) {
+                    if (sceneObject.visible && !sceneObject.locked) {
+                        eligible.push_back(sceneObject.objectId);
+                    }
+                }
+                if (!eligible.isEmpty()) {
+                    controller.clearSelection();
+                    const int firstIndex = random.bounded(eligible.size());
+                    controller.selectObject(eligible.at(firstIndex));
+                    if (eligible.size() > 1) {
+                        const int secondIndex = (firstIndex + 1 + random.bounded(eligible.size() - 1))
+                            % eligible.size();
+                        controller.selectObject(eligible.at(secondIndex), true);
+                    }
+                    history << (eligible.size() > 1 ? "MultiSelect" : "Select");
+                }
+            } else if (action == 29 && active) {
+                QStringList builtInPresetIds;
+                for (const PresetCatalogEntry& entry : controller.presetCatalogEntries()) {
+                    if (entry.builtIn) builtInPresetIds.push_back(entry.preset.id);
+                }
+                if (!builtInPresetIds.isEmpty()) {
+                    const QString presetId = builtInPresetIds.at(random.bounded(builtInPresetIds.size()));
+                    QString error;
+                    QVERIFY2(controller.applyPresetById(presetId, &error),
+                             qPrintable(context(step) + QStringLiteral("\naction=ApplyPreset(%1)\n%2")
+                                                        .arg(presetId, error)));
+                    history << QStringLiteral("ApplyPreset(%1)").arg(presetId);
+                }
+            } else if (action == 30) {
+                const ExportScope scope = random.bounded(2) == 0
+                    ? ExportScope::CurrentPage : ExportScope::Selection;
+                if (controller.canExport(scope)) {
+                    const QString path = exportDirectory.filePath(
+                        QStringLiteral("seed-%1-step-%2.svg").arg(seed).arg(step));
+                    QString error;
+                    QVERIFY2(controller.exportSvg(path, scope, &error),
+                             qPrintable(context(step)
+                                        + QStringLiteral("\naction=Export(%1)\n%2")
+                                              .arg(scope == ExportScope::CurrentPage
+                                                       ? QStringLiteral("CurrentPage")
+                                                       : QStringLiteral("Selection"),
+                                                   error)));
+                    QFile svg(path);
+                    QVERIFY2(svg.open(QIODevice::ReadOnly), qPrintable(svg.errorString()));
+                    const QByteArray bytes = svg.readAll();
+                    QVERIFY(bytes.contains("<svg"));
+                    history << (scope == ExportScope::CurrentPage
+                                    ? "ExportCurrentPage" : "ExportSelection");
+                } else {
+                    history << "ExportUnavailable";
                 }
             }
         }

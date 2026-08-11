@@ -90,10 +90,11 @@ non-identity zoom or transform.
 `seededValidWorkflows` runs seeds `1`, `7`, `42`, `99`, `1337`, `65537`,
 `314159`, `8675309`, `12648430`, and `20260811`, 200 valid operations each.
 The state-aware alphabet covers creation/editing, Cyrillic/multiline text,
-typography, transforms, effects/parameters/range/mask/order, generator and
-deformation state, duplication/deletion/copy/paste, pages/layers, visibility/
-locking, undo/redo and periodic semantic round trips. A failure prints the
-seed, action, page/layer/object IDs, selection, effect/tool and replay history.
+font family/style and other typography, transforms, selection/clear/multiselect,
+effects/parameters/range/mask/order, built-in presets, generator and deformation
+state, duplication/deletion/copy/paste, pages/layers, visibility/locking,
+SVG eligibility/output, undo/redo and periodic semantic round trips. A failure
+prints the seed, action, page/layer/object IDs, selection, effect/tool and replay history.
 Replay one seed (and optionally change its scale) with:
 
 ```powershell
