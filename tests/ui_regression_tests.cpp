@@ -450,18 +450,22 @@ void EffectsPanelUiTests::inspectorEditEndsCanvasSessionWithoutStaleOverwrite()
     const QPainterPath currentInk = controller->sceneGeometry().objectById(objectId)
                                          ->geometry.combinedPath();
     QPointF hitPoint;
+    bool foundHitPoint = false;
     const QRectF inkBounds = currentInk.boundingRect();
-    for (int y = 0; hitPoint.isNull() && y < 20; ++y) {
-        for (int x = 0; x < 20; ++x) {
-            const QPointF candidate(inkBounds.left() + (x + 0.5) * inkBounds.width() / 20.0,
-                                    inkBounds.top() + (y + 0.5) * inkBounds.height() / 20.0);
+    constexpr int inkProbeResolution = 256;
+    for (int y = 0; !foundHitPoint && y < inkProbeResolution; ++y) {
+        for (int x = 0; x < inkProbeResolution; ++x) {
+            const QPointF candidate(
+                inkBounds.left() + (x + 0.5) * inkBounds.width() / inkProbeResolution,
+                inkBounds.top() + (y + 0.5) * inkBounds.height() / inkProbeResolution);
             if (currentInk.contains(candidate)) {
                 hitPoint = candidate;
+                foundHitPoint = true;
                 break;
             }
         }
     }
-    QVERIFY2(!hitPoint.isNull(), "evaluated text fixture needs an ink hit point");
+    QVERIFY2(foundHitPoint, "evaluated text fixture needs an ink hit point");
     const QPoint objectPoint = canvas->mapDocumentToViewport(hitPoint).toPoint();
     QTest::mouseDClick(canvas, Qt::LeftButton, Qt::NoModifier, objectPoint);
     QTRY_VERIFY(canvas->isTextEditing());

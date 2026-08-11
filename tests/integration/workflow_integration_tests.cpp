@@ -518,8 +518,11 @@ void WorkflowIntegrationTests::duplicatePasteAndPresetFreshenEffectIdentities()
     QVERIFY(controller.document().objectById(duplicateId) == nullptr);
     controller.undoStack()->redo();
     QVERIFY(controller.document().objectById(duplicateId));
+    QTRY_VERIFY_WITH_TIMEOUT(controller.sceneGeometry().objectById(originalId)
+                                 && controller.sceneGeometry().objectById(duplicateId), 5000);
 
     controller.selectObject(originalId);
+    QCOMPARE(controller.selectionModel()->activeObjectId(), originalId);
     controller.copySelectedObjects();
     controller.pasteObjects();
     const auto afterPaste = controller.document().objectsOnCurrentPage();
@@ -534,9 +537,6 @@ void WorkflowIntegrationTests::duplicatePasteAndPresetFreshenEffectIdentities()
     }
     QCOMPARE(objectIds.size(), 3);
     QCOMPARE(effectIds.size(), 6);
-    QTRY_VERIFY_WITH_TIMEOUT(controller.sceneGeometry().objectById(originalId)
-                                 && controller.sceneGeometry().objectById(duplicateId), 5000);
-
     QString error;
     controller.selectObject(originalId);
     QVERIFY2(controller.applyPresetById(QStringLiteral("builtin.whisper.v1"), &error), qPrintable(error));

@@ -606,6 +606,11 @@ void EditorController::setFillColor(const QColor& color)
 
 void EditorController::selectObject(const QString& objectId, bool additive)
 {
+    // Commit a held control transaction before SelectionModel changes.  Its
+    // undo push emits documentChanged synchronously; doing this from the
+    // selectionChanged callback can otherwise restore the previous active ID
+    // and discard the user's new selection.
+    endEffectStackStrengthGesture();
     const SceneObjectGeometry* sceneObject = m_sceneGeometry.objectById(objectId);
     if (!sceneObject || !sceneObject->visible || sceneObject->locked) {
         return;
@@ -622,6 +627,7 @@ void EditorController::selectObject(const QString& objectId, bool additive)
 
 void EditorController::toggleObjectSelection(const QString& objectId)
 {
+    endEffectStackStrengthGesture();
     const SceneObjectGeometry* sceneObject = m_sceneGeometry.objectById(objectId);
     if (!sceneObject || !sceneObject->visible || sceneObject->locked) {
         return;
@@ -635,12 +641,14 @@ void EditorController::toggleObjectSelection(const QString& objectId)
 
 void EditorController::clearSelection()
 {
+    endEffectStackStrengthGesture();
     m_selectionModel->clear();
     emit sceneChanged();
 }
 
 void EditorController::selectObjectsInRect(const QRectF& rect, bool additive)
 {
+    endEffectStackStrengthGesture();
     QStringList ids = additive ? m_selectionModel->selectedObjectIds() : QStringList();
     QPainterPath marquee;
     marquee.addRect(rect.normalized());

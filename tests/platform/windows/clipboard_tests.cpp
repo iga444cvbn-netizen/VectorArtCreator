@@ -1,12 +1,14 @@
 #include "platform/vector_clipboard_service.h"
 
 #include <QBuffer>
+#include <QApplication>
+#include <QCoreApplication>
 #include <QImage>
-#include <QSemaphore>
+#include <QProcess>
 #include <QTest>
 
-#include <atomic>
-#include <thread>
+#include <cstdio>
+#include <cstring>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -110,25 +112,28 @@ void WindowsClipboardTests::busyClipboardIsAProductionFailure()
     record.path.addRect(payload.bounds);
     record.fill = Qt::black;
     payload.records = {record};
-    QSemaphore opened;
-    QSemaphore release;
-    std::atomic_bool holderOpened = false;
-    std::thread holder([&] {
-        holderOpened.store(OpenClipboard(nullptr) != FALSE, std::memory_order_release);
-        opened.release();
-        release.acquire();
-        if (holderOpened.load(std::memory_order_acquire)) CloseClipboard();
-    });
-    const bool holderResponded = opened.tryAcquire(1, 3000);
-    const bool clipboardHeld = holderOpened.load(std::memory_order_acquire);
-    if (!holderResponded || !clipboardHeld) {
-        release.release();
-        holder.join();
-        QVERIFY2(holderResponded && clipboardHeld, "Could not establish the clipboard-busy precondition");
+    // OpenClipboard is effectively re-entrant inside one process on the CI
+    // host, so a thread cannot model a competing application.  A tiny child
+    // mode of this same test binary owns it from another process instead.
+    QProcess holder;
+    holder.start(QCoreApplication::applicationFilePath(), {QStringLiteral("--hold-clipboard")});
+    const bool holderStarted = holder.waitForStarted(3000);
+    const bool holderResponded = holderStarted && holder.waitForReadyRead(3000);
+    const QByteArray response = holderResponded ? holder.readLine().trimmed() : QByteArray();
+    ClipboardPublicationResult result;
+    if (response == QByteArrayLiteral("READY")) {
+        result = VectorClipboardService::copyForOfficeResult(payload);
+        holder.write("release\n");
+        holder.closeWriteChannel();
     }
-    const ClipboardPublicationResult result = VectorClipboardService::copyForOfficeResult(payload);
-    release.release();
-    holder.join();
+    bool holderFinished = holder.waitForFinished(3000);
+    if (!holderFinished) {
+        holder.kill();
+        holderFinished = holder.waitForFinished(3000);
+    }
+    QVERIFY2(holderStarted && holderResponded && response == QByteArrayLiteral("READY")
+                 && holderFinished && holder.exitCode() == 0,
+             "Could not establish and release the cross-process clipboard-busy precondition");
     QCOMPARE(result.status, ClipboardPublicationStatus::Failure);
     QVERIFY(result.message.contains(QStringLiteral("busy"), Qt::CaseInsensitive));
 #endif
@@ -151,5 +156,25 @@ void WindowsClipboardTests::oversizedRasterFallbackIsAProductionFailure()
 #endif
 }
 
-QTEST_MAIN(WindowsClipboardTests)
+int main(int argc, char* argv[])
+{
+#ifdef Q_OS_WIN
+    if (argc == 2 && std::strcmp(argv[1], "--hold-clipboard") == 0) {
+        if (!OpenClipboard(nullptr)) {
+            std::fputs("ERROR\n", stdout);
+            std::fflush(stdout);
+            return 2;
+        }
+        std::fputs("READY\n", stdout);
+        std::fflush(stdout);
+        char release[16]{};
+        static_cast<void>(std::fgets(release, sizeof(release), stdin));
+        CloseClipboard();
+        return 0;
+    }
+#endif
+    QApplication application(argc, argv);
+    WindowsClipboardTests tests;
+    return QTest::qExec(&tests, argc, argv);
+}
 #include "clipboard_tests.moc"

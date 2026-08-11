@@ -1,7 +1,6 @@
 #include "core/text/font_descriptor.h"
 
 #include <QJsonValue>
-#include <QFontDatabase>
 
 namespace vt {
 
@@ -52,11 +51,6 @@ FontDescriptor FontDescriptor::fromJson(const QJsonObject& object)
     descriptor.fingerprint = object.value(QStringLiteral("fingerprint")).toString();
     descriptor.embeddedResourceId = object.value(QStringLiteral("embeddedResourceId")).toString();
     descriptor.embeddingPermission = object.value(QStringLiteral("embeddingPermission")).toString();
-    if (!descriptor.styleName.isEmpty()) {
-        const QFont resolved = QFontDatabase::font(descriptor.family, descriptor.styleName, 12);
-        descriptor.weight = resolved.weight();
-        descriptor.italic = resolved.italic();
-    }
     return descriptor;
 }
 

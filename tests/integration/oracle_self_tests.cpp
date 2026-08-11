@@ -81,9 +81,11 @@ TextObject semanticTextFixture()
     mask.restore = true;
     effect->maskStrokes = {mask};
     effect->maskInverted = true;
-    Q_ASSERT(effect->setParameter(QStringLiteral("amplitude"), 0.81));
-    Q_ASSERT(effect->setParameter(QStringLiteral("frequency"), 3.7));
-    Q_ASSERT(effect->setParameter(QStringLiteral("phase"), -0.23));
+    if (!effect->setParameter(QStringLiteral("amplitude"), 0.81)
+        || !effect->setParameter(QStringLiteral("frequency"), 3.7)
+        || !effect->setParameter(QStringLiteral("phase"), -0.23)) {
+        qFatal("semantic effect fixture could not set Wave parameters");
+    }
     object.effects.append(std::move(effect));
 
     object.deformation.enabled = false;
