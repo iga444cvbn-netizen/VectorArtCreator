@@ -7,6 +7,9 @@ on:
   pull_request:
     branches:
       - main
+      # Phase 4B is intentionally reviewed as a stacked PR until Phase 4A
+      # merges; validate it with the authoritative Windows pipeline too.
+      - codex/phase-4a-creative-workflow
       # The Phase 3 repair branch is intentionally reviewed through focused
       # stacked PRs; validate those fixes with the same Windows job.
       - codex/phase3-editor-workspace
