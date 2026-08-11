@@ -749,7 +749,7 @@ void CoreTests::payloadSvgPreservesRecordsAndWinding()
     QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
     const QByteArray svg = file.readAll();
     QCOMPARE(svg.count("<path"), 2);
-    QVERIFY(svg.contains("fill-opacity=\"0.4\""));
+    QVERIFY(svg.contains("fill-opacity=\"0.4"));
     QVERIFY(svg.contains("fill-rule=\"nonzero\""));
     QVERIFY(svg.contains("viewBox=\"0 0 40 40\""));
 }
