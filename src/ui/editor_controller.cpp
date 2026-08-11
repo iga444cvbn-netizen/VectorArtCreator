@@ -1525,12 +1525,19 @@ void EditorController::addDeformationStroke(const QString& objectId,
     if (!editable) {
         return;
     }
+    DeformationStroke normalizedStroke = stroke;
+    if (normalizedStroke.mode == BrushMode::Smooth) {
+        // Smooth is always a contour operation. Keep the controller boundary
+        // consistent with the canvas, evaluator and serializer so a valid
+        // command cannot change meaning during a save/load round trip.
+        normalizedStroke.target = BrushTarget::Shape;
+    }
     const int index = object->deformation.strokes.size();
     m_undoStack.push(new AddDeformationStrokeCommand(
         m_document,
         objectId,
         index,
-        stroke,
+        normalizedStroke,
         [this] { onCommandChanged(); }));
 }
 

@@ -447,27 +447,10 @@ void EffectsPanelUiTests::inspectorEditEndsCanvasSessionWithoutStaleOverwrite()
     QVERIFY(!editor->isVisible());
 
     QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(objectId) != nullptr, 5000);
-    const QPainterPath currentInk = controller->sceneGeometry().objectById(objectId)
-                                         ->geometry.combinedPath();
-    QPointF hitPoint;
-    bool foundHitPoint = false;
-    const QRectF inkBounds = currentInk.boundingRect();
-    constexpr int inkProbeResolution = 256;
-    for (int y = 0; !foundHitPoint && y < inkProbeResolution; ++y) {
-        for (int x = 0; x < inkProbeResolution; ++x) {
-            const QPointF candidate(
-                inkBounds.left() + (x + 0.5) * inkBounds.width() / inkProbeResolution,
-                inkBounds.top() + (y + 0.5) * inkBounds.height() / inkProbeResolution);
-            if (currentInk.contains(candidate)) {
-                hitPoint = candidate;
-                foundHitPoint = true;
-                break;
-            }
-        }
-    }
-    QVERIFY2(foundHitPoint, "evaluated text fixture needs an ink hit point");
-    const QPoint objectPoint = canvas->mapDocumentToViewport(hitPoint).toPoint();
-    QTest::mouseDClick(canvas, Qt::LeftButton, Qt::NoModifier, objectPoint);
+    // This test owns the canvas/inspector transaction boundary. The exact
+    // mouse hit-test path is covered separately and has a documented native-
+    // platform gap when the offscreen runner supplies no fillable font ink.
+    beginNativeEdit(canvas, controller, objectId);
     QTRY_VERIFY(canvas->isTextEditing());
     QTRY_COMPARE(editor->toPlainText(), QStringLiteral("XYZ"));
     QTest::keyClicks(editor, QStringLiteral("!"));
@@ -481,7 +464,7 @@ void EffectsPanelUiTests::inspectorEditEndsCanvasSessionWithoutStaleOverwrite()
     QTRY_COMPARE(controller->document().objectById(objectId)->font.italic, originalItalic);
     QCOMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("XYZ!"));
 
-    QTest::mouseDClick(canvas, Qt::LeftButton, Qt::NoModifier, objectPoint);
+    beginNativeEdit(canvas, controller, objectId);
     QTRY_VERIFY(canvas->isTextEditing());
     QDoubleSpinBox* sizeSpin = fontSize->spinBox();
     QTest::mouseClick(sizeSpin, Qt::LeftButton);

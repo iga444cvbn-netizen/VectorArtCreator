@@ -33,10 +33,10 @@ private:
 
 class ClipboardTransaction final {
 public:
-    explicit ClipboardTransaction(HWND owner)
+    ClipboardTransaction(HWND owner, const std::function<bool()>& openAttempt)
     {
         for (int attempt = 0; attempt != 8 && !m_open; ++attempt) {
-            m_open = OpenClipboard(owner) != FALSE;
+            m_open = openAttempt ? openAttempt() : OpenClipboard(owner) != FALSE;
             if (!m_open) Sleep(12);
         }
     }
@@ -203,8 +203,10 @@ QByteArray svgFallback(const VectorExportPayload& payload)
 
 } // namespace
 
-ClipboardPublicationResult WindowsVectorClipboardService::copyForOffice(
-    const VectorExportPayload& payload)
+namespace {
+
+ClipboardPublicationResult copyForOfficeImpl(const VectorExportPayload& payload,
+                                             const std::function<bool()>& openAttempt)
 {
     if (payload.records.isEmpty() || payload.bounds.isEmpty()) {
         return ClipboardPublicationResult::fromFormats(
@@ -230,7 +232,7 @@ ClipboardPublicationResult WindowsVectorClipboardService::copyForOffice(
         activeWindow = windows.isEmpty() ? nullptr : windows.front();
     }
     const HWND owner = activeWindow ? reinterpret_cast<HWND>(activeWindow->winId()) : nullptr;
-    ClipboardTransaction transaction(owner);
+    ClipboardTransaction transaction(owner, openAttempt);
     if (!transaction.open() || !EmptyClipboard()) {
         DeleteEnhMetaFile(metafile);
         return ClipboardPublicationResult::fromFormats(
@@ -264,6 +266,21 @@ ClipboardPublicationResult WindowsVectorClipboardService::copyForOffice(
     }
     return ClipboardPublicationResult::fromFormats(
         true, svgPublished, pngPublished, textPublished);
+}
+
+} // namespace
+
+ClipboardPublicationResult WindowsVectorClipboardService::copyForOffice(
+    const VectorExportPayload& payload)
+{
+    return copyForOfficeImpl(payload, {});
+}
+
+ClipboardPublicationResult WindowsVectorClipboardService::copyForOfficeWithOpenAttemptForTesting(
+    const VectorExportPayload& payload,
+    const std::function<bool()>& openAttempt)
+{
+    return copyForOfficeImpl(payload, openAttempt);
 }
 
 } // namespace vt
