@@ -295,7 +295,7 @@ void EffectsPanelUiTests::textToolStartsFocusedAtCurrentZoom()
     auto* editor = nativeTextEditor(editorView);
     QVERIFY(editor);
     QTRY_VERIFY(editorView->scene()->focusItem() != nullptr || editor->hasFocus());
-    QTest::keyClicks(editor, QStringLiteral("Test 123"));
+    typeUnicode(editor, QStringLiteral("Test 123"));
     const QString objectId = canvas->editingObjectId();
     QTRY_COMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("Test 123"));
     canvas->finishTextEditing();
