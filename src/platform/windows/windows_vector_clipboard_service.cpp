@@ -210,8 +210,11 @@ bool WindowsVectorClipboardService::copyForOffice(const VectorExportPayload& pay
         return false;
     }
     const QByteArray svg = svgFallback(payload);
-    const QWindow* activeWindow = QGuiApplication::focusWindow()
-        ? QGuiApplication::focusWindow() : QGuiApplication::activeWindow();
+    QWindow* activeWindow = QGuiApplication::focusWindow();
+    if (!activeWindow) {
+        const auto windows = QGuiApplication::topLevelWindows();
+        activeWindow = windows.isEmpty() ? nullptr : windows.front();
+    }
     const HWND owner = activeWindow ? reinterpret_cast<HWND>(activeWindow->winId()) : nullptr;
     ClipboardTransaction transaction(owner);
     if (!transaction.open() || !EmptyClipboard()) {
