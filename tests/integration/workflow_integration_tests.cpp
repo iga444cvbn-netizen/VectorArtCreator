@@ -822,9 +822,14 @@ void WorkflowIntegrationTests::seededValidWorkflows()
                 controller.clearSelection();
                 history << "ClearSelection";
             } else if (action == 28) {
+                QSet<QString> currentObjectIds;
+                for (const TextObject* object : currentObjects()) {
+                    if (object) currentObjectIds.insert(object->id);
+                }
                 QStringList eligible;
                 for (const SceneObjectGeometry& sceneObject : controller.sceneGeometry().objects) {
                     if (sceneObject.pageId == controller.document().currentPageId
+                        && currentObjectIds.contains(sceneObject.objectId)
                         && sceneObject.visible && !sceneObject.locked) {
                         eligible.push_back(sceneObject.objectId);
                     }
