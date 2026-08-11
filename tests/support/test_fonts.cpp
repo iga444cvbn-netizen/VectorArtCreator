@@ -1,6 +1,7 @@
 #include "tests/support/test_fonts.h"
 
 #include <QFontDatabase>
+#include <QStringList>
 
 namespace vt::test {
 
