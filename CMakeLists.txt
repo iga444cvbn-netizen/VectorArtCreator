@@ -144,6 +144,10 @@ set(CONTROLLER_TEST_SOURCES
     src/ui/shortcut_manager.cpp
 )
 
+# This is a hand-written test driver, not a uic-generated ui_*.h header.
+set_source_files_properties(tests/support/ui_test_driver.cpp tests/support/ui_test_driver.h
+    PROPERTIES SKIP_AUTOUIC ON)
+
 add_executable(vector_typography_tests
     tests/core_tests.cpp
     ${CONTROLLER_TEST_SOURCES}
