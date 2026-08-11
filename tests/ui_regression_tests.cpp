@@ -36,6 +36,8 @@ private slots:
     void spinBoxArrowHitRegionsIncrementAndDecrement();
     void selectingAnotherLayerObjectEndsNativeEditorSession();
     void nativeEditorViewportRoutesOutsideCanvasInput();
+    void addTextStartsFocusedAndAlignedBeforeAndAfterScenePublication();
+    void textToolStartsFocusedAtCurrentZoom();
     void traitModeIsShownAfterBoldAndItalic();
     void scaleControlsPreserveSmallAndMirroredValues();
 };
@@ -208,6 +210,80 @@ void EffectsPanelUiTests::selectingAnotherLayerObjectEndsNativeEditorSession()
     controller->selectObject(second); // same path used by LayersPanel::objectSelected
     QCoreApplication::processEvents();
     QVERIFY(!canvas->isTextEditing());
+}
+
+void EffectsPanelUiTests::addTextStartsFocusedAndAlignedBeforeAndAfterScenePublication()
+{
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    auto* controller = window.findChild<EditorController*>();
+    auto* canvas = window.findChild<EditorCanvas*>();
+    auto* addText = window.findChild<QPushButton*>(QStringLiteral("emptyAddText"));
+    QVERIFY(controller);
+    QVERIFY(canvas);
+    QVERIFY(addText);
+
+    QTest::mouseClick(addText, Qt::LeftButton);
+    QTRY_VERIFY(canvas->isTextEditing());
+    auto* editorView = canvas->findChild<QGraphicsView*>();
+    QVERIFY(editorView);
+    auto* editor = editorView->findChild<QPlainTextEdit*>();
+    QVERIFY(editor);
+    QTRY_VERIFY(editor->hasFocus());
+
+    const QString objectId = canvas->editingObjectId();
+    const TextObject* object = controller->document().objectById(objectId);
+    QVERIFY(object);
+    QGraphicsProxyWidget* proxy = nullptr;
+    for (QGraphicsItem* item : editorView->scene()->items()) {
+        if (auto* candidate = qgraphicsitem_cast<QGraphicsProxyWidget*>(item)) {
+            proxy = candidate;
+            break;
+        }
+    }
+    QVERIFY(proxy);
+    const auto verifyAligned = [&] {
+        const QPoint actual = canvas->mapFrom(editorView,
+            editorView->mapFromScene(proxy->sceneBoundingRect().center()));
+        const QPoint expected = canvasPositionForDocumentPoint(
+            canvas, object->transform.position + QPointF(object->typography.fontSize, -0.2 * object->typography.fontSize));
+        QVERIFY2((actual - expected).manhattanLength() <= 3,
+                 qPrintable(QStringLiteral("editor detached: actual %1,%2 expected %3,%4")
+                            .arg(actual.x()).arg(actual.y()).arg(expected.x()).arg(expected.y())));
+    };
+    verifyAligned(); // regression: this is the pre-async fallback geometry path
+
+    QTest::keyClicks(editor, QStringLiteral("Привет, мир!"));
+    QTRY_COMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("Привет, мир!"));
+    QTRY_VERIFY(controller->sceneGeometry().objectById(objectId) != nullptr);
+    QTRY_VERIFY(controller->sceneGeometry().objectById(objectId)->geometry.hasVisibleGeometry());
+    verifyAligned();
+}
+
+void EffectsPanelUiTests::textToolStartsFocusedAtCurrentZoom()
+{
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    auto* controller = window.findChild<EditorController*>();
+    auto* canvas = window.findChild<EditorCanvas*>();
+    QVERIFY(controller);
+    QVERIFY(canvas);
+    canvas->zoomOut();
+    canvas->zoomOut();
+    controller->setTool(EditorTool::Text);
+    const QPoint createAt = canvasPositionForDocumentPoint(canvas, QPointF(240.0, 220.0));
+    QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, createAt);
+    QTRY_VERIFY(canvas->isTextEditing());
+    auto* editorView = canvas->findChild<QGraphicsView*>();
+    QVERIFY(editorView);
+    auto* editor = editorView->findChild<QPlainTextEdit*>();
+    QVERIFY(editor);
+    QTRY_VERIFY(editor->hasFocus());
+    QTest::keyClicks(editor, QStringLiteral("Test 123"));
+    const QString objectId = canvas->editingObjectId();
+    QTRY_COMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("Test 123"));
 }
 
 void EffectsPanelUiTests::nativeEditorViewportRoutesOutsideCanvasInput()

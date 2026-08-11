@@ -30,6 +30,20 @@
 
 namespace vt {
 
+namespace {
+
+QRectF emptyTextEditorBounds(const TextObject& object)
+{
+    const qreal size = object.typography.fontSize;
+    const QRectF localBounds(0.0, -size * 0.8,
+                             qMax<qreal>(120.0, size * 2.0),
+                             qMax<qreal>(36.0, size * 1.2));
+    const ObjectFrame frame = ObjectFrame::fromTransform(object.transform, localBounds, localBounds);
+    return frame.pageAabb();
+}
+
+} // namespace
+
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
     , m_controller(new EditorController(this))
@@ -266,7 +280,7 @@ MainWindow::MainWindow(QWidget* parent)
             m_canvas->beginTextEditing(objectId,
                                        object->sourceText,
                                        object->font.toQFont(object->typography.fontSize),
-                                       QRectF(position, QSizeF(420.0, 130.0)));
+                                       emptyTextEditorBounds(*object));
         }
     });
     connect(m_canvas, &EditorCanvas::textEditRequested, this, [this](const QString& objectId) {
@@ -596,7 +610,7 @@ void MainWindow::addTextAtPageCenter()
     m_newTextEditTouched = false;
     m_canvas->beginTextEditing(objectId, object->sourceText,
                                object->font.toQFont(object->typography.fontSize),
-                               QRectF(position, QSizeF(420.0, 130.0)));
+                               emptyTextEditorBounds(*object));
 }
 
 void MainWindow::updateStylesForFamily(const QString& family)

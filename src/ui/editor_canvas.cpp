@@ -15,6 +15,7 @@
 #include <QResizeEvent>
 #include <QTextCursor>
 #include <QTextOption>
+#include <QTimer>
 #include <QWheelEvent>
 
 #include <cmath>
@@ -234,7 +235,21 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
     m_editorProxy->show();
     m_editorView->show();
     m_editorView->raise();
+    // A button or canvas mouse handler may still own focus while this method
+    // returns.  Focus the graphics view, proxy and native widget as one
+    // session, then repeat after the originating event has unwound.
+    m_editorView->setFocus(Qt::OtherFocusReason);
+    m_editorScene->setFocusItem(m_editorProxy, Qt::OtherFocusReason);
+    m_editorProxy->setFocus(Qt::OtherFocusReason);
     m_textEditor->setFocus(Qt::OtherFocusReason);
+    const QString editingId = m_editingObjectId;
+    QTimer::singleShot(0, this, [this, editingId] {
+        if (!isTextEditing() || m_editingObjectId != editingId) return;
+        m_editorView->setFocus(Qt::OtherFocusReason);
+        m_editorScene->setFocusItem(m_editorProxy, Qt::OtherFocusReason);
+        m_editorProxy->setFocus(Qt::OtherFocusReason);
+        m_textEditor->setFocus(Qt::OtherFocusReason);
+    });
     emit textEditingChanged(true);
 }
 
@@ -989,8 +1004,13 @@ void EditorCanvas::updateTextEditorGeometry()
     }
     m_textEditor->resize(qMax(1, qCeil(documentBounds.width())),
                          qMax(1, qCeil(documentBounds.height())));
-    m_editorProxy->setTransform(viewTransform());
-    m_editorProxy->setPos(documentBounds.topLeft());
+    // Proxy positions are scene-space while documentBounds is page-space.
+    // Keep the same one-matrix contract as the evaluated ObjectFrame path:
+    // widget-local -> page -> view/scene, with a zero proxy position.
+    QTransform documentOffset;
+    documentOffset.translate(documentBounds.x(), documentBounds.y());
+    m_editorProxy->setTransform(viewTransform() * documentOffset);
+    m_editorProxy->setPos(QPointF());
 }
 
 QString EditorCanvas::hitTestObject(const QPointF& documentPoint) const
