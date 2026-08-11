@@ -210,6 +210,7 @@ add_executable(vector_typography_ui_tests
 )
 target_include_directories(vector_typography_ui_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vector_typography_ui_tests PRIVATE
+    vector_typography_test_support
     vector_typography_core
     Qt6::Core
     Qt6::Gui
