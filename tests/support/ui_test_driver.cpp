@@ -162,11 +162,13 @@ void UiTestDriver::waitForSceneGeneration(const QString& objectId) const
     } else {
         const TextObject* documentObject = m_controller->document().objectById(objectId);
         QVERIFY(documentObject);
-        QTRY_VERIFY_WITH_TIMEOUT([this, &objectId, documentObject] {
-            const SceneObjectGeometry* sceneObject = m_controller->sceneGeometry().objectById(objectId);
-            return sceneObject && sceneObject->sourceText == documentObject->sourceText
-                && (documentObject->sourceText.isEmpty() || sceneObject->geometry.hasVisibleGeometry());
-        }(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(m_controller->sceneGeometry().objectById(objectId) != nullptr, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(m_controller->sceneGeometry().objectById(objectId)->sourceText,
+                                  documentObject->sourceText, 5000);
+        if (!documentObject->sourceText.isEmpty()) {
+            QTRY_VERIFY_WITH_TIMEOUT(m_controller->sceneGeometry().objectById(objectId)
+                                     ->geometry.hasVisibleGeometry(), 5000);
+        }
     }
 }
 
