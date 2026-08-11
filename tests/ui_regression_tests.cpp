@@ -271,6 +271,8 @@ void EffectsPanelUiTests::addTextStartsFocusedAndAlignedBeforeAndAfterScenePubli
     QTRY_VERIFY(controller->sceneGeometry().objectById(objectId) != nullptr);
     QTRY_VERIFY(controller->sceneGeometry().objectById(objectId)->geometry.hasVisibleGeometry());
     QVERIFY((proxy->sceneBoundingRect().topLeft() - fallbackOrigin).manhattanLength() <= 3.0);
+    canvas->finishTextEditing();
+    QCoreApplication::processEvents();
 }
 
 void EffectsPanelUiTests::textToolStartsFocusedAtCurrentZoom()
@@ -296,6 +298,8 @@ void EffectsPanelUiTests::textToolStartsFocusedAtCurrentZoom()
     QTest::keyClicks(editor, QStringLiteral("Test 123"));
     const QString objectId = canvas->editingObjectId();
     QTRY_COMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("Test 123"));
+    canvas->finishTextEditing();
+    QCoreApplication::processEvents();
 }
 
 void EffectsPanelUiTests::nativeEditorViewportRoutesOutsideCanvasInput()
