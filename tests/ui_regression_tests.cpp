@@ -61,6 +61,17 @@ void beginNativeEdit(EditorCanvas* canvas, EditorController* controller, const Q
     QVERIFY(canvas->isTextEditing());
 }
 
+QPlainTextEdit* nativeTextEditor(QGraphicsView* editorView)
+{
+    if (!editorView || !editorView->scene()) return nullptr;
+    for (QGraphicsItem* item : editorView->scene()->items()) {
+        if (auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(item)) {
+            if (auto* editor = qobject_cast<QPlainTextEdit*>(proxy->widget())) return editor;
+        }
+    }
+    return nullptr;
+}
+
 } // namespace
 
 void EffectsPanelUiTests::valueRefreshKeepsEmittingControlsAlive()
@@ -228,7 +239,7 @@ void EffectsPanelUiTests::addTextStartsFocusedAndAlignedBeforeAndAfterScenePubli
     QTRY_VERIFY(canvas->isTextEditing());
     auto* editorView = canvas->findChild<QGraphicsView*>();
     QVERIFY(editorView);
-    auto* editor = editorView->findChild<QPlainTextEdit*>();
+    auto* editor = nativeTextEditor(editorView);
     QVERIFY(editor);
     QTRY_VERIFY(editor->hasFocus());
 
@@ -278,7 +289,7 @@ void EffectsPanelUiTests::textToolStartsFocusedAtCurrentZoom()
     QTRY_VERIFY(canvas->isTextEditing());
     auto* editorView = canvas->findChild<QGraphicsView*>();
     QVERIFY(editorView);
-    auto* editor = editorView->findChild<QPlainTextEdit*>();
+    auto* editor = nativeTextEditor(editorView);
     QVERIFY(editor);
     QTRY_VERIFY(editor->hasFocus());
     QTest::keyClicks(editor, QStringLiteral("Test 123"));
