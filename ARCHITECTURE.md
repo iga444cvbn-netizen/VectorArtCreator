@@ -165,11 +165,11 @@ enabled for a useful preview.
 
 ## Serialization and migration
 
-Projects are versioned JSON. The current project format is version 4. Version 1
+Projects are versioned JSON. The current project format is version 6. Version 1
 tracking is migrated to `trackingEm`; versions 1-3 flat object arrays migrate to
 one page and one layer while preserving object order. Version 2/3 projects that
 have no `deformation` object receive the default enabled deformation model with
-no strokes. The next save writes version 4 with pages, layers, stable IDs, object
+no strokes. The next save writes version 6 with pages, layers, stable IDs, object
 transforms, and active IDs. Deformation JSON is validated for finite coordinates,
 bounded sample/stroke counts, and bounded radius/strength/hardness/pressure.
 
@@ -178,6 +178,23 @@ independent effect stack. New storage paths are `<uuid>.json`; human names never
 become filesystem paths. Legacy ASCII name-based files are scanned for practical
 backward compatibility. Applying a preset clones its effects into a focused undo
 command and never changes manual deformation strokes.
+
+## Production export and clipboard
+
+`ExportPayloadBuilder` evaluates a copied current `Page` synchronously and turns
+final scene geometry into ordered records of `QPainterPath`, fill, effective
+opacity, object ID and Unicode source text. It is portable and contains no Win32
+types. Selection records are tightly bounded and translated to `(0,0)`; Current
+Page retains its physical page rectangle. `SvgExporter` consumes the same payload
+through an atomic UTF-8 write, preserving nonzero winding and one record per
+fill/opacity item.
+
+`VectorClipboardService` is a small platform façade. On Windows its implementation
+in `src/platform/windows` records GDI+ EMF+ Dual through an RAII process service,
+then uses a bounded clipboard transaction to transfer CF_ENHMETAFILE, SVG, PNG,
+and CF_UNICODETEXT. No Win32 or GDI+ headers cross that directory boundary.
+The editor's private object clipboard remains independent, so native text editing
+and Ctrl+C keep their existing behavior.
 
 ## Cache and invalidation
 

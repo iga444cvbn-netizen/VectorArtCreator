@@ -1809,6 +1809,34 @@ bool EditorController::openProject(const QString& filePath, QString* error)
 
 bool EditorController::exportSvg(const QString& filePath, QString* error) const
 {
+    return exportSvg(filePath, ExportScope::CurrentPage, error);
+}
+
+bool EditorController::exportSvg(const QString& filePath, ExportScope scope, QString* error) const
+{
+    VectorExportPayload payload;
+    if (!buildExportPayload(scope, &payload, error)) return false;
+    return m_svgExporter.exportPayload(payload, filePath, error);
+}
+
+bool EditorController::copyForWord(ExportScope scope, QString* error) const
+{
+    VectorExportPayload payload;
+    if (!buildExportPayload(scope, &payload, error)) return false;
+    return VectorClipboardService::copyForOffice(payload, error);
+}
+
+bool EditorController::canExport(ExportScope scope) const
+{
+    QString error;
+    VectorExportPayload payload;
+    return buildExportPayload(scope, &payload, &error);
+}
+
+bool EditorController::buildExportPayload(ExportScope scope,
+                                          VectorExportPayload* payload,
+                                          QString* error) const
+{
     const Page* page = m_document.currentPage();
     if (!page) {
         if (error) {
@@ -1816,8 +1844,12 @@ bool EditorController::exportSvg(const QString& filePath, QString* error) const
         }
         return false;
     }
-    const SceneGeometry scene = SceneEvaluator::evaluate(*page);
-    return m_svgExporter.exportScene(m_document, scene, filePath, error);
+    // Export always evaluates a value-copy snapshot, never the asynchronously
+    // published scene, so output cannot race edits or use stale geometry.
+    const Page snapshot = *page;
+    const SceneGeometry scene = SceneEvaluator::evaluate(snapshot);
+    return ExportPayloadBuilder::build(m_document, snapshot, scene, scope,
+                                       selectedObjectIds(), payload, error);
 }
 
 void EditorController::onCommandChanged()

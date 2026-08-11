@@ -44,6 +44,8 @@ set(CORE_SOURCES
     src/core/presets/preset_manager.cpp
     resources/resources.qrc
     src/core/export/svg_exporter.cpp
+    src/core/export/export_payload_builder.cpp
+    src/platform/vector_clipboard_service.cpp
     src/core/undo/document_commands.cpp
     src/core/undo/scene_commands.cpp
 )
@@ -54,6 +56,10 @@ target_link_libraries(vector_typography_core PUBLIC Qt6::Core Qt6::Gui Qt6::Conc
 
 if (WIN32)
     target_compile_definitions(vector_typography_core PUBLIC VT_PLATFORM_WINDOWS=1)
+    target_sources(vector_typography_core PRIVATE
+        src/platform/windows/windows_vector_clipboard_service.cpp
+    )
+    target_link_libraries(vector_typography_core PRIVATE user32 gdi32 gdiplus)
 endif()
 
 set(UI_SOURCES

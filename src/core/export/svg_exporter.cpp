@@ -151,4 +151,44 @@ bool SvgExporter::exportScene(const Document& document,
     return true;
 }
 
+bool SvgExporter::exportPayload(const VectorExportPayload& payload, const QString& filePath, QString* error) const
+{
+    if (payload.records.isEmpty() || !payload.bounds.isValid() || payload.bounds.isEmpty()) {
+        if (error) *error = QStringLiteral("The export payload has no valid vector geometry.");
+        return false;
+    }
+    QSaveFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        if (error) *error = QStringLiteral("Cannot open SVG for writing: %1").arg(file.errorString());
+        return false;
+    }
+    QXmlStreamWriter xml(&file);
+    xml.setAutoFormatting(true);
+    xml.writeStartDocument();
+    xml.writeStartElement(QStringLiteral("svg"));
+    xml.writeAttribute(QStringLiteral("xmlns"), QStringLiteral("http://www.w3.org/2000/svg"));
+    xml.writeAttribute(QStringLiteral("version"), QStringLiteral("1.1"));
+    const QRectF bounds = payload.bounds;
+    xml.writeAttribute(QStringLiteral("viewBox"), QStringLiteral("%1 %2 %3 %4")
+                       .arg(number(bounds.left()), number(bounds.top()),
+                            number(bounds.width()), number(bounds.height())));
+    xml.writeAttribute(QStringLiteral("width"), number(bounds.width()));
+    xml.writeAttribute(QStringLiteral("height"), number(bounds.height()));
+    for (const VectorExportRecord& record : payload.records) {
+        xml.writeStartElement(QStringLiteral("path"));
+        xml.writeAttribute(QStringLiteral("d"), pathData(record.path));
+        xml.writeAttribute(QStringLiteral("fill"), record.fill.name(QColor::HexRgb));
+        xml.writeAttribute(QStringLiteral("fill-opacity"), number(record.opacity));
+        xml.writeAttribute(QStringLiteral("fill-rule"), QStringLiteral("nonzero"));
+        xml.writeEndElement();
+    }
+    xml.writeEndElement();
+    xml.writeEndDocument();
+    if (!file.commit()) {
+        if (error) *error = QStringLiteral("Could not commit SVG file: %1").arg(file.errorString());
+        return false;
+    }
+    return true;
+}
+
 } // namespace vt

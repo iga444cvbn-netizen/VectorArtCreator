@@ -22,6 +22,7 @@
 #include <QVector>
 
 class QPushButton;
+class QComboBox;
 
 namespace vt {
 
@@ -43,6 +44,7 @@ private slots:
     void saveProject();
     void saveProjectAs();
     void exportSvg();
+    void copyForWord();
     void showPreferences();
     void pageTabChanged(int index);
     void renameCurrentPage();
@@ -58,6 +60,7 @@ private:
     void setGlobalEditorShortcutsEnabled(bool enabled);
     void handleTextEditingChanged(bool editing);
     void addTextAtPageCenter();
+    [[nodiscard]] ExportScope outputScope() const;
 
     EditorController* m_controller = nullptr;
     EditorCanvas* m_canvas = nullptr;
@@ -78,6 +81,8 @@ private:
     QAction* m_cutAction = nullptr;
     QAction* m_pasteAction = nullptr;
     QAction* m_selectAllAction = nullptr;
+    QAction* m_copyForWordAction = nullptr;
+    QComboBox* m_outputScope = nullptr;
     QPushButton* m_addTextButton = nullptr;
     QVector<QAction*> m_toolActions;
     QHash<QString, QAction*> m_actions;

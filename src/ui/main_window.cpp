@@ -3,6 +3,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QFileDialog>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -571,6 +572,16 @@ void MainWindow::refreshUi()
     if (m_saveAction) {
         m_saveAction->setEnabled(true);
     }
+    const bool canOutput = m_controller->canExport(outputScope());
+    if (QAction* exportAction = m_actions.value(QStringLiteral("file.exportSvg"))) {
+        exportAction->setEnabled(canOutput);
+    }
+    if (m_copyForWordAction) {
+        m_copyForWordAction->setEnabled(canOutput && VectorClipboardService::isAvailable());
+    }
+    if (m_outputScope) {
+        m_outputScope->setEnabled(m_controller->document().currentPage() != nullptr);
+    }
     setWindowTitle(QStringLiteral("%1%2 — Vector Typography Editor")
                        .arg(!m_controller->document().hasObjects()
                                 ? QStringLiteral("Untitled Vector Typography Project")
@@ -684,11 +695,24 @@ void MainWindow::exportSvg()
         selectedPath += QStringLiteral(".svg");
     }
     QString error;
-    if (!m_controller->exportSvg(selectedPath, &error)) {
+    if (!m_controller->exportSvg(selectedPath, outputScope(), &error)) {
         QMessageBox::critical(this, QStringLiteral("Export SVG"), error);
         return;
     }
-    setStatus(QStringLiteral("SVG exported: %1").arg(selectedPath));
+    setStatus(QStringLiteral("SVG exported (%1): %2")
+              .arg(outputScope() == ExportScope::Selection ? QStringLiteral("Selection") : QStringLiteral("Current Page"), selectedPath));
+}
+
+void MainWindow::copyForWord()
+{
+    QString error;
+    const ExportScope scope = outputScope();
+    if (!m_controller->copyForWord(scope, &error)) {
+        QMessageBox::warning(this, QStringLiteral("Copy for Word"), error);
+        return;
+    }
+    setStatus(QStringLiteral("Copied %1 for Word, PowerPoint, and other Office apps.")
+              .arg(scope == ExportScope::Selection ? QStringLiteral("Selection") : QStringLiteral("Current Page")));
 }
 
 void MainWindow::showPreferences()
@@ -782,6 +806,9 @@ void MainWindow::createActions()
                    QKeySequence(QStringLiteral("Ctrl+Shift+S")), [this] { saveProjectAs(); });
     registerAction(QStringLiteral("file.exportSvg"), QStringLiteral("Export SVG…"),
                    QKeySequence(QStringLiteral("Ctrl+Alt+S")), [this] { exportSvg(); });
+
+    m_copyForWordAction = registerAction(QStringLiteral("edit.copyForWord"), QStringLiteral("Copy for Word"),
+                                         QKeySequence(), [this] { copyForWord(); });
 
     auto* undoAction = m_controller->undoStack()->createUndoAction(this, QStringLiteral("Undo"));
     auto* redoAction = m_controller->undoStack()->createRedoAction(this, QStringLiteral("Redo"));
@@ -880,6 +907,18 @@ void MainWindow::createActions()
     fileToolBar->addAction(m_actions.value(QStringLiteral("file.open")));
     fileToolBar->addAction(m_saveAction);
     fileToolBar->addAction(m_actions.value(QStringLiteral("file.exportSvg")));
+    fileToolBar->addAction(m_copyForWordAction);
+    m_outputScope = new QComboBox(fileToolBar);
+    m_outputScope->addItem(QStringLiteral("Selection"), static_cast<int>(ExportScope::Selection));
+    m_outputScope->addItem(QStringLiteral("Current Page"), static_cast<int>(ExportScope::CurrentPage));
+    const int scopeValue = QSettings().value(QStringLiteral("output/scope"),
+                                              static_cast<int>(ExportScope::Selection)).toInt();
+    m_outputScope->setCurrentIndex(scopeValue == static_cast<int>(ExportScope::CurrentPage) ? 1 : 0);
+    connect(m_outputScope, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+        QSettings().setValue(QStringLiteral("output/scope"), static_cast<int>(outputScope()));
+        refreshUi();
+    });
+    fileToolBar->addWidget(m_outputScope);
     fileToolBar->addSeparator();
     fileToolBar->addAction(m_actions.value(QStringLiteral("view.fitPage")));
 }
@@ -893,12 +932,14 @@ void MainWindow::createMenus()
     fileMenu->addAction(m_actions.value(QStringLiteral("file.saveAs")));
     fileMenu->addSeparator();
     fileMenu->addAction(m_actions.value(QStringLiteral("file.exportSvg")));
+    fileMenu->addAction(m_copyForWordAction);
 
     QMenu* editMenu = menuBar()->addMenu(QStringLiteral("Edit"));
     editMenu->addAction(m_actions.value(QStringLiteral("edit.undo")));
     editMenu->addAction(m_actions.value(QStringLiteral("edit.redo")));
     editMenu->addSeparator();
     editMenu->addAction(m_copyAction);
+    editMenu->addAction(m_copyForWordAction);
     editMenu->addAction(m_cutAction);
     editMenu->addAction(m_pasteAction);
     editMenu->addAction(m_actions.value(QStringLiteral("edit.duplicate")));
@@ -923,6 +964,13 @@ void MainWindow::createMenus()
 void MainWindow::setStatus(const QString& message)
 {
     statusBar()->showMessage(message, 5000);
+}
+
+ExportScope MainWindow::outputScope() const
+{
+    return m_outputScope && m_outputScope->currentData().toInt() == static_cast<int>(ExportScope::CurrentPage)
+        ? ExportScope::CurrentPage
+        : ExportScope::Selection;
 }
 
 bool MainWindow::maybeSave()
@@ -1025,6 +1073,7 @@ void MainWindow::setGlobalEditorShortcutsEnabled(bool enabled)
     // commands.  File commands remain available while text is being edited.
     const QStringList editorActionIds = {
         QStringLiteral("edit.copy"),
+        QStringLiteral("edit.copyForWord"),
         QStringLiteral("edit.cut"),
         QStringLiteral("edit.paste"),
         QStringLiteral("edit.selectAll"),
