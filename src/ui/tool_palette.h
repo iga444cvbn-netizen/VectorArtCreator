@@ -18,6 +18,7 @@ public:
     explicit ToolPalette(QWidget* parent = nullptr);
 
     void setActiveTool(EditorTool tool);
+    void setToolEnabled(EditorTool tool, bool enabled);
     void setToolShortcut(EditorTool tool, const QKeySequence& sequence);
 
 signals:

@@ -292,6 +292,19 @@ void OracleSelfTests::invariantCheckerRejectsSyntheticCorruption()
     QVERIFY(!numericReport.ok());
     QVERIFY2(numericReport.summary().contains(QStringLiteral("invalid transform")),
              qPrintable(numericReport.summary()));
+
+    Document unsupportedMask(valid);
+    std::unique_ptr<Effect> echo = EffectRegistry::instance().create(QStringLiteral("echo"));
+    QVERIFY(echo);
+    echo->instanceId = QStringLiteral("unsupported-mask-effect");
+    EffectMaskStroke mask;
+    mask.points = {QPointF(10.0, 10.0)};
+    echo->maskStrokes = {mask};
+    unsupportedMask.pages.front()->layers.front()->objects.front()->effects.append(std::move(echo));
+    const auto capabilityReport = test::checkInvariants(unsupportedMask);
+    QVERIFY(!capabilityReport.ok());
+    QVERIFY2(capabilityReport.summary().contains(QStringLiteral("unsupported effect mask")),
+             qPrintable(capabilityReport.summary()));
 }
 
 void OracleSelfTests::currentSchemaLoaderRejectsIdentityCorruption()

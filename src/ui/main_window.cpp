@@ -214,9 +214,7 @@ MainWindow::MainWindow(QWidget* parent)
         m_canvas->setScene(m_controller->sceneGeometry(),
                            m_controller->selectedObjectIds(),
                            m_controller->selectionModel()->activeObjectId());
-        m_canvas->setMaskTarget(m_controller->selectionModel()->activeObjectId());
-        m_canvas->setMaskEnabled(!m_effectsPanel->selectedEffectId().isEmpty());
-        m_canvas->setMaskEffectId(m_effectsPanel->selectedEffectId());
+        refreshEffectMaskCapability();
     });
     connect(m_controller, &EditorController::documentChanged, this, [this] {
         // Commands mutate the document synchronously while scene evaluation is
@@ -427,24 +425,12 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_effectsPanel, &EffectsPanel::effectSelected,
             this, [this](const QString& effectId) {
                 m_controller->setSelectedEffectId(effectId);
-                const TextObject* object = m_controller->activeObject();
-                const Effect* effect = object ? object->effects.byInstanceId(effectId) : nullptr;
-                const EffectDescriptor* descriptor = effect
-                    ? EffectRegistry::instance().descriptor(effect->typeId()) : nullptr;
-                const bool supportsMask = descriptor && descriptor->supportsMask;
-                m_canvas->setMaskEnabled(supportsMask);
-                m_canvas->setMaskEffectId(supportsMask ? effectId : QString());
+                refreshEffectMaskCapability();
             });
     connect(m_controller, &EditorController::selectedEffectChanged, this,
             [this](const QString& effectId) {
                 m_effectsPanel->setSelectedEffectId(effectId);
-                const TextObject* object = m_controller->activeObject();
-                const Effect* effect = object ? object->effects.byInstanceId(effectId) : nullptr;
-                const EffectDescriptor* descriptor = effect
-                    ? EffectRegistry::instance().descriptor(effect->typeId()) : nullptr;
-                const bool supportsMask = descriptor && descriptor->supportsMask;
-                m_canvas->setMaskEnabled(supportsMask);
-                m_canvas->setMaskEffectId(supportsMask ? effectId : QString());
+                refreshEffectMaskCapability();
             });
     connect(m_effectsPanel, &EffectsPanel::effectScopeChanged, this,
             [this](const QString& effectId, const EffectScope& scope) {
@@ -580,9 +566,6 @@ void MainWindow::refreshUi()
                        m_controller->selectionModel()->activeObjectId());
     m_canvas->setTextRange(m_controller->selectionModel()->textRange().first,
                            m_controller->selectionModel()->textRange().second);
-    m_canvas->setMaskTarget(m_controller->selectionModel()->activeObjectId());
-    m_canvas->setMaskEnabled(!m_effectsPanel->selectedEffectId().isEmpty());
-    m_canvas->setMaskEffectId(m_effectsPanel->selectedEffectId());
     m_transformPanel->refresh(object);
     // Family and style are one resolved FontDescriptor. Populate/select the
     // family styles before TypographyPanel reads that descriptor.
@@ -601,6 +584,7 @@ void MainWindow::refreshUi()
     } else if (m_effectsPanel->selectedEffectId() != m_controller->selectedEffectId()) {
         m_controller->setSelectedEffectId(m_effectsPanel->selectedEffectId());
     }
+    refreshEffectMaskCapability();
     m_effectsPanel->setTextRange(m_controller->selectionModel()->textRange().first,
                                  m_controller->selectionModel()->textRange().second);
     m_deformationPanel->refresh(object ? &object->deformation : nullptr);
@@ -644,6 +628,33 @@ void MainWindow::refreshUi()
                                 : m_controller->document().title,
                             m_controller->isModified() ? QStringLiteral("* ") : QString()));
     setGlobalEditorShortcutsEnabled(!m_canvas->isTextEditing());
+}
+
+bool MainWindow::selectedEffectSupportsMask() const
+{
+    const TextObject* object = m_controller->activeObject();
+    const QString effectId = m_effectsPanel->selectedEffectId();
+    const Effect* effect = object ? object->effects.byInstanceId(effectId) : nullptr;
+    const EffectDescriptor* descriptor = effect
+        ? EffectRegistry::instance().descriptor(effect->typeId()) : nullptr;
+    return descriptor && descriptor->supportsMask;
+}
+
+void MainWindow::refreshEffectMaskCapability()
+{
+    const bool supportsMask = selectedEffectSupportsMask();
+    const QString effectId = supportsMask ? m_effectsPanel->selectedEffectId() : QString();
+    m_canvas->setMaskTarget(m_controller->selectionModel()->activeObjectId());
+    m_canvas->setMaskEnabled(supportsMask);
+    m_canvas->setMaskEffectId(effectId);
+
+    if (!supportsMask && m_controller->tool() == EditorTool::EffectMask) {
+        m_controller->setTool(EditorTool::Select);
+    }
+    m_toolPalette->setToolEnabled(EditorTool::EffectMask, supportsMask);
+    if (QAction* action = m_actions.value(QStringLiteral("tool.effectMask"), nullptr)) {
+        action->setEnabled(supportsMask && !m_canvas->isTextEditing());
+    }
 }
 
 void MainWindow::refreshFonts()
@@ -853,6 +864,7 @@ void MainWindow::createActions()
                                  const QKeySequence& sequence,
                                  const std::function<void()>& callback) {
         auto* action = new QAction(name, this);
+        action->setObjectName(id);
         connect(action, &QAction::triggered, this, callback);
         addAction(action);
         m_shortcutManager->registerCommand(id, name, action, sequence);
@@ -1128,8 +1140,9 @@ void MainWindow::handleTextEditingChanged(bool editing)
 
 void MainWindow::setGlobalEditorShortcutsEnabled(bool enabled)
 {
+    const QAction* maskAction = m_actions.value(QStringLiteral("tool.effectMask"), nullptr);
     for (QAction* action : std::as_const(m_toolActions)) {
-        action->setEnabled(enabled);
+        action->setEnabled(enabled && (action != maskAction || selectedEffectSupportsMask()));
     }
 
     // These actions belong to the editor canvas, not to the in-place text

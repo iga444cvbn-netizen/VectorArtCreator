@@ -59,6 +59,8 @@ public:
     [[nodiscard]] QPointF mapDocumentToViewport(const QPointF& documentPoint) const;
     [[nodiscard]] BrushMode brushMode() const { return m_brushMode; }
     [[nodiscard]] BrushTarget brushTarget() const { return m_brushTarget; }
+    [[nodiscard]] bool maskEnabled() const { return m_maskEnabled; }
+    [[nodiscard]] QString maskEffectId() const { return m_maskEffectId; }
 
 public slots:
     void fitContent();

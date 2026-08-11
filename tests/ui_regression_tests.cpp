@@ -1,3 +1,4 @@
+#include "core/effects/effect_registry.h"
 #include "core/effects/wave_effect.h"
 #include "core/serialization/project_serializer.h"
 #include "tests/support/state_fingerprint.h"
@@ -8,6 +9,7 @@
 #include "ui/transform_panel.h"
 #include "ui/typography_panel.h"
 
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -17,6 +19,7 @@
 #include <QGraphicsScene>
 #include <QGuiApplication>
 #include <QInputMethodEvent>
+#include <QJsonArray>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
@@ -50,6 +53,8 @@ private slots:
     void styleIntensityGestureHasImmediateDirtyTruthAndOneUndoStep();
     void rotatedMarqueeUsesInkAsNarrowPhase();
     void objectRowLayerButtonsOperateOnParentLayer();
+    void unsupportedEffectDisablesMaskUiAcrossRefreshes_data();
+    void unsupportedEffectDisablesMaskUiAcrossRefreshes();
 };
 
 namespace {
@@ -676,6 +681,120 @@ void EffectsPanelUiTests::objectRowLayerButtonsOperateOnParentLayer()
     QTRY_VERIFY(controller->document().layerById(layerId)->locked);
     QTest::mouseClick(lock, Qt::LeftButton);
     QTRY_VERIFY(!controller->document().layerById(layerId)->locked);
+}
+
+void EffectsPanelUiTests::unsupportedEffectDisablesMaskUiAcrossRefreshes_data()
+{
+    QTest::addColumn<QString>("unsupportedTypeId");
+    for (const EffectDescriptor& descriptor : EffectRegistry::instance().descriptors()) {
+        if (!descriptor.supportsMask) {
+            QTest::newRow(descriptor.typeId.toUtf8().constData()) << descriptor.typeId;
+        }
+    }
+}
+
+void EffectsPanelUiTests::unsupportedEffectDisablesMaskUiAcrossRefreshes()
+{
+    QFETCH(QString, unsupportedTypeId);
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    auto* controller = window.findChild<EditorController*>();
+    auto* canvas = window.findChild<EditorCanvas*>();
+    auto* effectList = window.findChild<QListWidget*>(QStringLiteral("effectList"));
+    auto* maskButton = window.findChild<QToolButton*>(QStringLiteral("tool/effect-mask"));
+    auto* maskAction = window.findChild<QAction*>(QStringLiteral("tool.effectMask"));
+    QVERIFY(controller);
+    QVERIFY(canvas);
+    QVERIFY(effectList);
+    QVERIFY(maskButton);
+    QVERIFY(maskAction);
+
+    const QString objectId = controller->createTextObject(QPointF(100, 100), QStringLiteral("Mask capability"));
+    controller->addEffect(unsupportedTypeId);
+    const TextObject* object = controller->document().objectById(objectId);
+    QVERIFY(object);
+    QCOMPARE(object->effects.size(), 1);
+    const Effect* unsupportedEffect = object->effects.at(0);
+    QVERIFY(unsupportedEffect);
+    QCOMPARE(unsupportedEffect->typeId(), unsupportedTypeId);
+    const QString unsupportedId = unsupportedEffect->instanceId;
+    QCoreApplication::processEvents();
+    QVERIFY(!canvas->maskEnabled());
+    QVERIFY(canvas->maskEffectId().isEmpty());
+    QVERIFY(!maskButton->isEnabled());
+    QVERIFY(!maskAction->isEnabled());
+    QTest::mouseClick(maskButton, Qt::LeftButton);
+    maskAction->trigger();
+    QCOMPARE(static_cast<int>(controller->tool()), static_cast<int>(EditorTool::Select));
+
+    controller->addEffect(QStringLiteral("wave"));
+    object = controller->document().objectById(objectId);
+    QVERIFY(object);
+    QCOMPARE(object->effects.size(), 2);
+    const QString waveId = object->effects.at(1)->instanceId;
+    QTRY_COMPARE(controller->selectedEffectId(), waveId);
+    QTRY_VERIFY(canvas->maskEnabled());
+    QCOMPARE(canvas->maskEffectId(), waveId);
+    QVERIFY(maskButton->isEnabled());
+    QVERIFY(maskAction->isEnabled());
+
+    QTest::mouseClick(maskButton, Qt::LeftButton);
+    QTRY_COMPARE(static_cast<int>(controller->tool()), static_cast<int>(EditorTool::EffectMask));
+
+    int unsupportedRow = -1;
+    for (int row = 0; row < effectList->count(); ++row) {
+        if (effectList->item(row)->data(Qt::UserRole).toString() == unsupportedId) {
+            unsupportedRow = row;
+            break;
+        }
+    }
+    QVERIFY(unsupportedRow >= 0);
+    QTest::mouseClick(effectList->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      effectList->visualItemRect(effectList->item(unsupportedRow)).center());
+    QTRY_COMPARE(controller->selectedEffectId(), unsupportedId);
+    QTRY_COMPARE(static_cast<int>(controller->tool()), static_cast<int>(EditorTool::Select));
+    QVERIFY(!canvas->maskEnabled());
+    QVERIFY(canvas->maskEffectId().isEmpty());
+    QVERIFY(!maskButton->isEnabled());
+    QVERIFY(!maskAction->isEnabled());
+
+    // A document refresh and its later asynchronous scene publication used to
+    // re-enable masking merely because an effect ID remained selected.
+    QSignalSpy sceneSpy(controller, &EditorController::sceneChanged);
+    controller->setText(QStringLiteral("Mask capability after refresh"));
+    QTRY_COMPARE(controller->document().objectById(objectId)->sourceText,
+                 QStringLiteral("Mask capability after refresh"));
+    QTRY_VERIFY_WITH_TIMEOUT(sceneSpy.count() > 0, 5000);
+    QVERIFY(!canvas->maskEnabled());
+    QVERIFY(canvas->maskEffectId().isEmpty());
+    QVERIFY(!maskButton->isEnabled());
+    QVERIFY(!maskAction->isEnabled());
+
+    EffectMaskStroke stroke;
+    stroke.points = {QPointF(100, 100), QPointF(120, 110)};
+    controller->addEffectMaskStroke(objectId, unsupportedId, stroke);
+    QVERIFY(controller->document().objectById(objectId)
+                ->effects.byInstanceId(unsupportedId)->maskStrokes.isEmpty());
+    const QJsonArray serializedEffects = ProjectSerializer::textObjectToJson(
+        *controller->document().objectById(objectId)).value(QStringLiteral("effects")).toArray();
+    bool foundSerializedEffect = false;
+    for (const QJsonValue& value : serializedEffects) {
+        const QJsonObject serializedEffect = value.toObject();
+        if (serializedEffect.value(QStringLiteral("id")).toString() == unsupportedId) {
+            foundSerializedEffect = true;
+            QVERIFY(serializedEffect.value(QStringLiteral("mask")).toArray().isEmpty());
+        }
+    }
+    QVERIFY(foundSerializedEffect);
+    Document restored;
+    QString error;
+    QVERIFY2(ProjectSerializer::fromJson(ProjectSerializer::toJson(controller->document()),
+                                         &restored, &error),
+             qPrintable(error));
+    QVERIFY(restored.objectById(objectId)
+                ->effects.byInstanceId(unsupportedId)->maskStrokes.isEmpty());
 }
 
 void EffectsPanelUiTests::traitModeIsShownAfterBoldAndItalic()

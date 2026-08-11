@@ -48,7 +48,8 @@ Shared helpers live in `tests/support`:
 - `state_fingerprint` is a canonical persistent-only JSON representation; it
   omits dates, active-widget state and async/cache state.
 - `invariant_checker` checks global ID uniqueness, hierarchical page/layer/
-  object locality, numeric domains, masks/deformation, selections, and full
+  object locality, numeric domains, descriptor mask/range capabilities,
+  masks/deformation, selections, and full
   published-scene ownership/transform/source coherence after arbitrary
   workflows.
 - `AsyncEvaluationGate` occupies the global evaluation pool with a semaphore,
@@ -130,7 +131,7 @@ The permanent checks are intentionally mapped to the user-visible bug class:
 | Tracking decorations and font cache/style authority | existing core shaping/cache cases; `semanticCopyContractCoversPersistentInventory` inventories all descriptor fields |
 | Effect finite-but-wrong/no-op behavior | `registeredEffectContract`, `waveAndStretchHaveDirectionalMagnitude` |
 | Effect ordering silently commutative | `effectOrderIsSemanticallyNonCommutative` |
-| Effect range or mask ignored | `maskAndTextRangeRespectDescriptorClaims`, `unsupportedEffectMaskIsRefusedWithoutMutation` |
+| Effect range or mask ignored / unsupported mask offered by UI (P2-02) | `maskAndTextRangeRespectDescriptorClaims`, registry-driven `unsupportedEffectMaskIsRefusedWithoutMutation`, registry-driven real-widget `unsupportedEffectDisablesMaskUiAcrossRefreshes` |
 | Noise nondeterminism/seed ignored | `deterministicSeedsAndGeneratorMetadata` |
 | Generator count/opacity/source lineage loss | `deterministicSeedsAndGeneratorMetadata` |
 | Master Strength zero/copy omission (P1-01) | `registeredEffectContract` (all effects), `semanticCopyContractCoversPersistentInventory`, `semanticFingerprintExcludesOnlyDeclaredTransientState` |

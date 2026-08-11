@@ -14,6 +14,7 @@
 #include <QFile>
 #include <QFont>
 #include <QGuiApplication>
+#include <QJsonArray>
 #include <QRandomGenerator>
 #include <QSet>
 #include <QThreadPool>
@@ -37,6 +38,7 @@ private slots:
     void mergeableCommandReturningToStartRestoresClean();
     void realFileLifecyclePreservesComplexSemantics();
     void exportPlainTextPreservesEqualObjectMultiplicity();
+    void unsupportedEffectMaskIsRefusedWithoutMutation_data();
     void unsupportedEffectMaskIsRefusedWithoutMutation();
     void duplicatePasteAndPresetFreshenEffectIdentities();
     void effectReorderDeleteUndoRestoresSemanticOrder();
@@ -469,20 +471,36 @@ void WorkflowIntegrationTests::exportPlainTextPreservesEqualObjectMultiplicity()
                                        QStringLiteral("equal-value-object-b")}));
 }
 
+void WorkflowIntegrationTests::unsupportedEffectMaskIsRefusedWithoutMutation_data()
+{
+    QTest::addColumn<QString>("unsupportedTypeId");
+    for (const EffectDescriptor& descriptor : EffectRegistry::instance().descriptors()) {
+        if (!descriptor.supportsMask) {
+            QTest::newRow(descriptor.typeId.toUtf8().constData()) << descriptor.typeId;
+        }
+    }
+}
+
 void WorkflowIntegrationTests::unsupportedEffectMaskIsRefusedWithoutMutation()
 {
+    QFETCH(QString, unsupportedTypeId);
     EditorController controller;
     const QString objectId = controller.createTextObject(QPointF(80, 80), QStringLiteral("mask contract"));
-    controller.addEffect(QStringLiteral("echo"));
-    Effect* echo = controller.document().objectById(objectId)->effects.at(0);
-    QVERIFY(echo);
-    const EffectDescriptor* echoDescriptor = EffectRegistry::instance().descriptor(echo->typeId());
-    QVERIFY(echoDescriptor && !echoDescriptor->supportsMask);
+    controller.addEffect(unsupportedTypeId);
+    Effect* unsupportedEffect = controller.document().objectById(objectId)->effects.at(0);
+    QVERIFY(unsupportedEffect);
+    QCOMPARE(unsupportedEffect->typeId(), unsupportedTypeId);
+    const EffectDescriptor* descriptor = EffectRegistry::instance().descriptor(unsupportedTypeId);
+    QVERIFY(descriptor && !descriptor->supportsMask);
     EffectMaskStroke stroke;
     stroke.points = {QPointF(90, 90), QPointF(120, 100)};
     stroke.radius = 18.0;
-    controller.addEffectMaskStroke(objectId, echo->instanceId, stroke);
-    QVERIFY(echo->maskStrokes.isEmpty());
+    controller.addEffectMaskStroke(objectId, unsupportedEffect->instanceId, stroke);
+    QVERIFY(unsupportedEffect->maskStrokes.isEmpty());
+    const QJsonArray serializedEffects = ProjectSerializer::textObjectToJson(
+        *controller.document().objectById(objectId)).value(QStringLiteral("effects")).toArray();
+    QCOMPARE(serializedEffects.size(), 1);
+    QVERIFY(serializedEffects.at(0).toObject().value(QStringLiteral("mask")).toArray().isEmpty());
 
     controller.addEffect(QStringLiteral("wave"));
     Effect* wave = controller.document().objectById(objectId)->effects.at(1);

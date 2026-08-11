@@ -2,6 +2,8 @@
 
 #include "tests/support/geometry_assertions.h"
 
+#include "core/effects/effect_registry.h"
+
 #include <QHash>
 #include <QSet>
 #include <QTransform>
@@ -127,6 +129,23 @@ InvariantReport checkInvariants(const Document& document, const SceneGeometry* s
                         report.failures << QStringLiteral("invalid effect state on %1").arg(object->id);
                     }
                     if (effect) {
+                        const EffectDescriptor* descriptor =
+                            EffectRegistry::instance().descriptor(effect->typeId());
+                        if (!descriptor || descriptor->domain != effect->domain()) {
+                            report.failures << QStringLiteral("effect descriptor mismatch on %1")
+                                                   .arg(object->id);
+                        } else {
+                            if (!descriptor->supportsMask
+                                && (!effect->maskStrokes.isEmpty() || effect->maskInverted)) {
+                                report.failures << QStringLiteral("unsupported effect mask on %1 effect %2")
+                                                       .arg(object->id, effect->instanceId);
+                            }
+                            if (!descriptor->supportsTextRange
+                                && effect->scope.kind == EffectScopeKind::TextRange) {
+                                report.failures << QStringLiteral("unsupported text range on %1 effect %2")
+                                                       .arg(object->id, effect->instanceId);
+                            }
+                        }
                         for (const EffectParameter& parameter : effect->parameterDefinitions()) {
                             if (!std::isfinite(parameter.value) || !std::isfinite(parameter.minimum)
                                 || !std::isfinite(parameter.maximum) || !std::isfinite(parameter.step)
