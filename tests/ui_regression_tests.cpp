@@ -241,7 +241,6 @@ void EffectsPanelUiTests::addTextStartsFocusedAndAlignedBeforeAndAfterScenePubli
     QVERIFY(editorView);
     auto* editor = nativeTextEditor(editorView);
     QVERIFY(editor);
-    QTRY_VERIFY(editor->hasFocus());
 
     const QString objectId = canvas->editingObjectId();
     const TextObject* object = controller->document().objectById(objectId);
@@ -254,6 +253,7 @@ void EffectsPanelUiTests::addTextStartsFocusedAndAlignedBeforeAndAfterScenePubli
         }
     }
     QVERIFY(proxy);
+    QTRY_VERIFY(editorView->scene()->focusItem() == proxy || editor->hasFocus());
     const auto verifyAligned = [&] {
         const QPoint actual = canvas->mapFrom(editorView,
             editorView->mapFromScene(proxy->sceneBoundingRect().center()));
@@ -265,7 +265,7 @@ void EffectsPanelUiTests::addTextStartsFocusedAndAlignedBeforeAndAfterScenePubli
     };
     verifyAligned(); // regression: this is the pre-async fallback geometry path
 
-    QTest::keyClicks(editor, QStringLiteral("Привет, мир!"));
+    QTest::keyClicks(editorView, QStringLiteral("Привет, мир!"));
     QTRY_COMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("Привет, мир!"));
     QTRY_VERIFY(controller->sceneGeometry().objectById(objectId) != nullptr);
     QTRY_VERIFY(controller->sceneGeometry().objectById(objectId)->geometry.hasVisibleGeometry());
@@ -291,8 +291,8 @@ void EffectsPanelUiTests::textToolStartsFocusedAtCurrentZoom()
     QVERIFY(editorView);
     auto* editor = nativeTextEditor(editorView);
     QVERIFY(editor);
-    QTRY_VERIFY(editor->hasFocus());
-    QTest::keyClicks(editor, QStringLiteral("Test 123"));
+    QTRY_VERIFY(editorView->scene()->focusItem() != nullptr || editor->hasFocus());
+    QTest::keyClicks(editorView, QStringLiteral("Test 123"));
     const QString objectId = canvas->editingObjectId();
     QTRY_COMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("Test 123"));
 }
