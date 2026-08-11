@@ -2,6 +2,7 @@
 #include "tests/support/state_fingerprint.h"
 
 #include "core/serialization/project_serializer.h"
+#include "ui/editor_controller.h"
 
 #include <QTemporaryDir>
 #include <QTest>
