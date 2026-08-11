@@ -118,6 +118,8 @@ enable_testing()
 set(TEST_SUPPORT_SOURCES
     tests/support/geometry_assertions.cpp
     tests/support/invariant_checker.cpp
+    tests/support/semantic_equality.cpp
+    tests/support/semantic_geometry.cpp
     tests/support/state_fingerprint.cpp
     tests/support/test_fonts.cpp
 )
@@ -171,6 +173,14 @@ target_include_directories(vector_typography_effect_contract_tests PRIVATE ${CMA
 target_link_libraries(vector_typography_effect_contract_tests PRIVATE vector_typography_test_support Qt6::Core Qt6::Gui Qt6::Test)
 add_test(NAME vector_typography_effect_contract_tests COMMAND vector_typography_effect_contract_tests)
 set_tests_properties(vector_typography_effect_contract_tests PROPERTIES LABELS "core;integration;effects")
+
+add_executable(vector_typography_oracle_tests
+    tests/integration/oracle_self_tests.cpp
+)
+target_include_directories(vector_typography_oracle_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(vector_typography_oracle_tests PRIVATE vector_typography_test_support Qt6::Core Qt6::Gui Qt6::Test)
+add_test(NAME vector_typography_oracle_tests COMMAND vector_typography_oracle_tests)
+set_tests_properties(vector_typography_oracle_tests PROPERTIES LABELS "core;integration;oracle")
 
 add_executable(vector_typography_integration_tests
     tests/integration/workflow_integration_tests.cpp

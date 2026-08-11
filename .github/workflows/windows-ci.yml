@@ -92,6 +92,7 @@ jobs:
             $executables = @(
               'vector_typography_tests.exe',
               'vector_typography_effect_contract_tests.exe',
+              'vector_typography_oracle_tests.exe',
               'vector_typography_integration_tests.exe',
               'vector_typography_ui_smoke_tests.exe',
               'vector_typography_ui_tests.exe',

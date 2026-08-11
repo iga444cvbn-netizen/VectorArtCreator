@@ -1,15 +1,96 @@
 #include "core/serialization/project_serializer.h"
 
 #include <QFile>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonParseError>
 #include <QSaveFile>
+#include <QSet>
 
 #include <utility>
 
 namespace vt {
 
 namespace {
+
+bool identityError(const QString& message, QString* error)
+{
+    if (error) *error = message;
+    return false;
+}
+
+// Current-schema IDs are persisted semantic identity, not optional hints.
+// Validate the raw hierarchy before constructors can replace missing IDs with
+// fresh defaults and accidentally turn corruption into a different project.
+bool validateCurrentSchemaIdentity(const QJsonObject& root, QString* error)
+{
+    const QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+    QSet<QString> pageIds;
+    QSet<QString> layerIds;
+    QSet<QString> objectIds;
+    QSet<QString> effectIds;
+    QHash<QString, QSet<QString>> layerIdsByPage;
+    QHash<QString, QSet<QString>> objectIdsByPage;
+
+    for (int pageIndex = 0; pageIndex < pages.size(); ++pageIndex) {
+        const QJsonObject page = pages.at(pageIndex).toObject();
+        const QString pageId = page.value(QStringLiteral("id")).toString();
+        if (pageId.isEmpty() || pageIds.contains(pageId)) {
+            return identityError(QStringLiteral("Project contains a missing or duplicate page ID at page %1.")
+                                     .arg(pageIndex), error);
+        }
+        pageIds.insert(pageId);
+        const QJsonArray layers = page.value(QStringLiteral("layers")).toArray();
+        if (layers.isEmpty()) {
+            return identityError(QStringLiteral("Current-schema page '%1' has no layer.").arg(pageId), error);
+        }
+        for (int layerIndex = 0; layerIndex < layers.size(); ++layerIndex) {
+            const QJsonObject layer = layers.at(layerIndex).toObject();
+            const QString layerId = layer.value(QStringLiteral("id")).toString();
+            if (layerId.isEmpty() || layerIds.contains(layerId)) {
+                return identityError(QStringLiteral("Project contains a missing or duplicate layer ID at page %1 layer %2.")
+                                         .arg(pageIndex).arg(layerIndex), error);
+            }
+            layerIds.insert(layerId);
+            layerIdsByPage[pageId].insert(layerId);
+            const QJsonArray objects = layer.value(QStringLiteral("objects")).toArray();
+            for (int objectIndex = 0; objectIndex < objects.size(); ++objectIndex) {
+                const QJsonObject object = objects.at(objectIndex).toObject();
+                const QString objectId = object.value(QStringLiteral("id")).toString();
+                if (objectId.isEmpty() || objectIds.contains(objectId)) {
+                    return identityError(QStringLiteral("Project contains a missing or duplicate object ID at page %1 layer %2 object %3.")
+                                             .arg(pageIndex).arg(layerIndex).arg(objectIndex), error);
+                }
+                objectIds.insert(objectId);
+                objectIdsByPage[pageId].insert(objectId);
+                const QJsonArray effects = object.value(QStringLiteral("effects")).toArray();
+                for (int effectIndex = 0; effectIndex < effects.size(); ++effectIndex) {
+                    const QString effectId = effects.at(effectIndex).toObject()
+                                                 .value(QStringLiteral("id")).toString();
+                    if (effectId.isEmpty() || effectIds.contains(effectId)) {
+                        return identityError(QStringLiteral("Project contains a missing or duplicate effect ID at page %1 layer %2 object %3 effect %4.")
+                                                 .arg(pageIndex).arg(layerIndex).arg(objectIndex).arg(effectIndex), error);
+                    }
+                    effectIds.insert(effectId);
+                }
+            }
+        }
+    }
+
+    const QString currentPageId = root.value(QStringLiteral("currentPageId")).toString();
+    if (!pageIds.contains(currentPageId)) {
+        return identityError(QStringLiteral("Current-schema project references an unknown current page ID."), error);
+    }
+    const QString activeLayerId = root.value(QStringLiteral("activeLayerId")).toString();
+    if (!layerIdsByPage.value(currentPageId).contains(activeLayerId)) {
+        return identityError(QStringLiteral("Current-schema project active layer is not on its current page."), error);
+    }
+    const QString activeObjectId = root.value(QStringLiteral("activeObjectId")).toString();
+    if (!activeObjectId.isEmpty() && !objectIdsByPage.value(currentPageId).contains(activeObjectId)) {
+        return identityError(QStringLiteral("Current-schema project active object is not on its current page."), error);
+    }
+    return true;
+}
 
 QJsonObject serializeTextObject(const TextObject& textObject)
 {
@@ -303,6 +384,11 @@ bool ProjectSerializer::fromJson(const QJsonDocument& json, Document* document, 
         return false;
     }
 
+    if (version == Document::CurrentFormatVersion
+        && !validateCurrentSchemaIdentity(root, error)) {
+        return false;
+    }
+
     Document result;
     // Loading an older project migrates it into the current in-memory schema;
     // the next save writes the current format version.
@@ -387,10 +473,24 @@ bool ProjectSerializer::fromJson(const QJsonDocument& json, Document* document, 
     if (!result.pageById(result.currentPageId)) {
         result.currentPageId = result.pages.front()->id;
     }
-    if (!result.layerById(result.activeLayerId)) {
-        result.activeLayerId = result.pages.front()->layers.front()->id;
+    Page* loadedCurrentPage = result.pageById(result.currentPageId);
+    if (!loadedCurrentPage) {
+        result.currentPageId = result.pages.front()->id;
+        loadedCurrentPage = result.pages.front().get();
     }
-    if (!result.objectById(result.activeObjectId)) {
+    if (!loadedCurrentPage->layerById(result.activeLayerId)) {
+        result.activeLayerId = loadedCurrentPage->layers.front()->id;
+    }
+    bool activeObjectIsLocal = result.activeObjectId.isEmpty();
+    if (!result.activeObjectId.isEmpty()) {
+        for (const auto& layer : loadedCurrentPage->layers) {
+            if (layer && layer->objectById(result.activeObjectId)) {
+                activeObjectIsLocal = true;
+                break;
+            }
+        }
+    }
+    if (!activeObjectIsLocal) {
         result.activeObjectId.clear();
         if (const Layer* layer = result.activeLayer()) {
             if (!layer->objects.empty() && layer->objects.front()) {
