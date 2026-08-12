@@ -2,6 +2,8 @@
 
 #include "core/document/document.h"
 #include "core/export/svg_exporter.h"
+#include "core/export/export_payload_builder.h"
+#include "platform/vector_clipboard_service.h"
 #include "core/presets/preset_manager.h"
 #include "core/presets/preset_catalog.h"
 #include "core/scene/scene_geometry.h"
@@ -148,6 +150,9 @@ public:
     [[nodiscard]] bool saveProject(const QString& filePath, QString* error = nullptr);
     [[nodiscard]] bool openProject(const QString& filePath, QString* error = nullptr);
     [[nodiscard]] bool exportSvg(const QString& filePath, QString* error = nullptr) const;
+    [[nodiscard]] bool exportSvg(const QString& filePath, ExportScope scope, QString* error) const;
+    [[nodiscard]] bool copyForWord(ExportScope scope, QString* error = nullptr) const;
+    [[nodiscard]] bool canExport(ExportScope scope) const;
 
 public slots:
     void setEffectMasterStrength(int index, double strength);
@@ -175,6 +180,9 @@ private:
     void publishError(const QString& message);
     [[nodiscard]] TextObject* editableActiveObject();
     [[nodiscard]] const TextObject* editableActiveObject() const;
+    [[nodiscard]] bool buildExportPayload(ExportScope scope,
+                                          VectorExportPayload* payload,
+                                          QString* error) const;
 
     Document m_document;
     TextEngine m_textEngine;

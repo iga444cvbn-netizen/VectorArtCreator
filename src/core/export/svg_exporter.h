@@ -2,6 +2,7 @@
 
 #include "core/export/export_backend.h"
 #include "core/scene/scene_geometry.h"
+#include "core/export/vector_export_payload.h"
 
 namespace vt {
 
@@ -16,6 +17,8 @@ public:
                                    const SceneGeometry& scene,
                                    const QString& filePath,
                                    QString* error) const;
+    [[nodiscard]] bool exportPayload(const VectorExportPayload& payload,
+                                     const QString& filePath, QString* error) const;
 
 private:
     [[nodiscard]] static QString pathData(const QPainterPath& path);

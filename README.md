@@ -108,7 +108,7 @@ tests                   Qt Test coverage of core and controller behavior
 
 ## Serialization and compatibility
 
-Project files are currently format version 4. Version 1 absolute tracking values
+Project files are currently format version 6. Version 1 absolute tracking values
 are migrated to `trackingEm`; legacy v1-v3 flat object arrays migrate into one
 page and one layer. A saved project always writes the current page/layer/object
 schema with stable IDs and object transforms. Each deformation stroke stores its
@@ -123,11 +123,25 @@ as the path. Legacy name-based JSON files remain readable where practical.
 fields for future exact-face and licensing work. Actual embedding and private
 font loading are intentionally not implemented.
 
+## Production output
+
+The output control shares **Selection** and **Current Page** scopes between SVG
+export and Windows **Copy for Word**. Selection is tightly bounded and moved to a
+local origin; Page uses its page rectangle. Export coordinates use a 96-DPI
+logical-unit contract. Copy for Word publishes EMF+ Dual first, then SVG, PNG
+(192 DPI, maximum 8192 pixels per side / 32 MP), and Unicode text fallbacks. It
+is intentionally separate from **Copy Objects** (`Ctrl+C`). Output preferences
+live in QSettings, never in `.vtproj`.
+
+Clipboard handle ownership transfers only after successful `SetClipboardData`.
+Office alpha support varies by host/version, so SVG and PNG remain useful
+interoperability fallbacks. macOS Copy for Word is not implemented.
+
 ## Current limitations
 
 The current milestone uses a compact effect catalog and scalar vector masks;
-it does not include raster painting, arbitrary Bézier mask editing, Word/EMF
-clipboard interchange, or font embedding/licensing workflows.
+it does not include raster painting, arbitrary Bézier mask editing, or font
+embedding/licensing workflows.
 
 This milestone intentionally does not include Zalgo, horror generators, glitch or
 blur systems, Word clipboard/EMF export, font embedding or licensing parsing,

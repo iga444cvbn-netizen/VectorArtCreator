@@ -10,6 +10,9 @@ on:
       # Phase 4B is intentionally reviewed as a stacked PR until Phase 4A
       # merges; validate it with the authoritative Windows pipeline too.
       - codex/phase-4a-creative-workflow
+      # Phase 4C is stacked on the corrected Phase 4B branch until the review
+      # chain reaches main.
+      - codex/phase-4b-expressive-geometry
       # The Phase 3 repair branch is intentionally reviewed through focused
       # stacked PRs; validate those fixes with the same Windows job.
       - codex/phase3-editor-workspace

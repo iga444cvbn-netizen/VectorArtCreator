@@ -8,6 +8,7 @@
 #include "core/effects/stretch_effect.h"
 #include "core/effects/wave_effect.h"
 #include "core/export/svg_exporter.h"
+#include "core/export/export_payload_builder.h"
 #include "core/presets/preset.h"
 #include "core/presets/preset_manager.h"
 #include "core/presets/preset_catalog.h"
@@ -174,6 +175,9 @@ private slots:
     void textReplacementPreservesEffects();
     void presetApplicationClonesEffects();
     void svgExportContainsPaths();
+    void portableExportPayloadScopesAndOpacity();
+    void payloadSvgPreservesRecordsAndWinding();
+    void exportEligibilityDoesNotEvaluateEmptyText();
     void cyrillicTextProducesGeometry();
     void glyphFallbackIsReportedWhenAvailable();
     void missingFontStatesAreDistinguished();
@@ -674,6 +678,94 @@ void CoreTests::svgExportContainsPaths()
     QVERIFY(!svg.contains("<text"));
     QVERIFY(!svg.contains("<image"));
     QVERIFY(!svg.contains("base64"));
+}
+
+void CoreTests::portableExportPayloadScopesAndOpacity()
+{
+    Document document;
+    Page page;
+    page.size = QSizeF(640.0, 480.0);
+    SceneGeometry scene;
+    scene.pageSize = page.size;
+
+    SceneObjectGeometry first;
+    first.objectId = QStringLiteral("first");
+    first.sourceText = QStringLiteral("\u041f\u0440\u0438\u0432\u0435\u0442");
+    first.fill = QColor(200, 20, 30, 128);
+    GeometryPiece firstPiece;
+    firstPiece.path.addRect(QRectF(20.0, 40.0, 30.0, 20.0));
+    firstPiece.opacityMultiplier = 0.5;
+    first.geometry.pieces.push_back(firstPiece);
+    scene.objects.push_back(first);
+
+    SceneObjectGeometry second;
+    second.objectId = QStringLiteral("second");
+    second.sourceText = QStringLiteral("World");
+    second.fill = QColor(20, 40, 200);
+    GeometryPiece secondPiece;
+    secondPiece.path.addRect(QRectF(100.0, 50.0, 10.0, 10.0));
+    second.geometry.pieces.push_back(secondPiece);
+    scene.objects.push_back(second);
+
+    VectorExportPayload selection;
+    QString error;
+    QVERIFY(ExportPayloadBuilder::build(document, page, scene, ExportScope::Selection,
+                                        {QStringLiteral("first")}, &selection, &error));
+    QCOMPARE(selection.records.size(), 1);
+    QCOMPARE(selection.bounds, QRectF(0.0, 0.0, 30.0, 20.0));
+    QCOMPARE(selection.records.front().path.boundingRect(), selection.bounds);
+    QVERIFY(qAbs(selection.records.front().opacity - 0.25) < 0.001);
+    QCOMPARE(selection.plainText, QStringLiteral("\u041f\u0440\u0438\u0432\u0435\u0442"));
+
+    VectorExportPayload pagePayload;
+    QVERIFY(ExportPayloadBuilder::build(document, page, scene, ExportScope::CurrentPage,
+                                        {}, &pagePayload, &error));
+    QCOMPARE(pagePayload.records.size(), 2);
+    QCOMPARE(pagePayload.bounds, QRectF(QPointF(), page.size));
+    QCOMPARE(pagePayload.plainText, QStringLiteral("\u041f\u0440\u0438\u0432\u0435\u0442\nWorld"));
+}
+
+void CoreTests::payloadSvgPreservesRecordsAndWinding()
+{
+    VectorExportPayload payload;
+    payload.bounds = QRectF(0.0, 0.0, 40.0, 40.0);
+    VectorExportRecord first;
+    first.fill = QColor(220, 10, 20);
+    first.opacity = 0.4;
+    first.path.addRect(QRectF(0.0, 0.0, 40.0, 40.0));
+    first.path.addRect(QRectF(10.0, 10.0, 20.0, 20.0));
+    payload.records.push_back(first);
+    VectorExportRecord second;
+    second.fill = QColor(10, 20, 220);
+    second.path.addRect(QRectF(2.0, 2.0, 4.0, 4.0));
+    payload.records.push_back(second);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString filePath = directory.filePath(QStringLiteral("payload.svg"));
+    QString error;
+    SvgExporter exporter;
+    QVERIFY2(exporter.exportPayload(payload, filePath, &error), qPrintable(error));
+    QFile file(filePath);
+    QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QByteArray svg = file.readAll();
+    QCOMPARE(svg.count("<path"), 2);
+    QVERIFY(svg.contains("fill-opacity=\"0.4"));
+    QVERIFY(svg.contains("fill-rule=\"nonzero\""));
+    QVERIFY(svg.contains("viewBox=\""));
+    QVERIFY(svg.contains("40"));
+}
+
+void CoreTests::exportEligibilityDoesNotEvaluateEmptyText()
+{
+    EditorController controller;
+    const QString objectId = controller.createTextObject(QPointF(140.0, 120.0));
+    QVERIFY(!objectId.isEmpty());
+    // An empty object has no renderable outline.  Eligibility must nevertheless
+    // be cheap and true; a call through buildExportPayload would synchronously
+    // evaluate and reject it, which is exactly what refreshUi must not do.
+    QVERIFY(controller.canExport(ExportScope::Selection));
+    QVERIFY(controller.canExport(ExportScope::CurrentPage));
 }
 
 void CoreTests::cyrillicTextProducesGeometry()
