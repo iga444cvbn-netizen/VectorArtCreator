@@ -166,7 +166,7 @@ The permanent checks are intentionally mapped to the user-visible bug class:
 | Mask AABB leaks into counters and concavities (P2-03) | `contourMaskDistanceRejectsHolesAndConcavities` |
 | Clipboard partial publication reported as complete (P2-09) | `publicationResultClassification`, `injectedOperationsClassifyFailuresAndOwnership`, `cancellationStopsBeforeClipboardPublication`, `copyForWordPublishesPortableFormats` |
 | Clipboard failure hidden behind broad skip | `busyClipboardIsAProductionFailure`, `oversizedRasterFallbackIsAProductionFailure`; complete publication must pass on Windows CI |
-| Loader duplicate/missing/nonlocal identities (P1-04) | `currentSchemaLoaderRejectsIdentityCorruption`, `historicalIdentityMigrationIsDeterministic`, `invariantCheckerRejectsSyntheticCorruption` |
+| Load/save duplicate, missing, or nonlocal identities (P1-04) | `currentSchemaLoaderRejectsIdentityCorruption` also proves a malformed live document cannot replace a good file; `historicalIdentityMigrationIsDeterministic`, `invariantCheckerRejectsSyntheticCorruption` |
 | Object-row visibility/lock uses missing metadata | `objectRowLayerButtonsOperateOnParentLayer` |
 | Capped brush resampler terminal delta points from replaced sample | `deformationResamplingIsBoundedAndDeterministic` delta-chain assertions |
 | Undo/save-load semantic identity | `semanticSaveLoadAndUndoRedoEquivalence`, `realFileLifecyclePreservesComplexSemantics` |

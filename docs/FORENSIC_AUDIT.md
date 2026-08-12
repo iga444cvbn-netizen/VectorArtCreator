@@ -33,10 +33,10 @@ and repaired in `codex/phase-4r-forensic-correctness` (draft PR #11).
 
 Unresolved forensic P1/P2 findings: **none**. Remaining platform/manual and
 telemetry limits are listed explicitly in `docs/TEST_FORTRESS_GAPS.md`; they do
-not weaken the repaired contracts. The release gate is the final same-SHA
-Windows GitHub Actions configure/build/labelled-CTest/package run. Until that
-run is recorded here and in PR #11, this closure report is implementation-complete
-but CI-pending.
+not weaken the repaired contracts. The release gate is a same-head-SHA Windows
+GitHub Actions configure/build/labelled-CTest/package run. Draft PR #11 records
+the exact final run and artifact, which are necessarily generated after this
+versioned report is committed.
 
 ---
 
