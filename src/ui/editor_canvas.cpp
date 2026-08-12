@@ -15,6 +15,7 @@
 #include <QResizeEvent>
 #include <QTextCursor>
 #include <QTextOption>
+#include <QTimer>
 #include <QWheelEvent>
 
 #include <cmath>
@@ -181,6 +182,7 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
     }
     if (!m_textEditor) {
         m_editorView = new QGraphicsView(this);
+        m_editorView->setFocusPolicy(Qt::StrongFocus);
         m_editorView->setFrameShape(QFrame::NoFrame);
         m_editorView->setAlignment(Qt::AlignLeft | Qt::AlignTop);
         m_editorView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -193,6 +195,7 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
         // QGraphicsView object.  Filtering the viewport keeps the full-canvas
         // overlay from swallowing input outside the native editor.
         m_editorView->viewport()->installEventFilter(this);
+        m_editorView->viewport()->setFocusPolicy(Qt::StrongFocus);
 
         m_textEditor = new QPlainTextEdit;
         m_textEditor->setFrameShape(QFrame::NoFrame);
@@ -203,6 +206,9 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
             "QPlainTextEdit { background: rgba(18, 21, 27, 190); color: #f4f7fb; "
             "border: 1px solid #79bfff; padding: 0px; selection-background-color: #2e76ba; }"));
         m_editorProxy = m_editorScene->addWidget(m_textEditor);
+        m_editorProxy->setFlag(QGraphicsItem::ItemIsFocusable, true);
+        m_editorProxy->setFocusPolicy(Qt::StrongFocus);
+        m_editorScene->setStickyFocus(true);
         m_textEditor->installEventFilter(this);
         connect(m_textEditor, &QPlainTextEdit::textChanged, this, [this] {
             if (!m_updatingTextEditor && !m_editingObjectId.isEmpty()) {
@@ -234,7 +240,23 @@ void EditorCanvas::beginTextEditing(const QString& objectId,
     m_editorProxy->show();
     m_editorView->show();
     m_editorView->raise();
+    // A button or canvas mouse handler may still own focus while this method
+    // returns.  Focus the graphics view, proxy and native widget as one
+    // session, then repeat after the originating event has unwound.
+    m_editorView->setFocus(Qt::OtherFocusReason);
+    m_editorView->viewport()->setFocus(Qt::OtherFocusReason);
+    m_editorScene->setFocusItem(m_editorProxy, Qt::OtherFocusReason);
+    m_editorProxy->setFocus(Qt::OtherFocusReason);
     m_textEditor->setFocus(Qt::OtherFocusReason);
+    const QString editingId = m_editingObjectId;
+    QTimer::singleShot(0, this, [this, editingId] {
+        if (!isTextEditing() || m_editingObjectId != editingId) return;
+        m_editorView->setFocus(Qt::OtherFocusReason);
+        m_editorView->viewport()->setFocus(Qt::OtherFocusReason);
+        m_editorScene->setFocusItem(m_editorProxy, Qt::OtherFocusReason);
+        m_editorProxy->setFocus(Qt::OtherFocusReason);
+        m_textEditor->setFocus(Qt::OtherFocusReason);
+    });
     emit textEditingChanged(true);
 }
 
@@ -444,6 +466,23 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
         return;
     }
     QWidget::mousePressEvent(event);
+}
+
+void EditorCanvas::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    // Deformation and effect-mask tools own their gestures.  Select/Move may
+    // promote an editable object into the native QPlainTextEdit session.
+    if (event->button() == Qt::LeftButton
+        && (m_tool == EditorTool::Select || m_tool == EditorTool::Move)) {
+        const QString objectId = hitTestObject(documentPosition(event->position()));
+        if (!objectId.isEmpty()) {
+            emit objectClicked(objectId, false);
+            emit textEditRequested(objectId);
+            event->accept();
+            return;
+        }
+    }
+    QWidget::mouseDoubleClickEvent(event);
 }
 
 bool EditorCanvas::handleCanvasMousePress(Qt::MouseButton button,
@@ -972,8 +1011,13 @@ void EditorCanvas::updateTextEditorGeometry()
     }
     m_textEditor->resize(qMax(1, qCeil(documentBounds.width())),
                          qMax(1, qCeil(documentBounds.height())));
-    m_editorProxy->setTransform(viewTransform());
-    m_editorProxy->setPos(documentBounds.topLeft());
+    // Proxy positions are scene-space while documentBounds is page-space.
+    // Keep the same one-matrix contract as the evaluated ObjectFrame path:
+    // widget-local -> page -> view/scene, with a zero proxy position.
+    QTransform documentOffset;
+    documentOffset.translate(documentBounds.x(), documentBounds.y());
+    m_editorProxy->setTransform(viewTransform() * documentOffset);
+    m_editorProxy->setPos(QPointF());
 }
 
 QString EditorCanvas::hitTestObject(const QPointF& documentPoint) const

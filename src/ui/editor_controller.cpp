@@ -15,6 +15,7 @@
 #include <QLineF>
 #include <QMimeData>
 #include <QStandardPaths>
+#include <QUuid>
 #include <QFontDatabase>
 
 #include <cmath>
@@ -103,6 +104,7 @@ std::optional<EffectParameter> findEffectParameter(const Effect& effect, const Q
 EditorController::EditorController(QObject* parent)
     : QObject(parent)
     , m_presetManager(defaultPresetDirectory())
+    , m_presetCatalog(m_presetManager)
 {
     m_selectionModel = new SelectionModel(this);
     connect(m_selectionModel, &SelectionModel::selectionChanged, this, [this] {
@@ -369,6 +371,50 @@ void EditorController::setText(const QString& text)
         m_document,
         object->sourceText,
         text,
+        [this] { onCommandChanged(); }));
+}
+
+QVector<PresetCatalogEntry> EditorController::presetCatalogEntries(QString* diagnostics) const
+{
+    return m_presetCatalog.entries(diagnostics);
+}
+
+void EditorController::setEffectStackStrength(qreal strength)
+{
+    TextObject* object = editableActiveObject();
+    if (!object) return;
+    const qreal bounded = qBound<qreal>(0.0, strength, 2.0);
+    if (nearlyEqual(object->effectStackStrength, bounded)) return;
+    if (m_effectStackStrengthGestureActive && object->id == m_effectStackStrengthGestureObjectId) {
+        object->effectStackStrength = bounded;
+        onCommandChanged();
+        return;
+    }
+    m_undoStack.push(new SetEffectStackStrengthCommand(
+        m_document, object->id, object->effectStackStrength, bounded, [this] { onCommandChanged(); }));
+}
+
+void EditorController::beginEffectStackStrengthGesture()
+{
+    TextObject* object = editableActiveObject();
+    if (!object) return;
+    m_effectStackStrengthGestureActive = true;
+    m_effectStackStrengthGestureObjectId = object->id;
+    m_effectStackStrengthGestureStart = object->effectStackStrength;
+}
+
+void EditorController::endEffectStackStrengthGesture()
+{
+    if (!m_effectStackStrengthGestureActive) return;
+    const QString objectId = m_effectStackStrengthGestureObjectId;
+    const qreal start = m_effectStackStrengthGestureStart;
+    m_effectStackStrengthGestureActive = false;
+    m_effectStackStrengthGestureObjectId.clear();
+    TextObject* object = m_document.objectById(objectId);
+    if (!object || nearlyEqual(start, object->effectStackStrength)) return;
+    const qreal final = object->effectStackStrength;
+    object->effectStackStrength = start;
+    m_undoStack.push(new SetEffectStackStrengthCommand(m_document, objectId, start, final,
         [this] { onCommandChanged(); }));
 }
 
@@ -1619,6 +1665,7 @@ bool EditorController::savePreset(const QString& name, QString* error)
     preset.effects = object->effects;
     const bool saved = m_presetManager.savePreset(preset, error);
     if (saved) {
+        m_presetCatalog.invalidateUserPresets();
         emit statusMessageChanged(QStringLiteral("Preset '%1' saved.").arg(preset.name));
     }
     return saved;
@@ -1649,6 +1696,75 @@ bool EditorController::applyPreset(const QString& name, QString* error)
     }
     emit statusMessageChanged(QStringLiteral("Preset '%1' applied.").arg(name));
     return true;
+}
+
+bool EditorController::applyPresetById(const QString& id, QString* error)
+{
+    PresetCatalogEntry entry;
+    if (!m_presetCatalog.presetById(id, &entry, error)) return false;
+    const QPair<int, int> selectedRange = m_selectionModel->textRange();
+    const bool hasRange = selectedRange.first >= 0 && selectedRange.second > selectedRange.first;
+    QStringList targets = hasRange ? QStringList{m_document.activeObjectId} : selectedObjectIds();
+    if (targets.isEmpty() && !m_document.activeObjectId.isEmpty()) targets.push_back(m_document.activeObjectId);
+    int skipped = 0;
+    QVector<ApplyPresetToObjectsCommand::Target> changes;
+    for (const QString& targetId : targets) {
+        Layer* layer = currentPageLayerForObject(m_document, targetId);
+        TextObject* object = layer ? layer->objectById(targetId) : nullptr;
+        if (!object || !layer->visible || layer->locked) { ++skipped; continue; }
+        EffectStack next = object->effects;
+        if (hasRange) {
+            for (int index = 0; index < entry.preset.effects.size(); ++index) {
+                std::unique_ptr<Effect> effect = entry.preset.effects.at(index)->clone();
+                effect->instanceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+                effect->scope = {EffectScopeKind::TextRange, selectedRange.first, selectedRange.second};
+                next.append(std::move(effect));
+            }
+        } else {
+            next = entry.preset.effects;
+        }
+        const qreal nextStrength = hasRange ? object->effectStackStrength : 1.0;
+        if (!effectStacksEqual(object->effects, next)
+            || !nearlyEqual(object->effectStackStrength, nextStrength)) {
+            changes.push_back({targetId, object->effects, std::move(next),
+                               object->effectStackStrength, nextStrength});
+        }
+    }
+    if (changes.isEmpty()) {
+        if (error && skipped > 0) *error = QStringLiteral("All selected objects are locked or hidden.");
+        return skipped == 0;
+    }
+    m_undoStack.push(new ApplyPresetToObjectsCommand(
+        m_document, std::move(changes), [this] { onCommandChanged(); },
+        QStringLiteral("Apply preset '%1'").arg(entry.preset.name)));
+    if (skipped) emit statusMessageChanged(QStringLiteral("Applied '%1'; skipped %2 locked or hidden object%3.")
+        .arg(entry.preset.name).arg(skipped).arg(skipped == 1 ? QString() : QStringLiteral("s")));
+    else emit statusMessageChanged(QStringLiteral("Applied '%1'.").arg(entry.preset.name));
+    return true;
+}
+
+bool EditorController::duplicateBuiltinPreset(const QString& id, QString* error)
+{
+    Preset copy;
+    if (!m_presetCatalog.duplicateBuiltIn(id, &copy, error)) return false;
+    const bool saved = m_presetManager.savePreset(std::move(copy), error);
+    if (saved) m_presetCatalog.invalidateUserPresets();
+    return saved;
+}
+
+bool EditorController::deletePresetById(const QString& id, QString* error)
+{
+    PresetCatalogEntry entry;
+    if (!m_presetCatalog.presetById(id, &entry, error)) return false;
+    if (entry.builtIn) {
+        if (error) *error = QStringLiteral("Built-in presets are immutable.");
+        return false;
+    }
+    const bool deleted = id.startsWith(QStringLiteral("legacy."))
+        ? m_presetManager.deletePreset(entry.preset.name, error)
+        : m_presetManager.deletePresetById(id, error);
+    if (deleted) m_presetCatalog.invalidateUserPresets();
+    return deleted;
 }
 
 bool EditorController::deletePreset(const QString& name, QString* error)

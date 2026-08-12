@@ -1,9 +1,6 @@
 #include "core/effects/effect.h"
 
-#include "core/effects/glyph_jitter_effect.h"
-#include "core/effects/procedural_effect.h"
-#include "core/effects/stretch_effect.h"
-#include "core/effects/wave_effect.h"
+#include "core/effects/effect_registry.h"
 
 #include <QJsonArray>
 
@@ -80,75 +77,15 @@ EffectScope EffectScope::fromJson(const QJsonObject& object)
 
 std::unique_ptr<Effect> createEffect(const QString& typeId)
 {
-    if (typeId == QStringLiteral("wave")) {
-        return std::make_unique<WaveEffect>();
-    }
-    if (typeId == QStringLiteral("glyphJitter")) {
-        return std::make_unique<GlyphJitterEffect>();
-    }
-    if (typeId == QStringLiteral("stretch")) {
-        return std::make_unique<StretchEffect>();
-    }
-    struct Definition {
-        const char* id;
-        const char* name;
-        ProceduralEffect::Mode mode;
-    };
-    static constexpr Definition definitions[] = {
-        {"bounce", "Bounce", ProceduralEffect::Mode::Bounce},
-        {"staircase", "Staircase", ProceduralEffect::Mode::Staircase},
-        {"randomOffset", "Random Offset", ProceduralEffect::Mode::RandomOffset},
-        {"randomRotation", "Random Rotation", ProceduralEffect::Mode::RandomRotation},
-        {"randomScale", "Random Scale", ProceduralEffect::Mode::RandomScale},
-        {"horizontalSpread", "Horizontal Spread", ProceduralEffect::Mode::HorizontalSpread},
-        {"verticalSpread", "Vertical Spread", ProceduralEffect::Mode::VerticalSpread},
-        {"arc", "Arc", ProceduralEffect::Mode::Arc},
-        {"zigzag", "Zigzag", ProceduralEffect::Mode::Zigzag},
-        {"sineRotation", "Sine Rotation", ProceduralEffect::Mode::SineRotation},
-        {"crescendo", "Crescendo", ProceduralEffect::Mode::Crescendo},
-        {"shrink", "Shrink", ProceduralEffect::Mode::Shrink},
-        {"skew", "Skew", ProceduralEffect::Mode::Skew},
-        {"compression", "Compression", ProceduralEffect::Mode::Compression},
-        {"expandCenter", "Expand from Center", ProceduralEffect::Mode::ExpandCenter},
-        {"squeezeCenter", "Squeeze to Center", ProceduralEffect::Mode::SqueezeCenter},
-        {"baselineDrift", "Baseline Drift", ProceduralEffect::Mode::BaselineDrift},
-        {"alternatingTilt", "Alternating Tilt", ProceduralEffect::Mode::AlternatingTilt},
-    };
-    for (const Definition& definition : definitions) {
-        if (typeId == QLatin1String(definition.id)) {
-            return std::make_unique<ProceduralEffect>(QString::fromLatin1(definition.id),
-                                                       QString::fromLatin1(definition.name),
-                                                       definition.mode);
-        }
-    }
-    return nullptr;
+    return EffectRegistry::instance().create(typeId);
 }
 
 QVector<QPair<QString, QString>> availableEffectTypes()
 {
-    return {
-        {QStringLiteral("wave"), QStringLiteral("Wave")},
-        {QStringLiteral("glyphJitter"), QStringLiteral("Glyph Jitter")},
-        {QStringLiteral("stretch"), QStringLiteral("Global Stretch")},
-        {QStringLiteral("bounce"), QStringLiteral("Bounce")},
-        {QStringLiteral("staircase"), QStringLiteral("Staircase")},
-        {QStringLiteral("randomOffset"), QStringLiteral("Random Offset")},
-        {QStringLiteral("randomRotation"), QStringLiteral("Random Rotation")},
-        {QStringLiteral("randomScale"), QStringLiteral("Random Scale")},
-        {QStringLiteral("horizontalSpread"), QStringLiteral("Horizontal Spread")},
-        {QStringLiteral("verticalSpread"), QStringLiteral("Vertical Spread")},
-        {QStringLiteral("arc"), QStringLiteral("Arc")},
-        {QStringLiteral("zigzag"), QStringLiteral("Zigzag")},
-        {QStringLiteral("sineRotation"), QStringLiteral("Sine Rotation")},
-        {QStringLiteral("crescendo"), QStringLiteral("Crescendo")},
-        {QStringLiteral("shrink"), QStringLiteral("Shrink")},
-        {QStringLiteral("skew"), QStringLiteral("Skew")},
-        {QStringLiteral("compression"), QStringLiteral("Compression")},
-        {QStringLiteral("expandCenter"), QStringLiteral("Expand from Center")},
-        {QStringLiteral("squeezeCenter"), QStringLiteral("Squeeze to Center")},
-        {QStringLiteral("baselineDrift"), QStringLiteral("Baseline Drift")},
-        {QStringLiteral("alternatingTilt"), QStringLiteral("Alternating Tilt")},
-    };
+    QVector<QPair<QString, QString>> types;
+    for (const EffectDescriptor& descriptor : EffectRegistry::instance().descriptors())
+        types.push_back({descriptor.typeId, descriptor.displayName});
+    return types;
 }
 
 std::unique_ptr<Effect> effectFromJson(const QJsonObject& object, QString* error)

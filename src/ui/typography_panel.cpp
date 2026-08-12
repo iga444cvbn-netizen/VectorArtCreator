@@ -188,9 +188,9 @@ void TypographyPanel::setFontFamilies(const QStringList& families)
     m_familyCombo->setCurrentText(current);
 }
 
-void TypographyPanel::setFontStyles(const QStringList& styles)
+void TypographyPanel::setFontStyles(const QStringList& styles, const QString& resolvedStyle)
 {
-    const QString current = m_styleCombo->currentText();
+    const QString current = resolvedStyle.isEmpty() ? m_styleCombo->currentText() : resolvedStyle;
     const QSignalBlocker blocker(m_styleCombo);
     m_styleCombo->clear();
     m_styleCombo->addItem(TraitModeLabel);

@@ -14,6 +14,8 @@
 #include <QGraphicsView>
 #include <QGraphicsProxyWidget>
 #include <QGraphicsScene>
+#include <QGuiApplication>
+#include <QInputMethodEvent>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
@@ -36,6 +38,8 @@ private slots:
     void spinBoxArrowHitRegionsIncrementAndDecrement();
     void selectingAnotherLayerObjectEndsNativeEditorSession();
     void nativeEditorViewportRoutesOutsideCanvasInput();
+    void addTextStartsFocusedAndAlignedBeforeAndAfterScenePublication();
+    void textToolStartsFocusedAtCurrentZoom();
     void traitModeIsShownAfterBoldAndItalic();
     void scaleControlsPreserveSmallAndMirroredValues();
 };
@@ -57,6 +61,24 @@ void beginNativeEdit(EditorCanvas* canvas, EditorController* controller, const Q
                              object->font.toQFont(object->typography.fontSize),
                              QRectF(object->transform.position, QSizeF(180.0, 60.0)));
     QVERIFY(canvas->isTextEditing());
+}
+
+QPlainTextEdit* nativeTextEditor(QGraphicsView* editorView)
+{
+    if (!editorView || !editorView->scene()) return nullptr;
+    for (QGraphicsItem* item : editorView->scene()->items()) {
+        if (auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(item)) {
+            if (auto* editor = qobject_cast<QPlainTextEdit*>(proxy->widget())) return editor;
+        }
+    }
+    return nullptr;
+}
+
+void typeUnicode(QPlainTextEdit* editor, const QString& text)
+{
+    QInputMethodEvent commit;
+    commit.setCommitString(text);
+    QCoreApplication::sendEvent(editor, &commit);
 }
 
 } // namespace
@@ -208,6 +230,82 @@ void EffectsPanelUiTests::selectingAnotherLayerObjectEndsNativeEditorSession()
     controller->selectObject(second); // same path used by LayersPanel::objectSelected
     QCoreApplication::processEvents();
     QVERIFY(!canvas->isTextEditing());
+}
+
+void EffectsPanelUiTests::addTextStartsFocusedAndAlignedBeforeAndAfterScenePublication()
+{
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    auto* controller = window.findChild<EditorController*>();
+    auto* canvas = window.findChild<EditorCanvas*>();
+    auto* addText = window.findChild<QPushButton*>(QStringLiteral("emptyAddText"));
+    QVERIFY(controller);
+    QVERIFY(canvas);
+    QVERIFY(addText);
+
+    QTest::mouseClick(addText, Qt::LeftButton);
+    QTRY_VERIFY(canvas->isTextEditing());
+    auto* editorView = canvas->findChild<QGraphicsView*>();
+    QVERIFY(editorView);
+    auto* editor = nativeTextEditor(editorView);
+    QVERIFY(editor);
+
+    const QString objectId = canvas->editingObjectId();
+    const TextObject* object = controller->document().objectById(objectId);
+    QVERIFY(object);
+    QGraphicsProxyWidget* proxy = nullptr;
+    for (QGraphicsItem* item : editorView->scene()->items()) {
+        if (auto* candidate = qgraphicsitem_cast<QGraphicsProxyWidget*>(item)) {
+            proxy = candidate;
+            break;
+        }
+    }
+    QVERIFY(proxy);
+    QTRY_VERIFY(editorView->scene()->focusItem() == proxy || editor->hasFocus());
+    const QPointF fallbackOrigin = proxy->sceneBoundingRect().topLeft();
+    QVERIFY(!fallbackOrigin.isNull()); // regression: this is the pre-async fallback geometry path
+
+    const QString cyrillic = QString::fromUtf8("\320\237\321\200\320\270\320\262\320\265\321\202, \320\274\320\270\321\200!");
+    typeUnicode(editor, cyrillic);
+    QTRY_COMPARE(controller->document().objectById(objectId)->sourceText, cyrillic);
+    QTRY_VERIFY(controller->sceneGeometry().objectById(objectId) != nullptr);
+    QTRY_VERIFY(controller->sceneGeometry().objectById(objectId)->geometry.hasVisibleGeometry());
+    QVERIFY((proxy->sceneBoundingRect().topLeft() - fallbackOrigin).manhattanLength() <= 3.0);
+    canvas->finishTextEditing();
+    QCoreApplication::processEvents();
+}
+
+void EffectsPanelUiTests::textToolStartsFocusedAtCurrentZoom()
+{
+    if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
+        QSKIP("Qt 6.8 offscreen crashes while dispatching a mouse-created QGraphicsProxyWidget session.");
+    }
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    auto* controller = window.findChild<EditorController*>();
+    auto* canvas = window.findChild<EditorCanvas*>();
+    QVERIFY(controller);
+    QVERIFY(canvas);
+    canvas->zoomOut();
+    canvas->zoomOut();
+    controller->setTool(EditorTool::Text);
+    const QPoint createAt = canvasPositionForDocumentPoint(canvas, QPointF(240.0, 220.0));
+    QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, createAt);
+    QTRY_VERIFY(canvas->isTextEditing());
+    auto* editorView = canvas->findChild<QGraphicsView*>();
+    QVERIFY(editorView);
+    auto* editor = nativeTextEditor(editorView);
+    QVERIFY(editor);
+    QTRY_VERIFY(editorView->scene()->focusItem() != nullptr || editor->hasFocus());
+    typeUnicode(editor, QStringLiteral("Test 123"));
+    const QString objectId = canvas->editingObjectId();
+    QTRY_COMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("Test 123"));
+    QTRY_VERIFY(controller->sceneGeometry().objectById(objectId) != nullptr);
+    QTRY_VERIFY(controller->sceneGeometry().objectById(objectId)->geometry.hasVisibleGeometry());
+    canvas->finishTextEditing();
+    QCoreApplication::processEvents();
 }
 
 void EffectsPanelUiTests::nativeEditorViewportRoutesOutsideCanvasInput()

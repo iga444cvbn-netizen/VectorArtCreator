@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/presets">
+    <file alias="builtins.json">presets/builtins.json</file>
+  </qresource>
+</RCC>

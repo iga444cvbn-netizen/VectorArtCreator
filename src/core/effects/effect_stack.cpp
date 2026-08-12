@@ -1,6 +1,7 @@
 #include "core/effects/effect_stack.h"
 
 #include <QLineF>
+#include <QSet>
 
 #include <cmath>
 #include <utility>
@@ -240,7 +241,17 @@ void EffectStack::clear()
     m_effects.clear();
 }
 
-void EffectStack::apply(VectorGeometry& geometry) const
+bool EffectStack::hasUniqueInstanceIds() const
+{
+    QSet<QString> ids;
+    for (const auto& effect : m_effects) {
+        if (!effect || effect->instanceId.isEmpty() || ids.contains(effect->instanceId)) return false;
+        ids.insert(effect->instanceId);
+    }
+    return true;
+}
+
+void EffectStack::apply(VectorGeometry& geometry, qreal stackStrength) const
 {
     geometry.recomputeBounds();
     const EffectContext context{geometry.referenceBounds, geometry.referenceHeight};
@@ -248,8 +259,13 @@ void EffectStack::apply(VectorGeometry& geometry) const
         if (!effect || !effect->enabled) {
             continue;
         }
-        if (effect->scope.kind == EffectScopeKind::WholeObject && effect->maskStrokes.isEmpty()) {
-            effect->apply(geometry, context);
+        // Every effect receives the same effective Master Strength.  This
+        // prevents new effects from accidentally bypassing object intensity.
+        std::unique_ptr<Effect> effective = effect->clone();
+        if (!effective) continue;
+        effective->masterStrength = qBound<qreal>(0.0, stackStrength, 2.0) * effect->masterStrength;
+        if (effective->scope.kind == EffectScopeKind::WholeObject && effective->maskStrokes.isEmpty()) {
+            effective->apply(geometry, context);
             continue;
         }
 
@@ -259,7 +275,7 @@ void EffectStack::apply(VectorGeometry& geometry) const
         scopedGeometry.referenceHeight = geometry.referenceHeight;
         for (int index = 0; index < geometry.pieces.size(); ++index) {
             const GeometryPiece& piece = geometry.pieces.at(index);
-            if (effect->scope.includes(piece.sourceClusterStart, piece.sourceClusterLength)) {
+            if (effective->scope.includes(piece.sourceClusterStart, piece.sourceClusterLength)) {
                 selectedIndices.push_back(index);
                 scopedGeometry.pieces.push_back(piece);
             }
@@ -269,14 +285,14 @@ void EffectStack::apply(VectorGeometry& geometry) const
         }
         scopedGeometry.recomputeBounds();
         if (effect->maskStrokes.isEmpty()) {
-            effect->apply(scopedGeometry, context);
+            effective->apply(scopedGeometry, context);
             for (int index = 0; index < selectedIndices.size()
                  && index < scopedGeometry.pieces.size(); ++index) {
                 geometry.pieces[selectedIndices.at(index)] = scopedGeometry.pieces.at(index);
             }
             continue;
         }
-        applyMaskedEffect(*effect, &scopedGeometry, context,
+        applyMaskedEffect(*effective, &scopedGeometry, context,
                           [&selectedIndices] {
                               QVector<int> local;
                               local.reserve(selectedIndices.size());
@@ -334,6 +350,10 @@ EffectStack EffectStack::fromJson(const QJsonArray& array, QString* error)
             return {};
         }
         stack.append(std::move(effect));
+    }
+    if (!stack.hasUniqueInstanceIds()) {
+        if (error) *error = QStringLiteral("Effect stack contains duplicate or missing instance IDs.");
+        return {};
     }
     return stack;
 }
