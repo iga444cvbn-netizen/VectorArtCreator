@@ -1,8 +1,9 @@
 # Testing the Vector Typography Editor
 
-Phase 4T treats a green test run as evidence of usable editor workflows, not
-just of isolated helper functions.  A green core suite alone does **not**
-validate an interactive feature.
+Phase 4T established the fortress; Phase 4R uses it as a corrective release
+gate. A green run is evidence of usable editor workflows and repaired semantic
+contracts, not just isolated helper functions. A green core suite alone does
+**not** validate an interactive feature.
 
 ## Test architecture
 
@@ -17,11 +18,14 @@ validate an interactive feature.
 - `vector_typography_oracle_tests` (`core;integration;oracle`) self-validates
   the semantic guards: structured geometry signatures, persistent-field copy
   equality, fingerprints, hierarchy invariants, frame round trips, identity-
-  corrupt project rejection, and deterministic workload builders.
+  corrupt project rejection, exact/one-over resource budgets, deterministic
+  legacy identity migration, and deterministic workload builders.
 - `vector_typography_integration_tests` (`integration;undo;serialization;async`)
   checks real-file save/open/new/failure/migration behavior, exact undo/redo
-  equivalence, deterministic async races, duplication identity, export text
-  multiplicity, descriptor refusal paths, and ten seeded 200-action workflows.
+  equivalence, deterministic async and spatial-revision races, cooperative
+  work cancellation, atomic cancelled export, duplication identity, export
+  text multiplicity, descriptor refusal paths, and ten seeded 200-action
+  workflows.
 - `vector_typography_ui_smoke_tests` (`ui;smoke`) drives a visible
   `MainWindow` through real widgets.  It is the fast first-five-minutes canary.
 - `vector_typography_ui_tests` (`ui;regression`) retains focused UI regression
@@ -54,6 +58,12 @@ Shared helpers live in `tests/support`:
   workflows.
 - `AsyncEvaluationGate` occupies the global evaluation pool with a semaphore,
   creating reproducible A/B races without sleeps.
+- `WorkControl` counts semantic checkpoints and exposes a callback seam, so a
+  test can stop shaping/effects/masks/deformation/export after a known unit
+  without wall-clock assertions.
+- `ProjectSerializer::resourceLimits()` and its explicit byte/resource
+  validation seams allow exact-boundary and one-over fixtures without allocating
+  production-sized hostile documents.
 - `workload_builder` creates inspectable 1/10/100-object mask, deformation and
   generator matrices and prints coarse timings without brittle thresholds.
 
@@ -68,9 +78,15 @@ ctest --test-dir build -L smoke --output-on-failure -VV
 ctest --test-dir build -L "core|integration|ui|windows" --output-on-failure -VV
 ```
 
-The UI targets intentionally use `QT_QPA_PLATFORM=offscreen` in CTest.  Use a
+The UI targets intentionally use `QT_QPA_PLATFORM=offscreen` in CTest. Use a
 native Windows desktop run as a complementary manual acceptance pass for
 Office interoperability and subjective visual quality.
+
+The authoritative Phase 4R gate is the `Windows Qt CI` pull-request workflow:
+configure with MSVC/Qt 6.8.3, build Release, run every
+`core|integration|ui|windows` CTest label, then package and upload
+`VectorTypographyEditor-windows-x64`. A package is never produced after a build
+or test failure.
 
 ## Regression and feature policy
 
@@ -144,9 +160,13 @@ The permanent checks are intentionally mapped to the user-visible bug class:
 | Held Style Intensity mutates while “clean” (P2-06) | `styleIntensityGestureHasImmediateDirtyTruthAndOneUndoStep` |
 | Rotated marquee selects empty AABB corners (P2-07) | `rotatedMarqueeUsesInkAsNarrowPhase` |
 | Equal-value objects deduplicated from plain text (P2-08) | `exportPlainTextPreservesEqualObjectMultiplicity` |
-| Clipboard partial publication reported as complete (P2-09) | `publicationResultClassification`, `copyForWordPublishesPortableFormats` |
+| Stale scene frame authorizes page-space mutation (P1-03) | `staleFrameCannotAuthorizeSpatialMutation` holds revision N, mutates to N+1, maps through the current frame, and rejects a stale transform commit |
+| Aggregate hostile workload / noncancellable work (P1-05) | `serializedResourceBudgetsHaveExactBoundaries`, `cooperativeWorkBudgetAndCancellationAreDeterministic`, `cancelledSvgNeverCommitsPartialOutput`, Windows `cancellationStopsBeforeClipboardPublication` |
+| Per-run UTF-16 cluster span consumes the rest of a line (P2-01) | deterministic `logicalClusterSpansUseWholeLineContext`; real `mixedUtf16ShapingUsesGlobalClusterSpans` |
+| Mask AABB leaks into counters and concavities (P2-03) | `contourMaskDistanceRejectsHolesAndConcavities` |
+| Clipboard partial publication reported as complete (P2-09) | `publicationResultClassification`, `injectedOperationsClassifyFailuresAndOwnership`, `cancellationStopsBeforeClipboardPublication`, `copyForWordPublishesPortableFormats` |
 | Clipboard failure hidden behind broad skip | `busyClipboardIsAProductionFailure`, `oversizedRasterFallbackIsAProductionFailure`; complete publication must pass on Windows CI |
-| Loader duplicate/missing/nonlocal identities (P1-04) | `currentSchemaLoaderRejectsIdentityCorruption`, `invariantCheckerRejectsSyntheticCorruption` |
+| Loader duplicate/missing/nonlocal identities (P1-04) | `currentSchemaLoaderRejectsIdentityCorruption`, `historicalIdentityMigrationIsDeterministic`, `invariantCheckerRejectsSyntheticCorruption` |
 | Object-row visibility/lock uses missing metadata | `objectRowLayerButtonsOperateOnParentLayer` |
 | Capped brush resampler terminal delta points from replaced sample | `deformationResamplingIsBoundedAndDeterministic` delta-chain assertions |
 | Undo/save-load semantic identity | `semanticSaveLoadAndUndoRedoEquivalence`, `realFileLifecyclePreservesComplexSemantics` |

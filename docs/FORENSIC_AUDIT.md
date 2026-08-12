@@ -1,5 +1,47 @@
 # VectorArtCreator Forensic Engineering Audit
 
+## Phase 4R closure report (2026-08-12)
+
+The detailed audit below is an immutable historical analysis of commit
+`8fb4536737c3df4e30c7dacaa830d440984549e4`; its present-tense defect statements
+describe that audited revision, not the repository after Phase 4R. Phase 4R was
+rebased on merged `main` at `670557ab1c6130149529a831d5daf9a05b1e9328`,
+re-audited every P1/P2 entry, and used the merged Phase 4T fortress as the
+regression baseline.
+
+Seven findings had already been repaired by work merged after the audit. Their
+production paths were left alone and their permanent regressions were verified.
+The remaining seven findings were reproduced from code or deterministic seams
+and repaired in `codex/phase-4r-forensic-correctness` (draft PR #11).
+
+| ID | Phase 4R status | Production closure | Permanent evidence |
+| --- | --- | --- | --- |
+| P1-01 | CLOSED before 4R; re-verified | Value copies preserve `effectStackStrength`. | `semanticCopyContractCoversPersistentInventory`, `semanticFingerprintExcludesOnlyDeclaredTransientState`, `registeredEffectContract` |
+| P1-02 | CLOSED before 4R; re-verified | Canvas and inspector use one live text-edit owner/handoff. | `inspectorEditEndsCanvasSessionWithoutStaleOverwrite` |
+| P1-03 | CLOSED in 4R | A monotonically comparable spatial revision stamps snapshots, scenes, and frames. Persisted page input is normalized only through an authoritative current frame; stale transform commits are rejected. | `staleFrameCannotAuthorizeSpatialMutation` |
+| P1-04 | CLOSED in 4R | Current schemas reject missing/colliding global identities and wrong-hierarchy active IDs transactionally; v1-v3 identities migrate deterministically. | `currentSchemaLoaderRejectsIdentityCorruption`, `historicalIdentityMigrationIsDeterministic`, `serializedResourceBudgetsHaveExactBoundaries` |
+| P1-05 | CLOSED in 4R | Pre-construction aggregate resource limits and shared cooperative semantic work controls bound evaluation and export. Cancelled/over-budget work cannot publish or commit output. | `serializedResourceBudgetsHaveExactBoundaries`, `cooperativeWorkBudgetAndCancellationAreDeterministic`, `cancelledSvgNeverCommitsPartialOutput`, `cancellationStopsBeforeClipboardPublication` |
+| P2-01 | CLOSED in 4R | Cluster spans come from the complete line's sorted unique UTF-16 boundaries across all glyph runs. | `logicalClusterSpansUseWholeLineContext`, `mixedUtf16ShapingUsesGlobalClusterSpans` |
+| P2-02 | CLOSED before 4R; re-verified | Registry capabilities gate mask UI and controller mutations. | `maskAndTextRangeRespectDescriptorClaims`, `unsupportedEffectMaskIsRefusedWithoutMutation`, `unsupportedEffectDisablesMaskUiAcrossRefreshes` |
+| P2-03 | CLOSED in 4R | Filled-path containment and bounded contour-segment distance replace AABB/proxy authorization. | `contourMaskDistanceRejectsHolesAndConcavities` |
+| P2-04 | CLOSED before 4R; re-verified | Page duplication freshens the complete page/layer/object/effect identity hierarchy. | `duplicatePageFreshensEntireIdentityHierarchy` |
+| P2-05 | CLOSED before 4R; re-verified | Net-zero merged commands become obsolete and restore the authoritative undo clean index. | `mergeableCommandReturningToStartRestoresClean` |
+| P2-06 | CLOSED in 4R | Style Intensity pushes a mergeable undo command on first movement; no persisted slider mutation occurs outside `QUndoStack`. | `styleIntensityGestureHasImmediateDirtyTruthAndOneUndoStep` |
+| P2-07 | CLOSED before 4R; re-verified | Marquee bounds are broad phase followed by transformed ink narrow phase. | `rotatedMarqueeUsesInkAsNarrowPhase` |
+| P2-08 | CLOSED before 4R; re-verified | Ordered export records preserve equal-text object multiplicity. | `exportPlainTextPreservesEqualObjectMultiplicity` |
+| P2-09 | CLOSED in 4R | Windows publication reports Complete, Partial, Cancelled, or Failure; injected Win32 operations prove cleanup and ownership transfer. | `publicationResultClassification`, `injectedOperationsClassifyFailuresAndOwnership`, `cancellationStopsBeforeClipboardPublication`, `copyForWordPublishesPortableFormats` |
+
+Unresolved forensic P1/P2 findings: **none**. Remaining platform/manual and
+telemetry limits are listed explicitly in `docs/TEST_FORTRESS_GAPS.md`; they do
+not weaken the repaired contracts. The release gate is the final same-SHA
+Windows GitHub Actions configure/build/labelled-CTest/package run. Until that
+run is recorded here and in PR #11, this closure report is implementation-complete
+but CI-pending.
+
+---
+
+## Historical audit snapshot
+
 - Audit date: 2026-08-11
 - Audited branch: `codex/phase-4t-test-fortress`
 - Audited commit: `8fb4536737c3df4e30c7dacaa830d440984549e4`
