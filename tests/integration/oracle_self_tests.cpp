@@ -14,7 +14,9 @@
 #include <QJsonDocument>
 #include <QLineF>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QSet>
+#include <QTemporaryDir>
 #include <QTest>
 
 #include <limits>
@@ -489,6 +491,26 @@ void OracleSelfTests::currentSchemaLoaderRejectsIdentityCorruption()
     nonLocalActiveObject.insert(QStringLiteral("activeLayerId"), QStringLiteral("layer-semantic-contract"));
     nonLocalActiveObject.insert(QStringLiteral("activeObjectId"), QStringLiteral("text-other"));
     QVERIFY(expectRejected(nonLocalActiveObject, QStringLiteral("active object is not on its current page")));
+
+    // Saving is the other persistence boundary. A synthetically corrupted live
+    // value must be rejected before QSaveFile can replace a previously good file.
+    Document malformedSave = semanticDocumentFixture();
+    malformedSave.pages.push_back(std::make_unique<Page>(*malformedSave.pages.front()));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString savePath = directory.filePath(QStringLiteral("identity-contract.vta"));
+    const QByteArray sentinel("previous-good-project");
+    {
+        QFile file(savePath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write(sentinel), qint64(sentinel.size()));
+    }
+    QString saveError;
+    QVERIFY(!ProjectSerializer::saveToFile(malformedSave, savePath, &saveError));
+    QVERIFY(saveError.contains(QStringLiteral("missing or duplicate page ID")));
+    QFile unchanged(savePath);
+    QVERIFY(unchanged.open(QIODevice::ReadOnly));
+    QCOMPARE(unchanged.readAll(), sentinel);
 }
 
 void OracleSelfTests::historicalIdentityMigrationIsDeterministic()

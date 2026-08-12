@@ -850,6 +850,9 @@ bool ProjectSerializer::fromJson(const QJsonDocument& json, Document* document, 
 bool ProjectSerializer::saveToFile(const Document& document, const QString& filePath, QString* error)
 {
     const QJsonDocument json = toJson(document);
+    if (!validateHierarchicalIdentity(json.object(), error)) {
+        return false;
+    }
     if (!validateProjectResources(
             json.object(), Document::CurrentFormatVersion, resourceLimits(), error)) {
         return false;
