@@ -57,6 +57,8 @@ private:
     [[nodiscard]] bool maybeSave();
     void applyTheme();
     void applyNavigationSettings();
+    [[nodiscard]] bool selectedEffectSupportsMask() const;
+    void refreshEffectMaskCapability();
     void setGlobalEditorShortcutsEnabled(bool enabled);
     void handleTextEditingChanged(bool editing);
     void addTextAtPageCenter();

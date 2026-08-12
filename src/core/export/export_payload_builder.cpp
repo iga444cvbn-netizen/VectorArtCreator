@@ -43,7 +43,9 @@ bool ExportPayloadBuilder::build(const Document&,
             result.bounds = hasBounds ? result.bounds.united(pieceBounds) : pieceBounds;
             hasBounds = true;
         }
-        if (!object.sourceText.isEmpty() && !sourceTexts.contains(object.sourceText)) {
+        // Text belongs to object identity. Equal values on two included
+        // objects are not duplicates and must remain two payload entries.
+        if (!object.sourceText.isEmpty()) {
             sourceTexts.push_back(object.sourceText);
         }
     }

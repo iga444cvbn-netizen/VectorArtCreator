@@ -281,6 +281,11 @@ qreal EditorCanvas::zoom() const
     return m_zoom;
 }
 
+QPointF EditorCanvas::mapDocumentToViewport(const QPointF& documentPoint) const
+{
+    return viewTransform().map(documentPoint);
+}
+
 void EditorCanvas::fitContent()
 {
     QRectF bounds(QPointF(0.0, 0.0), m_sceneGeometry.pageSize);

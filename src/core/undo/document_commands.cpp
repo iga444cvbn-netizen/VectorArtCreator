@@ -102,6 +102,14 @@ bool SetTextCommand::mergeWith(const QUndoCommand* other)
     }
     m_newText = command->m_newText;
     m_newScopes = command->m_newScopes;
+    bool scopesMatch = m_oldScopes.size() == m_newScopes.size();
+    for (int index = 0; scopesMatch && index < m_oldScopes.size(); ++index) {
+        const auto& left = m_oldScopes.at(index);
+        const auto& right = m_newScopes.at(index);
+        scopesMatch = left.first == right.first && left.second.kind == right.second.kind
+            && left.second.start == right.second.start && left.second.end == right.second.end;
+    }
+    setObsolete(m_newText == m_oldText && scopesMatch);
     return true;
 }
 
@@ -276,6 +284,7 @@ bool SetFontSizeCommand::mergeWith(const QUndoCommand* other)
         return false;
     }
     m_newSize = command->m_newSize;
+    setObsolete(m_newSize == m_oldSize);
     return true;
 }
 
@@ -313,6 +322,7 @@ bool SetTrackingCommand::mergeWith(const QUndoCommand* other)
         return false;
     }
     m_newTrackingEm = command->m_newTrackingEm;
+    setObsolete(m_newTrackingEm == m_oldTrackingEm);
     return true;
 }
 
@@ -350,6 +360,7 @@ bool SetLineSpacingCommand::mergeWith(const QUndoCommand* other)
         return false;
     }
     m_newValue = command->m_newValue;
+    setObsolete(m_newValue == m_oldValue);
     return true;
 }
 
@@ -519,6 +530,7 @@ bool SetEffectParameterCommand::mergeWith(const QUndoCommand* other)
         return false;
     }
     m_newValue = command->m_newValue;
+    setObsolete(m_newValue == m_oldValue);
     return true;
 }
 
@@ -562,6 +574,7 @@ bool SetEffectMasterStrengthCommand::mergeWith(const QUndoCommand* other)
         return false;
     }
     m_newValue = command->m_newValue;
+    setObsolete(m_newValue == m_oldValue);
     return true;
 }
 
@@ -841,6 +854,7 @@ bool SetDeformationStrengthCommand::mergeWith(const QUndoCommand* other)
         return false;
     }
     m_newStrength = command->m_newStrength;
+    setObsolete(m_newStrength == m_oldStrength);
     return true;
 }
 

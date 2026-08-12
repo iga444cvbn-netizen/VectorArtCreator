@@ -71,11 +71,13 @@ TypographyPanel::TypographyPanel(QWidget* parent)
     layout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 
     m_textEdit = new QPlainTextEdit(group);
+    m_textEdit->setObjectName(QStringLiteral("textSource"));
     m_textEdit->setPlaceholderText(QStringLiteral("Enter Latin or Cyrillic text…"));
     m_textEdit->setMinimumHeight(70);
     layout->addRow(QStringLiteral("Text"), m_textEdit);
 
     m_familyCombo = new QComboBox(group);
+    m_familyCombo->setObjectName(QStringLiteral("fontFamily"));
     m_familyCombo->setEditable(true);
     m_familyCombo->setInsertPolicy(QComboBox::NoInsert);
     m_familyCombo->setPlaceholderText(QStringLiteral("Search installed fonts"));
@@ -103,8 +105,10 @@ TypographyPanel::TypographyPanel(QWidget* parent)
     m_italicButton->setObjectName(QStringLiteral("fontItalic"));
     m_underlineButton = formattingButton(formattingIcon(QStringLiteral("U"), false, true, false),
                                          QStringLiteral("Underline"), formatting);
+    m_underlineButton->setObjectName(QStringLiteral("fontUnderline"));
     m_strikeOutButton = formattingButton(formattingIcon(QStringLiteral("S"), false, false, true),
-                                         QStringLiteral("Strikeout"), formatting);
+                                          QStringLiteral("Strikeout"), formatting);
+    m_strikeOutButton->setObjectName(QStringLiteral("fontStrikeOut"));
     formattingLayout->addWidget(m_boldButton);
     formattingLayout->addWidget(m_italicButton);
     formattingLayout->addWidget(m_underlineButton);
@@ -114,6 +118,7 @@ TypographyPanel::TypographyPanel(QWidget* parent)
     layout->addRow(QStringLiteral("Advanced weight"), m_weightCombo);
 
     m_fontSizeSlider = new SliderSpinBox(group);
+    m_fontSizeSlider->setObjectName(QStringLiteral("fontSize"));
     m_fontSizeSlider->setRange(1.0, 2000.0);
     m_fontSizeSlider->setSingleStep(1.0);
     m_fontSizeSlider->setDecimals(1);
@@ -122,6 +127,7 @@ TypographyPanel::TypographyPanel(QWidget* parent)
     layout->addRow(QStringLiteral("Size"), m_fontSizeSlider);
 
     m_trackingSlider = new SliderSpinBox(group);
+    m_trackingSlider->setObjectName(QStringLiteral("tracking"));
     m_trackingSlider->setRange(-1.0, 1.0);
     m_trackingSlider->setSingleStep(0.01);
     m_trackingSlider->setDecimals(3);
@@ -129,6 +135,7 @@ TypographyPanel::TypographyPanel(QWidget* parent)
     layout->addRow(QStringLiteral("Tracking"), m_trackingSlider);
 
     m_lineSpacingSlider = new SliderSpinBox(group);
+    m_lineSpacingSlider->setObjectName(QStringLiteral("lineSpacing"));
     m_lineSpacingSlider->setRange(0.5, 3.0);
     m_lineSpacingSlider->setSingleStep(0.05);
     m_lineSpacingSlider->setDecimals(2);

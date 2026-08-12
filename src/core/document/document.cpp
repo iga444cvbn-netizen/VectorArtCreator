@@ -78,6 +78,7 @@ TextObject::TextObject(const TextObject& other)
     , typography(other.typography)
     , fill(other.fill)
     , effects(other.effects)
+    , effectStackStrength(other.effectStackStrength)
     , deformation(other.deformation)
     , transform(other.transform)
     , visible(other.visible)
@@ -96,6 +97,7 @@ TextObject& TextObject::operator=(const TextObject& other)
     typography = other.typography;
     fill = other.fill;
     effects = other.effects;
+    effectStackStrength = other.effectStackStrength;
     deformation = other.deformation;
     transform = other.transform;
     visible = other.visible;

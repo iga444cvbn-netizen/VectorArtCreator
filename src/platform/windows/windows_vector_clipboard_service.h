@@ -1,14 +1,19 @@
 #pragma once
 
-#include "core/export/vector_export_payload.h"
+#include "platform/vector_clipboard_service.h"
 
 #include <QString>
+
+#include <functional>
 
 namespace vt {
 
 class WindowsVectorClipboardService final {
 public:
-    [[nodiscard]] static bool copyForOffice(const VectorExportPayload& payload, QString* error);
+    [[nodiscard]] static ClipboardPublicationResult copyForOffice(const VectorExportPayload& payload);
+    [[nodiscard]] static ClipboardPublicationResult copyForOfficeWithOpenAttemptForTesting(
+        const VectorExportPayload& payload,
+        const std::function<bool()>& openAttempt);
 };
 
 } // namespace vt

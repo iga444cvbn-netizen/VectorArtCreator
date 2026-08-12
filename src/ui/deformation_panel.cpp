@@ -56,17 +56,20 @@ DeformationPanel::DeformationPanel(QWidget* parent)
     layout->addRow(QStringLiteral("Active tool"), m_toolLabel);
 
     m_targetCombo = new QComboBox(group);
+    m_targetCombo->setObjectName(QStringLiteral("deformationTarget"));
     m_targetCombo->addItem(QStringLiteral("Glyphs"));
     m_targetCombo->addItem(QStringLiteral("Shape"));
     m_targetCombo->setCurrentIndex(1);
     layout->addRow(QStringLiteral("Target"), m_targetCombo);
 
     m_maskModeCombo = new QComboBox(group);
+    m_maskModeCombo->setObjectName(QStringLiteral("maskMode"));
     m_maskModeCombo->addItem(QStringLiteral("Erase effect"), false);
     m_maskModeCombo->addItem(QStringLiteral("Restore effect"), true);
     layout->addRow(QStringLiteral("Mask mode"), m_maskModeCombo);
 
     m_radiusSlider = new SliderSpinBox(group);
+    m_radiusSlider->setObjectName(QStringLiteral("brushRadius"));
     m_radiusSlider->setRange(1.0, 100000.0);
     m_radiusSlider->setLogarithmic(true);
     m_radiusSlider->setSingleStep(1.0);
@@ -76,6 +79,7 @@ DeformationPanel::DeformationPanel(QWidget* parent)
     layout->addRow(QStringLiteral("Radius"), m_radiusSlider);
 
     m_strengthSlider = new SliderSpinBox(group);
+    m_strengthSlider->setObjectName(QStringLiteral("brushStrength"));
     m_strengthSlider->setRange(0.0, 4.0);
     m_strengthSlider->setSingleStep(0.05);
     m_strengthSlider->setDecimals(2);
@@ -83,6 +87,7 @@ DeformationPanel::DeformationPanel(QWidget* parent)
     layout->addRow(QStringLiteral("Strength"), m_strengthSlider);
 
     m_hardnessSlider = new SliderSpinBox(group);
+    m_hardnessSlider->setObjectName(QStringLiteral("brushHardness"));
     m_hardnessSlider->setRange(0.0, 1.0);
     m_hardnessSlider->setSingleStep(0.05);
     m_hardnessSlider->setDecimals(2);

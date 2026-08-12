@@ -212,6 +212,7 @@ bool MoveObjectsCommand::mergeWith(const QUndoCommand* other)
         return false;
     }
     m_delta += command->m_delta;
+    setObsolete(m_delta.isNull());
     return true;
 }
 

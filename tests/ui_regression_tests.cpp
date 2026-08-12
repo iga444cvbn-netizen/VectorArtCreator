@@ -1,5 +1,7 @@
+#include "core/effects/effect_registry.h"
 #include "core/effects/wave_effect.h"
 #include "core/serialization/project_serializer.h"
+#include "tests/support/state_fingerprint.h"
 #include "ui/editor_canvas.h"
 #include "ui/editor_controller.h"
 #include "ui/effects_panel.h"
@@ -7,6 +9,7 @@
 #include "ui/transform_panel.h"
 #include "ui/typography_panel.h"
 
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -16,13 +19,17 @@
 #include <QGraphicsScene>
 #include <QGuiApplication>
 #include <QInputMethodEvent>
+#include <QJsonArray>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QSlider>
 #include <QStyle>
 #include <QStyleOptionSpinBox>
 #include <QTest>
+#include <QToolButton>
+#include <QTreeWidget>
 #include <QWheelEvent>
 
 #include <cmath>
@@ -42,6 +49,12 @@ private slots:
     void textToolStartsFocusedAtCurrentZoom();
     void traitModeIsShownAfterBoldAndItalic();
     void scaleControlsPreserveSmallAndMirroredValues();
+    void inspectorEditEndsCanvasSessionWithoutStaleOverwrite();
+    void styleIntensityGestureHasImmediateDirtyTruthAndOneUndoStep();
+    void rotatedMarqueeUsesInkAsNarrowPhase();
+    void objectRowLayerButtonsOperateOnParentLayer();
+    void unsupportedEffectDisablesMaskUiAcrossRefreshes_data();
+    void unsupportedEffectDisablesMaskUiAcrossRefreshes();
 };
 
 namespace {
@@ -239,7 +252,7 @@ void EffectsPanelUiTests::addTextStartsFocusedAndAlignedBeforeAndAfterScenePubli
     window.show();
     auto* controller = window.findChild<EditorController*>();
     auto* canvas = window.findChild<EditorCanvas*>();
-    auto* addText = window.findChild<QPushButton*>(QStringLiteral("emptyAddText"));
+    auto* addText = window.findChild<QPushButton*>(QStringLiteral("addTextButton"));
     QVERIFY(controller);
     QVERIFY(canvas);
     QVERIFY(addText);
@@ -279,7 +292,7 @@ void EffectsPanelUiTests::addTextStartsFocusedAndAlignedBeforeAndAfterScenePubli
 void EffectsPanelUiTests::textToolStartsFocusedAtCurrentZoom()
 {
     if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
-        QSKIP("Qt 6.8 offscreen crashes while dispatching a mouse-created QGraphicsProxyWidget session.");
+        QSKIP("Qt 6.8 offscreen crashes while dispatching a mouse-created QGraphicsProxyWidget session; native-platform coverage remains required.");
     }
     MainWindow window;
     window.resize(1400, 900);
@@ -290,7 +303,9 @@ void EffectsPanelUiTests::textToolStartsFocusedAtCurrentZoom()
     QVERIFY(canvas);
     canvas->zoomOut();
     canvas->zoomOut();
-    controller->setTool(EditorTool::Text);
+    auto* textTool = window.findChild<QToolButton*>(QStringLiteral("tool/text"));
+    QVERIFY(textTool);
+    QTest::mouseClick(textTool, Qt::LeftButton);
     const QPoint createAt = canvasPositionForDocumentPoint(canvas, QPointF(240.0, 220.0));
     QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, createAt);
     QTRY_VERIFY(canvas->isTextEditing());
@@ -397,6 +412,389 @@ void EffectsPanelUiTests::nativeEditorViewportRoutesOutsideCanvasInput()
     QTRY_VERIFY(!zoomSpy.isEmpty());
     QVERIFY(canvas->zoom() > beforeZoom);
     QVERIFY(canvas->isTextEditing());
+}
+
+void EffectsPanelUiTests::inspectorEditEndsCanvasSessionWithoutStaleOverwrite()
+{
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    auto* controller = window.findChild<EditorController*>();
+    auto* canvas = window.findChild<EditorCanvas*>();
+    auto* addText = window.findChild<QPushButton*>(QStringLiteral("addTextButton"));
+    auto* inspectorText = window.findChild<QPlainTextEdit*>(QStringLiteral("textSource"));
+    auto* italic = window.findChild<QPushButton*>(QStringLiteral("fontItalic"));
+    auto* fontSize = window.findChild<SliderSpinBox*>(QStringLiteral("fontSize"));
+    QVERIFY(controller);
+    QVERIFY(canvas);
+    QVERIFY(addText);
+    QVERIFY(inspectorText);
+    QVERIFY(italic);
+    QVERIFY(fontSize);
+
+    QTest::mouseClick(addText, Qt::LeftButton);
+    QTRY_VERIFY(canvas->isTextEditing());
+    auto* editorView = canvas->findChild<QGraphicsView*>();
+    auto* editor = nativeTextEditor(editorView);
+    QVERIFY(editor);
+    QTRY_VERIFY(editor->hasFocus());
+    QTest::keyClicks(editor, QStringLiteral("abc"));
+    const QString objectId = canvas->editingObjectId();
+    QTRY_COMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("abc"));
+
+    QTest::mouseClick(inspectorText->viewport(), Qt::LeftButton);
+    inspectorText->selectAll();
+    QTest::keyClicks(inspectorText, QStringLiteral("XYZ"));
+    QTRY_COMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("XYZ"));
+    QVERIFY(!canvas->isTextEditing());
+    QVERIFY(editor); // the reusable widget may remain allocated, but is inactive
+    QVERIFY(!editor->isVisible());
+
+    QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(objectId) != nullptr, 5000);
+    // This test owns the canvas/inspector transaction boundary. The exact
+    // mouse hit-test path is covered separately and has a documented native-
+    // platform gap when the offscreen runner supplies no fillable font ink.
+    beginNativeEdit(canvas, controller, objectId);
+    QTRY_VERIFY(canvas->isTextEditing());
+    QTRY_COMPARE(editor->toPlainText(), QStringLiteral("XYZ"));
+    QTest::keyClicks(editor, QStringLiteral("!"));
+    QTRY_COMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("XYZ!"));
+
+    const bool originalItalic = controller->document().objectById(objectId)->font.italic;
+    QTest::mouseClick(italic, Qt::LeftButton);
+    QTRY_COMPARE(controller->document().objectById(objectId)->font.italic, !originalItalic);
+    QVERIFY(!canvas->isTextEditing());
+    controller->undoStack()->undo();
+    QTRY_COMPARE(controller->document().objectById(objectId)->font.italic, originalItalic);
+    QCOMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("XYZ!"));
+
+    beginNativeEdit(canvas, controller, objectId);
+    QTRY_VERIFY(canvas->isTextEditing());
+    QDoubleSpinBox* sizeSpin = fontSize->spinBox();
+    QTest::mouseClick(sizeSpin, Qt::LeftButton);
+    sizeSpin->selectAll();
+    QTest::keyClicks(sizeSpin, QStringLiteral("88"));
+    QTest::keyClick(sizeSpin, Qt::Key_Enter);
+    QTRY_COMPARE(controller->document().objectById(objectId)->typography.fontSize, 88.0);
+    QVERIFY(!canvas->isTextEditing());
+}
+
+void EffectsPanelUiTests::styleIntensityGestureHasImmediateDirtyTruthAndOneUndoStep()
+{
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    auto* controller = window.findChild<EditorController*>();
+    auto* intensity = window.findChild<SliderSpinBox*>(QStringLiteral("styleIntensity"));
+    QVERIFY(controller);
+    QVERIFY(intensity);
+    QSlider* slider = intensity->findChild<QSlider*>();
+    QVERIFY(slider);
+
+    const QString first = controller->createTextObject(QPointF(100, 100), QStringLiteral("gesture one"));
+    const QString second = controller->createTextObject(QPointF(400, 100), QStringLiteral("gesture two"));
+    QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(first)
+                                 && controller->sceneGeometry().objectById(second), 5000);
+    controller->selectObject(first);
+    controller->undoStack()->setClean();
+    const QString saved = test::semanticFingerprint(controller->document());
+    const int savedIndex = controller->undoStack()->index();
+    const int savedCount = controller->undoStack()->count();
+
+    const QPoint start(slider->width() / 2, slider->height() / 2);
+    const QPoint away(slider->width() * 3 / 4, slider->height() / 2);
+    QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, start);
+    QTest::mouseMove(slider, away, 10);
+    QVERIFY(controller->document().objectById(first)->effectStackStrength != 1.0);
+    QVERIFY2(controller->isModified(), "held persistent gesture must be immediately dirty");
+    QVERIFY(controller->undoStack()->isClean()); // command is committed on transaction end
+    QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, away);
+    QVERIFY(controller->isModified());
+    QVERIFY(controller->undoStack()->canUndo());
+    QCOMPARE(controller->undoStack()->count(), savedCount + 1);
+    controller->undoStack()->undo();
+    QVERIFY(controller->undoStack()->isClean());
+    QCOMPARE(test::semanticFingerprint(controller->document()), saved);
+    QCOMPARE(controller->undoStack()->index(), savedIndex);
+
+    // Remove the intentional redo branch so the following no-op assertion
+    // measures only the gesture under test, not earlier setup history.
+    controller->undoStack()->clear();
+    controller->undoStack()->setClean();
+
+    // Returning to the exact slider start is a semantic no-op and must not
+    // create a misleading dirty/undo entry.
+    QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, start);
+    QTest::mouseMove(slider, away, 10);
+    slider->setValue(500);
+    QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, start);
+    QVERIFY(!controller->isModified());
+    QVERIFY(controller->undoStack()->isClean());
+    QCOMPARE(controller->undoStack()->index(), 0);
+    QCOMPARE(controller->undoStack()->count(), 0);
+    QVERIFY(!controller->undoStack()->canUndo());
+
+    // Selection change is an explicit interruption boundary: it commits the
+    // held transaction against the original object before authority moves.
+    QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, start);
+    QTest::mouseMove(slider, away, 10);
+    QVERIFY(controller->isModified());
+    controller->selectObject(second);
+    QCOMPARE(controller->selectionModel()->activeObjectId(), second);
+    QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, away);
+    QVERIFY(controller->undoStack()->canUndo());
+    controller->undoStack()->undo();
+    QCOMPARE(controller->document().objectById(first)->effectStackStrength, 1.0);
+}
+
+void EffectsPanelUiTests::rotatedMarqueeUsesInkAsNarrowPhase()
+{
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    auto* controller = window.findChild<EditorController*>();
+    auto* canvas = window.findChild<EditorCanvas*>();
+    QVERIFY(controller);
+    QVERIFY(canvas);
+    const QString rotatedId = controller->createTextObject(QPointF(420, 260), QStringLiteral("IIII"));
+    const QString otherId = controller->createTextObject(QPointF(760, 460), QStringLiteral("Other"));
+    QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(rotatedId)
+                                 && controller->sceneGeometry().objectById(otherId), 5000);
+    ObjectTransform transform = controller->document().objectById(rotatedId)->transform;
+    transform.rotation = 45.0;
+    transform.scale = QPointF(0.55, 1.8);
+    controller->setObjectTransform(rotatedId, transform);
+    QTRY_COMPARE_WITH_TIMEOUT(controller->sceneGeometry().objectById(rotatedId)->transform.rotation,
+                              45.0, 5000);
+
+    const SceneObjectGeometry* rotated = controller->sceneGeometry().objectById(rotatedId);
+    QVERIFY(rotated);
+    const QPainterPath ink = rotated->geometry.combinedPath();
+    const QRectF aabb = rotated->frame.pageAabb();
+    QVERIFY(!ink.isEmpty());
+    QVector<QRectF> cornerCandidates = {
+        QRectF(aabb.topLeft(), QSizeF(8, 8)),
+        QRectF(aabb.topRight() - QPointF(8, 0), QSizeF(8, 8)),
+        QRectF(aabb.bottomLeft() - QPointF(0, 8), QSizeF(8, 8)),
+        QRectF(aabb.bottomRight() - QPointF(8, 8), QSizeF(8, 8))};
+    QRectF emptyCorner;
+    for (const QRectF& candidate : cornerCandidates) {
+        QPainterPath candidatePath;
+        candidatePath.addRect(candidate);
+        if (!candidatePath.intersects(ink)) {
+            emptyCorner = candidate;
+            break;
+        }
+    }
+    QVERIFY2(!emptyCorner.isEmpty(), "rotated fixture needs an empty page-AABB corner");
+
+    controller->clearSelection();
+    const QPoint emptyStart = canvas->mapDocumentToViewport(emptyCorner.topLeft()).toPoint();
+    const QPoint emptyEnd = canvas->mapDocumentToViewport(emptyCorner.bottomRight()).toPoint();
+    QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, emptyStart);
+    QTest::mouseMove(canvas, emptyEnd, 10);
+    QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, emptyEnd);
+    QVERIFY2(!controller->selectedObjectIds().contains(rotatedId),
+             "marquee touching only an empty AABB corner selected rotated text");
+
+    const QRectF containing = aabb.adjusted(-12, -12, 12, 12);
+    const QPoint containStart = canvas->mapDocumentToViewport(containing.topLeft()).toPoint();
+    const QPoint containEnd = canvas->mapDocumentToViewport(containing.bottomRight()).toPoint();
+    QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, containStart);
+    QTest::mouseMove(canvas, containEnd, 10);
+    QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, containEnd);
+    QVERIFY(controller->selectedObjectIds().contains(rotatedId));
+
+    controller->selectObject(otherId);
+    controller->selectObjectsInRect(containing, true);
+    QVERIFY(controller->selectedObjectIds().contains(otherId));
+    QVERIFY(controller->selectedObjectIds().contains(rotatedId));
+
+    transform.scale.setX(-0.55);
+    controller->setObjectTransform(rotatedId, transform);
+    QTRY_COMPARE_WITH_TIMEOUT(controller->sceneGeometry().objectById(rotatedId)->transform.scale.x(),
+                              -0.55, 5000);
+    controller->selectObjectsInRect(
+        controller->sceneGeometry().objectById(rotatedId)->frame.pageAabb().adjusted(-2, -2, 2, 2), false);
+    QVERIFY(controller->selectedObjectIds().contains(rotatedId));
+
+    controller->setActiveLayerLocked(true);
+    QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(rotatedId)->locked, 5000);
+    controller->selectObjectsInRect(aabb.adjusted(-20, -20, 20, 20), false);
+    QVERIFY(!controller->selectedObjectIds().contains(rotatedId));
+    controller->setActiveLayerLocked(false);
+    controller->setActiveLayerVisible(false);
+    QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(rotatedId) == nullptr, 5000);
+    controller->selectObjectsInRect(aabb.adjusted(-20, -20, 20, 20), false);
+    QVERIFY(!controller->selectedObjectIds().contains(rotatedId));
+}
+
+void EffectsPanelUiTests::objectRowLayerButtonsOperateOnParentLayer()
+{
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    auto* controller = window.findChild<EditorController*>();
+    auto* tree = window.findChild<QTreeWidget*>(QStringLiteral("layersTree"));
+    auto* visible = window.findChild<QPushButton*>(QStringLiteral("layerVisibleButton"));
+    auto* lock = window.findChild<QPushButton*>(QStringLiteral("layerLockButton"));
+    QVERIFY(controller);
+    QVERIFY(tree);
+    QVERIFY(visible);
+    QVERIFY(lock);
+    controller->createTextObject(QPointF(100, 100), QStringLiteral("row metadata"));
+    QCoreApplication::processEvents();
+    QVERIFY(tree->topLevelItemCount() > 0);
+    QTreeWidgetItem* layerItem = tree->topLevelItem(0);
+    QVERIFY(layerItem && layerItem->childCount() > 0);
+    QTreeWidgetItem* objectItem = layerItem->child(0);
+    const QString layerId = layerItem->data(0, Qt::UserRole).toString();
+    QVERIFY(!layerId.isEmpty());
+
+    QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      tree->visualItemRect(layerItem).center());
+    QTRY_COMPARE(controller->document().activeLayerId, layerId);
+    QTest::mouseClick(visible, Qt::LeftButton);
+    QTRY_VERIFY(!controller->document().layerById(layerId)->visible);
+    QTest::mouseClick(visible, Qt::LeftButton);
+    QTRY_VERIFY(controller->document().layerById(layerId)->visible);
+
+    layerItem = tree->topLevelItem(0);
+    objectItem = layerItem->child(0);
+    QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      tree->visualItemRect(objectItem).center());
+    QVERIFY(!controller->selectionModel()->activeObjectId().isEmpty());
+    QTest::mouseClick(visible, Qt::LeftButton);
+    QTRY_VERIFY(!controller->document().layerById(layerId)->visible);
+    QTest::mouseClick(visible, Qt::LeftButton);
+    QTRY_VERIFY(controller->document().layerById(layerId)->visible);
+
+    layerItem = tree->topLevelItem(0);
+    objectItem = layerItem->child(0);
+    QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      tree->visualItemRect(objectItem).center());
+    QTest::mouseClick(lock, Qt::LeftButton);
+    QTRY_VERIFY(controller->document().layerById(layerId)->locked);
+    QTest::mouseClick(lock, Qt::LeftButton);
+    QTRY_VERIFY(!controller->document().layerById(layerId)->locked);
+}
+
+void EffectsPanelUiTests::unsupportedEffectDisablesMaskUiAcrossRefreshes_data()
+{
+    QTest::addColumn<QString>("unsupportedTypeId");
+    for (const EffectDescriptor& descriptor : EffectRegistry::instance().descriptors()) {
+        if (!descriptor.supportsMask) {
+            QTest::newRow(descriptor.typeId.toUtf8().constData()) << descriptor.typeId;
+        }
+    }
+}
+
+void EffectsPanelUiTests::unsupportedEffectDisablesMaskUiAcrossRefreshes()
+{
+    QFETCH(QString, unsupportedTypeId);
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    auto* controller = window.findChild<EditorController*>();
+    auto* canvas = window.findChild<EditorCanvas*>();
+    auto* effectList = window.findChild<QListWidget*>(QStringLiteral("effectList"));
+    auto* maskButton = window.findChild<QToolButton*>(QStringLiteral("tool/effect-mask"));
+    auto* maskAction = window.findChild<QAction*>(QStringLiteral("tool.effectMask"));
+    QVERIFY(controller);
+    QVERIFY(canvas);
+    QVERIFY(effectList);
+    QVERIFY(maskButton);
+    QVERIFY(maskAction);
+
+    const QString objectId = controller->createTextObject(QPointF(100, 100), QStringLiteral("Mask capability"));
+    controller->addEffect(unsupportedTypeId);
+    const TextObject* object = controller->document().objectById(objectId);
+    QVERIFY(object);
+    QCOMPARE(object->effects.size(), 1);
+    const Effect* unsupportedEffect = object->effects.at(0);
+    QVERIFY(unsupportedEffect);
+    QCOMPARE(unsupportedEffect->typeId(), unsupportedTypeId);
+    const QString unsupportedId = unsupportedEffect->instanceId;
+    QCoreApplication::processEvents();
+    QVERIFY(!canvas->maskEnabled());
+    QVERIFY(canvas->maskEffectId().isEmpty());
+    QVERIFY(!maskButton->isEnabled());
+    QVERIFY(!maskAction->isEnabled());
+    QTest::mouseClick(maskButton, Qt::LeftButton);
+    maskAction->trigger();
+    QCOMPARE(static_cast<int>(controller->tool()), static_cast<int>(EditorTool::Select));
+
+    controller->addEffect(QStringLiteral("wave"));
+    object = controller->document().objectById(objectId);
+    QVERIFY(object);
+    QCOMPARE(object->effects.size(), 2);
+    const QString waveId = object->effects.at(1)->instanceId;
+    QTRY_COMPARE(controller->selectedEffectId(), waveId);
+    QTRY_VERIFY(canvas->maskEnabled());
+    QCOMPARE(canvas->maskEffectId(), waveId);
+    QVERIFY(maskButton->isEnabled());
+    QVERIFY(maskAction->isEnabled());
+
+    QTest::mouseClick(maskButton, Qt::LeftButton);
+    QTRY_COMPARE(static_cast<int>(controller->tool()), static_cast<int>(EditorTool::EffectMask));
+
+    int unsupportedRow = -1;
+    for (int row = 0; row < effectList->count(); ++row) {
+        if (effectList->item(row)->data(Qt::UserRole).toString() == unsupportedId) {
+            unsupportedRow = row;
+            break;
+        }
+    }
+    QVERIFY(unsupportedRow >= 0);
+    QTest::mouseClick(effectList->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      effectList->visualItemRect(effectList->item(unsupportedRow)).center());
+    QTRY_COMPARE(controller->selectedEffectId(), unsupportedId);
+    QTRY_COMPARE(static_cast<int>(controller->tool()), static_cast<int>(EditorTool::Select));
+    QVERIFY(!canvas->maskEnabled());
+    QVERIFY(canvas->maskEffectId().isEmpty());
+    QVERIFY(!maskButton->isEnabled());
+    QVERIFY(!maskAction->isEnabled());
+
+    // A document refresh and its later asynchronous scene publication used to
+    // re-enable masking merely because an effect ID remained selected.
+    QSignalSpy sceneSpy(controller, &EditorController::sceneChanged);
+    controller->setText(QStringLiteral("Mask capability after refresh"));
+    QTRY_COMPARE(controller->document().objectById(objectId)->sourceText,
+                 QStringLiteral("Mask capability after refresh"));
+    QTRY_VERIFY_WITH_TIMEOUT(sceneSpy.count() > 0, 5000);
+    QVERIFY(!canvas->maskEnabled());
+    QVERIFY(canvas->maskEffectId().isEmpty());
+    QVERIFY(!maskButton->isEnabled());
+    QVERIFY(!maskAction->isEnabled());
+
+    EffectMaskStroke stroke;
+    stroke.points = {QPointF(100, 100), QPointF(120, 110)};
+    controller->addEffectMaskStroke(objectId, unsupportedId, stroke);
+    QVERIFY(controller->document().objectById(objectId)
+                ->effects.byInstanceId(unsupportedId)->maskStrokes.isEmpty());
+    const QJsonArray serializedEffects = ProjectSerializer::textObjectToJson(
+        *controller->document().objectById(objectId)).value(QStringLiteral("effects")).toArray();
+    bool foundSerializedEffect = false;
+    for (const QJsonValue& value : serializedEffects) {
+        const QJsonObject serializedEffect = value.toObject();
+        if (serializedEffect.value(QStringLiteral("id")).toString() == unsupportedId) {
+            foundSerializedEffect = true;
+            QVERIFY(serializedEffect.value(QStringLiteral("mask")).toArray().isEmpty());
+        }
+    }
+    QVERIFY(foundSerializedEffect);
+    Document restored;
+    QString error;
+    QVERIFY2(ProjectSerializer::fromJson(ProjectSerializer::toJson(controller->document()),
+                                         &restored, &error),
+             qPrintable(error));
+    QVERIFY(restored.objectById(objectId)
+                ->effects.byInstanceId(unsupportedId)->maskStrokes.isEmpty());
 }
 
 void EffectsPanelUiTests::traitModeIsShownAfterBoldAndItalic()

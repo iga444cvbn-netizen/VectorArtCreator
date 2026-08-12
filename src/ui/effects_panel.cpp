@@ -40,21 +40,25 @@ EffectsPanel::EffectsPanel(QWidget* parent)
 
     auto* searchRow = new QHBoxLayout();
     m_effectSearch = new QLineEdit(effectsGroup);
+    m_effectSearch->setObjectName(QStringLiteral("effectSearch"));
     m_effectSearch->setPlaceholderText(QStringLiteral("Search effects…"));
     searchRow->addWidget(m_effectSearch, 1);
     effectsLayout->addLayout(searchRow);
 
     auto* addRow = new QHBoxLayout();
     m_addEffectCombo = new QComboBox(effectsGroup);
+    m_addEffectCombo->setObjectName(QStringLiteral("effectAddType"));
     for (const EffectDescriptor& effect : EffectRegistry::instance().descriptors()) {
         addEffectChoice(m_addEffectCombo, effect.typeId, effect.displayName);
     }
     m_addEffectButton = new QPushButton(QStringLiteral("Add"), effectsGroup);
+    m_addEffectButton->setObjectName(QStringLiteral("effectAdd"));
     addRow->addWidget(m_addEffectCombo, 1);
     addRow->addWidget(m_addEffectButton);
     effectsLayout->addLayout(addRow);
 
     m_effectList = new QListWidget(effectsGroup);
+    m_effectList->setObjectName(QStringLiteral("effectList"));
     m_effectList->setMinimumHeight(120);
     m_effectList->setSelectionMode(QAbstractItemView::SingleSelection);
     effectsLayout->addWidget(m_effectList);

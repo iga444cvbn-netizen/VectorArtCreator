@@ -115,8 +115,31 @@ endif()
 
 enable_testing()
 
-add_executable(vector_typography_tests
-    tests/core_tests.cpp
+set(TEST_SUPPORT_SOURCES
+    tests/support/async_evaluation_gate.cpp
+    tests/support/geometry_assertions.cpp
+    tests/support/invariant_checker.cpp
+    tests/support/semantic_equality.cpp
+    tests/support/semantic_geometry.cpp
+    tests/support/state_fingerprint.cpp
+    tests/support/test_fonts.cpp
+    tests/support/workload_builder.cpp
+)
+
+add_library(vector_typography_test_support STATIC ${TEST_SUPPORT_SOURCES})
+target_include_directories(vector_typography_test_support PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(vector_typography_test_support PUBLIC
+    vector_typography_core
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Test
+)
+
+set(CONTROLLER_TEST_SOURCES
     src/ui/editor_controller.h
     src/ui/editor_controller.cpp
     src/ui/selection_model.h
@@ -124,7 +147,16 @@ add_executable(vector_typography_tests
     src/ui/shortcut_manager.h
     src/ui/shortcut_manager.cpp
 )
-target_include_directories(vector_typography_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# This is a hand-written test driver, not a uic-generated ui_*.h header.
+set_source_files_properties(tests/support/ui_test_driver.cpp tests/support/ui_test_driver.h
+    PROPERTIES SKIP_AUTOUIC ON)
+
+add_executable(vector_typography_tests
+    tests/core_tests.cpp
+    ${CONTROLLER_TEST_SOURCES}
+)
+target_include_directories(vector_typography_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vector_typography_tests PRIVATE
     vector_typography_core
     Qt6::Core
@@ -134,13 +166,51 @@ target_link_libraries(vector_typography_tests PRIVATE
 )
 
 add_test(NAME vector_typography_core_tests COMMAND vector_typography_tests)
+set_tests_properties(vector_typography_core_tests PROPERTIES LABELS "core")
+
+add_executable(vector_typography_effect_contract_tests
+    tests/integration/effect_contract_tests.cpp
+)
+target_include_directories(vector_typography_effect_contract_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(vector_typography_effect_contract_tests PRIVATE vector_typography_test_support Qt6::Core Qt6::Gui Qt6::Test)
+add_test(NAME vector_typography_effect_contract_tests COMMAND vector_typography_effect_contract_tests)
+set_tests_properties(vector_typography_effect_contract_tests PROPERTIES LABELS "core;integration;effects")
+
+add_executable(vector_typography_oracle_tests
+    tests/integration/oracle_self_tests.cpp
+)
+target_include_directories(vector_typography_oracle_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(vector_typography_oracle_tests PRIVATE vector_typography_test_support Qt6::Core Qt6::Gui Qt6::Test)
+add_test(NAME vector_typography_oracle_tests COMMAND vector_typography_oracle_tests)
+set_tests_properties(vector_typography_oracle_tests PROPERTIES LABELS "core;integration;oracle")
+
+add_executable(vector_typography_integration_tests
+    tests/integration/workflow_integration_tests.cpp
+    ${CONTROLLER_TEST_SOURCES}
+)
+target_include_directories(vector_typography_integration_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(vector_typography_integration_tests PRIVATE vector_typography_test_support Qt6::Core Qt6::Gui Qt6::Test Qt6::Concurrent)
+add_test(NAME vector_typography_integration_tests COMMAND vector_typography_integration_tests)
+set_tests_properties(vector_typography_integration_tests PROPERTIES LABELS "integration;undo;serialization;async")
+
+add_executable(vector_typography_ui_smoke_tests
+    tests/ui/smoke_workflow_tests.cpp
+    tests/support/ui_test_driver.cpp
+    ${UI_SOURCES}
+)
+set_target_properties(vector_typography_ui_smoke_tests PROPERTIES AUTOUIC OFF)
+target_include_directories(vector_typography_ui_smoke_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(vector_typography_ui_smoke_tests PRIVATE vector_typography_test_support vector_typography_core Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test Qt6::Concurrent)
+add_test(NAME vector_typography_ui_smoke_tests COMMAND vector_typography_ui_smoke_tests)
+set_tests_properties(vector_typography_ui_smoke_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "ui;smoke")
 
 add_executable(vector_typography_ui_tests
     tests/ui_regression_tests.cpp
     ${UI_SOURCES}
 )
-target_include_directories(vector_typography_ui_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(vector_typography_ui_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vector_typography_ui_tests PRIVATE
+    vector_typography_test_support
     vector_typography_core
     Qt6::Core
     Qt6::Gui
@@ -148,6 +218,12 @@ target_link_libraries(vector_typography_ui_tests PRIVATE
     Qt6::Test
 )
 add_test(NAME vector_typography_ui_tests COMMAND vector_typography_ui_tests)
-set_tests_properties(vector_typography_ui_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+set_tests_properties(vector_typography_ui_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "ui;regression")
+
+add_executable(vector_typography_windows_tests tests/platform/windows/clipboard_tests.cpp)
+target_include_directories(vector_typography_windows_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(vector_typography_windows_tests PRIVATE vector_typography_core Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME vector_typography_windows_tests COMMAND vector_typography_windows_tests)
+set_tests_properties(vector_typography_windows_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "windows;export")
 
 install(TARGETS vector_typography_editor RUNTIME DESTINATION bin)

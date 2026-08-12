@@ -33,10 +33,10 @@ private:
 
 class ClipboardTransaction final {
 public:
-    explicit ClipboardTransaction(HWND owner)
+    ClipboardTransaction(HWND owner, const std::function<bool()>& openAttempt)
     {
         for (int attempt = 0; attempt != 8 && !m_open; ++attempt) {
-            m_open = OpenClipboard(owner) != FALSE;
+            m_open = openAttempt ? openAttempt() : OpenClipboard(owner) != FALSE;
             if (!m_open) Sleep(12);
         }
     }
@@ -98,7 +98,9 @@ HENHMETAFILE renderEmf(const VectorExportPayload& payload)
 {
     GdiplusProcess gdiplus;
     if (!gdiplus.ok()) return nullptr;
-    HDC reference = GetDC(nullptr);
+    // A compatible memory DC avoids depending on a visible desktop surface;
+    // Copy for Word must remain usable from headless/offscreen Qt sessions.
+    HDC reference = CreateCompatibleDC(nullptr);
     if (!reference) return nullptr;
     const qreal unitsPerLogicalPixel = 2540.0 / VectorExportPayload::LogicalDpi;
     const Gdiplus::RectF frame(0.0f, 0.0f,
@@ -108,22 +110,31 @@ HENHMETAFILE renderEmf(const VectorExportPayload& payload)
     {
         Gdiplus::Metafile metafile(reference, frame, Gdiplus::MetafileFrameUnitGdi,
                                    Gdiplus::EmfTypeEmfPlusDual, L"VectorTypographyEditor");
-        ReleaseDC(nullptr, reference);
-        Gdiplus::Graphics graphics(&metafile);
-        graphics.SetSmoothingMode(Gdiplus::SmoothingModeHighQuality);
-        graphics.ScaleTransform(static_cast<Gdiplus::REAL>(unitsPerLogicalPixel),
-                                static_cast<Gdiplus::REAL>(unitsPerLogicalPixel));
-        for (const VectorExportRecord& record : payload.records) {
-            Gdiplus::GraphicsPath path(Gdiplus::FillModeWinding);
-            addPath(path, record.path);
-            const QColor color = record.fill;
-            const BYTE alpha = static_cast<BYTE>(qBound(0, qRound(record.opacity * 255.0), 255));
-            Gdiplus::SolidBrush brush(Gdiplus::Color(alpha, color.red(), color.green(), color.blue()));
-            graphics.FillPath(&brush, &path);
+        if (metafile.GetLastStatus() == Gdiplus::Ok) {
+            // GDI+ finalizes the recording when Graphics is destroyed.  Calling
+            // GetHENHMETAFILE while Graphics is still alive returns null on the
+            // headless Windows runner and can do the same in production.
+            {
+                Gdiplus::Graphics graphics(&metafile);
+                graphics.SetSmoothingMode(Gdiplus::SmoothingModeHighQuality);
+                graphics.ScaleTransform(static_cast<Gdiplus::REAL>(unitsPerLogicalPixel),
+                                        static_cast<Gdiplus::REAL>(unitsPerLogicalPixel));
+                for (const VectorExportRecord& record : payload.records) {
+                    Gdiplus::GraphicsPath path(Gdiplus::FillModeWinding);
+                    addPath(path, record.path);
+                    const QColor color = record.fill;
+                    const BYTE alpha = static_cast<BYTE>(
+                        qBound(0, qRound(record.opacity * 255.0), 255));
+                    Gdiplus::SolidBrush brush(
+                        Gdiplus::Color(alpha, color.red(), color.green(), color.blue()));
+                    graphics.FillPath(&brush, &path);
+                }
+                graphics.Flush(Gdiplus::FlushIntentionSync);
+            }
+            result = metafile.GetHENHMETAFILE();
         }
-        graphics.Flush(Gdiplus::FlushIntentionSync);
-        result = metafile.GetHENHMETAFILE();
     }
+    DeleteDC(reference);
     return result;
 }
 
@@ -192,22 +203,27 @@ QByteArray svgFallback(const VectorExportPayload& payload)
 
 } // namespace
 
-bool WindowsVectorClipboardService::copyForOffice(const VectorExportPayload& payload, QString* error)
+namespace {
+
+ClipboardPublicationResult copyForOfficeImpl(const VectorExportPayload& payload,
+                                             const std::function<bool()>& openAttempt)
 {
     if (payload.records.isEmpty() || payload.bounds.isEmpty()) {
-        if (error) *error = QStringLiteral("There is no valid vector geometry to copy.");
-        return false;
+        return ClipboardPublicationResult::fromFormats(
+            false, false, false, false, QStringLiteral("There is no valid vector geometry to copy."));
     }
     HENHMETAFILE metafile = renderEmf(payload);
     if (!metafile) {
-        if (error) *error = QStringLiteral("Could not create the Windows EMF+ clipboard artwork.");
-        return false;
+        return ClipboardPublicationResult::fromFormats(
+            false, false, false, false,
+            QStringLiteral("Could not create the Windows EMF+ clipboard artwork."));
     }
     const QByteArray png = renderPng(payload);
     if (png.isEmpty()) {
         DeleteEnhMetaFile(metafile);
-        if (error) *error = QStringLiteral("The raster fallback would exceed the production size limit.");
-        return false;
+        return ClipboardPublicationResult::fromFormats(
+            false, false, false, false,
+            QStringLiteral("The raster fallback would exceed the production size limit."));
     }
     const QByteArray svg = svgFallback(payload);
     QWindow* activeWindow = QGuiApplication::focusWindow();
@@ -216,21 +232,25 @@ bool WindowsVectorClipboardService::copyForOffice(const VectorExportPayload& pay
         activeWindow = windows.isEmpty() ? nullptr : windows.front();
     }
     const HWND owner = activeWindow ? reinterpret_cast<HWND>(activeWindow->winId()) : nullptr;
-    ClipboardTransaction transaction(owner);
+    ClipboardTransaction transaction(owner, openAttempt);
     if (!transaction.open() || !EmptyClipboard()) {
         DeleteEnhMetaFile(metafile);
-        if (error) *error = QStringLiteral("The clipboard is busy. Close the app using it and try again.");
-        return false;
+        return ClipboardPublicationResult::fromFormats(
+            false, false, false, false,
+            QStringLiteral("The clipboard is busy. Close the app using it and try again."));
     }
     if (!SetClipboardData(CF_ENHMETAFILE, metafile)) {
         DeleteEnhMetaFile(metafile);
-        if (error) *error = QStringLiteral("Windows rejected the enhanced metafile clipboard format.");
-        return false;
+        return ClipboardPublicationResult::fromFormats(
+            false, false, false, false,
+            QStringLiteral("Windows rejected the enhanced metafile clipboard format."));
     }
     metafile = nullptr; // Clipboard owns the handle only after a successful transfer.
     const UINT svgFormat = RegisterClipboardFormatW(L"image/svg+xml");
     const UINT pngFormat = RegisterClipboardFormatW(L"PNG");
-    bool fallbackOk = setBytes(svgFormat, svg) && setBytes(pngFormat, png);
+    const bool svgPublished = setBytes(svgFormat, svg);
+    const bool pngPublished = setBytes(pngFormat, png);
+    bool textPublished = false;
     const std::wstring wideText = payload.plainText.toStdWString();
     GlobalMemory unicode((wideText.size() + 1) * sizeof(wchar_t));
     if (unicode.handle) {
@@ -240,17 +260,27 @@ bool WindowsVectorClipboardService::copyForOffice(const VectorExportPayload& pay
             GlobalUnlock(unicode.handle);
             if (SetClipboardData(CF_UNICODETEXT, unicode.handle)) {
                 static_cast<void>(unicode.release()); // success transfers ownership
-            } else {
-                fallbackOk = false;
+                textPublished = true;
             }
-        } else {
-            fallbackOk = false;
         }
-    } else {
-        fallbackOk = false;
     }
-    if (!fallbackOk && error) *error = QStringLiteral("Vector copied, but one or more SVG/PNG/text fallbacks could not be published.");
-    return true;
+    return ClipboardPublicationResult::fromFormats(
+        true, svgPublished, pngPublished, textPublished);
+}
+
+} // namespace
+
+ClipboardPublicationResult WindowsVectorClipboardService::copyForOffice(
+    const VectorExportPayload& payload)
+{
+    return copyForOfficeImpl(payload, {});
+}
+
+ClipboardPublicationResult WindowsVectorClipboardService::copyForOfficeWithOpenAttemptForTesting(
+    const VectorExportPayload& payload,
+    const std::function<bool()>& openAttempt)
+{
+    return copyForOfficeImpl(payload, openAttempt);
 }
 
 } // namespace vt

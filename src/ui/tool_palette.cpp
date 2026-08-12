@@ -31,6 +31,22 @@ QString toolName(EditorTool tool)
     return QStringLiteral("Tool");
 }
 
+QString toolId(EditorTool tool)
+{
+    switch (tool) {
+    case EditorTool::Select: return QStringLiteral("select");
+    case EditorTool::Move: return QStringLiteral("move");
+    case EditorTool::Text: return QStringLiteral("text");
+    case EditorTool::Push: return QStringLiteral("push");
+    case EditorTool::Pull: return QStringLiteral("pull");
+    case EditorTool::Inflate: return QStringLiteral("inflate");
+    case EditorTool::Pinch: return QStringLiteral("pinch");
+    case EditorTool::Smooth: return QStringLiteral("smooth");
+    case EditorTool::EffectMask: return QStringLiteral("effect-mask");
+    }
+    return QStringLiteral("unknown");
+}
+
 QIcon makeToolIcon(EditorTool tool)
 {
     QPixmap pixmap(28, 28);
@@ -144,6 +160,7 @@ ToolPalette::ToolPalette(QWidget* parent)
         button->setMaximumSize(46, 46);
         button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         button->setAccessibleName(toolName(tool));
+        button->setObjectName(QStringLiteral("tool/%1").arg(toolId(tool)));
         m_group->addButton(button, static_cast<int>(tool));
         m_buttons.insert(static_cast<int>(tool), button);
         layout->addWidget(button, 0, Qt::AlignHCenter);
@@ -161,6 +178,13 @@ void ToolPalette::setActiveTool(EditorTool tool)
     }
     for (auto iterator = m_buttons.cbegin(); iterator != m_buttons.cend(); ++iterator) {
         updateToolTip(static_cast<EditorTool>(iterator.key()));
+    }
+}
+
+void ToolPalette::setToolEnabled(EditorTool tool, bool enabled)
+{
+    if (QToolButton* button = m_buttons.value(static_cast<int>(tool))) {
+        button->setEnabled(enabled);
     }
 }
 

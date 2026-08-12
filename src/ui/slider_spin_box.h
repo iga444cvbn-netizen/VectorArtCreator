@@ -38,10 +38,13 @@ private:
     void updateSpinFromSlider(int sliderValue);
     [[nodiscard]] int sliderValueFor(double value) const;
     [[nodiscard]] double valueForSlider(int sliderValue) const;
+    bool eventFilter(QObject* watched, QEvent* event) override;
+    void finishActiveInteraction();
 
     QSlider* m_slider = nullptr;
     QDoubleSpinBox* m_spinBox = nullptr;
     bool m_logarithmic = false;
+    bool m_interactionActive = false;
 };
 
 } // namespace vt
