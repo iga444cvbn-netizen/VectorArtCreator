@@ -26,6 +26,7 @@
 #include <QSignalSpy>
 #include <QSlider>
 #include <QStyle>
+#include <QStyleOptionSlider>
 #include <QStyleOptionSpinBox>
 #include <QTest>
 #include <QTemporaryDir>
@@ -86,6 +87,25 @@ QPlainTextEdit* nativeTextEditor(QGraphicsView* editorView)
         }
     }
     return nullptr;
+}
+
+QPoint sliderHandleCenter(const QSlider* slider)
+{
+    QStyleOptionSlider option;
+    option.initFrom(slider);
+    option.orientation = slider->orientation();
+    option.minimum = slider->minimum();
+    option.maximum = slider->maximum();
+    option.sliderPosition = slider->sliderPosition();
+    option.sliderValue = slider->value();
+    option.singleStep = slider->singleStep();
+    option.pageStep = slider->pageStep();
+    option.tickPosition = slider->tickPosition();
+    option.tickInterval = slider->tickInterval();
+    option.upsideDown = slider->invertedAppearance();
+    return slider->style()
+        ->subControlRect(QStyle::CC_Slider, &option, QStyle::SC_SliderHandle, slider)
+        .center();
 }
 
 void typeUnicode(QPlainTextEdit* editor, const QString& text)
@@ -506,7 +526,7 @@ void EffectsPanelUiTests::styleIntensityGestureHasImmediateDirtyTruthAndOneUndoS
     const int savedIndex = controller->undoStack()->index();
     const int savedCount = controller->undoStack()->count();
 
-    const QPoint start(slider->width() / 2, slider->height() / 2);
+    const QPoint start = sliderHandleCenter(slider);
     const QPoint away(slider->width() * 3 / 4, slider->height() / 2);
     QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, start);
     QTest::mouseMove(slider, away, 10);
@@ -578,7 +598,7 @@ void EffectsPanelUiTests::styleIntensityGestureHasImmediateDirtyTruthAndOneUndoS
     controller->undoStack()->redo();
     QCOMPARE(test::semanticFingerprint(controller->document()), firstGestureFinal);
 
-    const QPoint current(slider->width() * 4 / 5, slider->height() / 2);
+    const QPoint current = sliderHandleCenter(slider);
     QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, current);
     slider->setValue(750);
     slider->setValue(625);
@@ -596,7 +616,9 @@ void EffectsPanelUiTests::styleIntensityGestureHasImmediateDirtyTruthAndOneUndoS
     // backward across the clean index.
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, start);
+    const QPoint saveHandle = sliderHandleCenter(slider);
+    QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, saveHandle);
+    QVERIFY(slider->isSliderDown());
     slider->setValue(550);
     const qreal savedStrength =
         controller->document().objectById(first)->effectStackStrength;
@@ -604,12 +626,15 @@ void EffectsPanelUiTests::styleIntensityGestureHasImmediateDirtyTruthAndOneUndoS
     QVERIFY2(controller->saveProject(directory.filePath(QStringLiteral("gesture-clean.vtype")),
                                      &saveError),
              qPrintable(saveError));
+    QVERIFY(slider->isSliderDown());
     QVERIFY(controller->undoStack()->isClean());
     const int cleanIndex = controller->undoStack()->index();
     const int cleanCount = controller->undoStack()->count();
-    QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, start);
+    QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, saveHandle);
 
-    QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, start);
+    const QPoint postSaveHandle = sliderHandleCenter(slider);
+    QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, postSaveHandle);
+    QVERIFY(slider->isSliderDown());
     slider->setValue(725);
     slider->setValue(775);
     QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, away);
