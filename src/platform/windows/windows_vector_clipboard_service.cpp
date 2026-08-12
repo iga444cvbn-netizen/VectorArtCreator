@@ -17,6 +17,53 @@
 namespace vt {
 namespace {
 
+class Win32ClipboardOperations final : public WindowsClipboardOperations {
+public:
+    bool openClipboard(void* owner) override
+    {
+        return OpenClipboard(static_cast<HWND>(owner)) != FALSE;
+    }
+
+    void closeClipboard() override { static_cast<void>(CloseClipboard()); }
+    bool emptyClipboard() override { return EmptyClipboard() != FALSE; }
+    void retryDelay(unsigned milliseconds) override { Sleep(milliseconds); }
+
+    void* allocateGlobal(std::size_t bytes) override
+    {
+        return GlobalAlloc(GMEM_MOVEABLE, static_cast<SIZE_T>(bytes));
+    }
+
+    void* lockGlobal(void* handle) override
+    {
+        return GlobalLock(static_cast<HGLOBAL>(handle));
+    }
+
+    void unlockGlobal(void* handle) override
+    {
+        static_cast<void>(GlobalUnlock(static_cast<HGLOBAL>(handle)));
+    }
+
+    void freeGlobal(void* handle) override
+    {
+        static_cast<void>(GlobalFree(static_cast<HGLOBAL>(handle)));
+    }
+
+    void* publish(unsigned format, void* handle) override
+    {
+        return SetClipboardData(static_cast<UINT>(format), static_cast<HANDLE>(handle));
+    }
+
+    unsigned registerFormat(const wchar_t* name) override
+    {
+        return static_cast<unsigned>(RegisterClipboardFormatW(name));
+    }
+
+    void deleteEnhancedMetafile(void* handle) override
+    {
+        static_cast<void>(DeleteEnhMetaFile(static_cast<HENHMETAFILE>(handle)));
+    }
+};
+
 class GdiplusProcess final {
 public:
     GdiplusProcess()
@@ -33,45 +80,58 @@ private:
 
 class ClipboardTransaction final {
 public:
-    ClipboardTransaction(HWND owner, const std::function<bool()>& openAttempt)
+    ClipboardTransaction(void* owner,
+                         WindowsClipboardOperations& operations,
+                         const std::function<bool()>& openAttempt)
+        : m_operations(operations)
     {
         for (int attempt = 0; attempt != 8 && !m_open; ++attempt) {
-            m_open = openAttempt ? openAttempt() : OpenClipboard(owner) != FALSE;
-            if (!m_open) Sleep(12);
+            m_open = openAttempt ? openAttempt() : m_operations.openClipboard(owner);
+            if (!m_open) m_operations.retryDelay(12);
         }
     }
-    ~ClipboardTransaction() { if (m_open) CloseClipboard(); }
+    ~ClipboardTransaction() { if (m_open) m_operations.closeClipboard(); }
     [[nodiscard]] bool open() const { return m_open; }
 private:
+    WindowsClipboardOperations& m_operations;
     bool m_open = false;
 };
 
 class GlobalMemory final {
 public:
-    explicit GlobalMemory(SIZE_T size) : handle(GlobalAlloc(GMEM_MOVEABLE, size)) {}
-    ~GlobalMemory() { if (handle) GlobalFree(handle); }
-    [[nodiscard]] HGLOBAL release() { HGLOBAL result = handle; handle = nullptr; return result; }
-    HGLOBAL handle = nullptr;
+    GlobalMemory(WindowsClipboardOperations& operations, std::size_t size)
+        : m_operations(operations), handle(m_operations.allocateGlobal(size))
+    {
+    }
+    ~GlobalMemory() { if (handle) m_operations.freeGlobal(handle); }
+    [[nodiscard]] void* release() { void* result = handle; handle = nullptr; return result; }
+    WindowsClipboardOperations& m_operations;
+    void* handle = nullptr;
 };
 
-bool setBytes(UINT format, const QByteArray& bytes)
+bool setBytes(unsigned format,
+              const QByteArray& bytes,
+              WindowsClipboardOperations& operations)
 {
     if (format == 0) return false;
-    GlobalMemory memory(static_cast<SIZE_T>(bytes.size()));
+    GlobalMemory memory(operations, static_cast<std::size_t>(bytes.size()));
     if (!memory.handle) return false;
-    void* destination = GlobalLock(memory.handle);
+    void* destination = operations.lockGlobal(memory.handle);
     if (!destination) return false;
     memcpy(destination, bytes.constData(), static_cast<size_t>(bytes.size()));
-    GlobalUnlock(memory.handle);
-    if (!SetClipboardData(format, memory.handle)) return false;
+    operations.unlockGlobal(memory.handle);
+    if (!operations.publish(format, memory.handle)) return false;
     static_cast<void>(memory.release()); // ownership transfers only on success
     return true;
 }
 
-void addPath(Gdiplus::GraphicsPath& target, const QPainterPath& path)
+bool addPath(Gdiplus::GraphicsPath& target,
+             const QPainterPath& path,
+             const WorkControl& work)
 {
     const int count = path.elementCount();
     for (int index = 0; index < count; ++index) {
+        if (!work.consume()) return false;
         const QPainterPath::Element element = path.elementAt(index);
         if (element.type == QPainterPath::MoveToElement) {
             target.StartFigure();
@@ -92,10 +152,12 @@ void addPath(Gdiplus::GraphicsPath& target, const QPainterPath& path)
             index += 2;
         }
     }
+    return true;
 }
 
-HENHMETAFILE renderEmf(const VectorExportPayload& payload)
+HENHMETAFILE renderEmf(const VectorExportPayload& payload, const WorkControl& work)
 {
+    if (!work.consume()) return nullptr;
     GdiplusProcess gdiplus;
     if (!gdiplus.ok()) return nullptr;
     // A compatible memory DC avoids depending on a visible desktop surface;
@@ -120,8 +182,9 @@ HENHMETAFILE renderEmf(const VectorExportPayload& payload)
                 graphics.ScaleTransform(static_cast<Gdiplus::REAL>(unitsPerLogicalPixel),
                                         static_cast<Gdiplus::REAL>(unitsPerLogicalPixel));
                 for (const VectorExportRecord& record : payload.records) {
+                    if (!work.consume()) break;
                     Gdiplus::GraphicsPath path(Gdiplus::FillModeWinding);
-                    addPath(path, record.path);
+                    if (!addPath(path, record.path, work)) break;
                     const QColor color = record.fill;
                     const BYTE alpha = static_cast<BYTE>(
                         qBound(0, qRound(record.opacity * 255.0), 255));
@@ -138,7 +201,7 @@ HENHMETAFILE renderEmf(const VectorExportPayload& payload)
     return result;
 }
 
-QByteArray renderPng(const VectorExportPayload& payload)
+QByteArray renderPng(const VectorExportPayload& payload, const WorkControl& work)
 {
     constexpr qreal rasterDpi = 192.0;
     constexpr int maximumDimension = 8192;
@@ -148,12 +211,19 @@ QByteArray renderPng(const VectorExportPayload& payload)
     int height = qCeil(payload.bounds.height() * scale);
     if (width <= 0 || height <= 0 || width > maximumDimension || height > maximumDimension
         || static_cast<qint64>(width) * height > maximumPixels) return {};
+    const qint64 pixels = static_cast<qint64>(width) * height;
+    if (!work.consume((pixels + 1023) / 1024)) return {};
     QImage image(width, height, QImage::Format_ARGB32_Premultiplied);
+    if (image.isNull()) return {};
     image.fill(Qt::transparent);
     QPainter painter(&image);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.scale(scale, scale);
     for (const VectorExportRecord& record : payload.records) {
+        if (!work.consume(1 + record.path.elementCount())) {
+            painter.end();
+            return {};
+        }
         QColor color = record.fill;
         color.setAlphaF(record.opacity);
         painter.fillPath(record.path, color);
@@ -162,14 +232,16 @@ QByteArray renderPng(const VectorExportPayload& payload)
     QByteArray bytes;
     QBuffer buffer(&bytes);
     buffer.open(QIODevice::WriteOnly);
-    image.save(&buffer, "PNG");
+    if (!image.save(&buffer, "PNG")) return {};
+    if (!work.consume(qMax<qint64>(1, (bytes.size() + 1023) / 1024))) return {};
     return bytes;
 }
 
-QByteArray svgPathData(const QPainterPath& path)
+QByteArray svgPathData(const QPainterPath& path, const WorkControl& work)
 {
     QByteArray data;
     for (int index = 0; index < path.elementCount(); ++index) {
+        if (!work.consume()) return {};
         const QPainterPath::Element element = path.elementAt(index);
         const auto number = [](qreal value) { return QByteArray::number(value, 'g', 12); };
         if (element.type == QPainterPath::MoveToElement) {
@@ -188,17 +260,29 @@ QByteArray svgPathData(const QPainterPath& path)
     return data;
 }
 
-QByteArray svgFallback(const VectorExportPayload& payload)
+QByteArray svgFallback(const VectorExportPayload& payload, const WorkControl& work)
 {
+    if (!work.consume()) return {};
     QByteArray bytes("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ");
     bytes += QByteArray::number(payload.bounds.width()); bytes += ' ';
     bytes += QByteArray::number(payload.bounds.height()); bytes += "\">";
     for (const VectorExportRecord& record : payload.records) {
+        if (!work.consume()) return {};
+        const QByteArray path = svgPathData(record.path, work);
+        if (!work.isRunning()) return {};
         bytes += "<path fill=\"" + record.fill.name(QColor::HexRgb).toUtf8()
                  + "\" fill-opacity=\"" + QByteArray::number(record.opacity)
-                 + "\" fill-rule=\"nonzero\" d=\"" + svgPathData(record.path) + "\"/>";
+                 + "\" fill-rule=\"nonzero\" d=\"" + path + "\"/>";
     }
     return bytes + "</svg>";
+}
+
+ClipboardPublicationResult interruptedResult(const WorkControl& work)
+{
+    if (work.status() == WorkControlStatus::Cancelled) {
+        return {ClipboardPublicationStatus::Cancelled, work.interruptionMessage()};
+    }
+    return {ClipboardPublicationStatus::Failure, work.interruptionMessage()};
 }
 
 } // namespace
@@ -206,59 +290,82 @@ QByteArray svgFallback(const VectorExportPayload& payload)
 namespace {
 
 ClipboardPublicationResult copyForOfficeImpl(const VectorExportPayload& payload,
+                                             WindowsClipboardOperations& operations,
+                                             const WorkControl& work,
                                              const std::function<bool()>& openAttempt)
 {
     if (payload.records.isEmpty() || payload.bounds.isEmpty()) {
         return ClipboardPublicationResult::fromFormats(
             false, false, false, false, QStringLiteral("There is no valid vector geometry to copy."));
     }
-    HENHMETAFILE metafile = renderEmf(payload);
+    if (!work.consume()) return interruptedResult(work);
+    HENHMETAFILE metafile = renderEmf(payload, work);
+    if (!work.isRunning()) {
+        if (metafile) operations.deleteEnhancedMetafile(metafile);
+        return interruptedResult(work);
+    }
     if (!metafile) {
         return ClipboardPublicationResult::fromFormats(
             false, false, false, false,
             QStringLiteral("Could not create the Windows EMF+ clipboard artwork."));
     }
-    const QByteArray png = renderPng(payload);
+    const QByteArray png = renderPng(payload, work);
+    if (!work.isRunning()) {
+        operations.deleteEnhancedMetafile(metafile);
+        return interruptedResult(work);
+    }
     if (png.isEmpty()) {
-        DeleteEnhMetaFile(metafile);
+        operations.deleteEnhancedMetafile(metafile);
         return ClipboardPublicationResult::fromFormats(
             false, false, false, false,
             QStringLiteral("The raster fallback would exceed the production size limit."));
     }
-    const QByteArray svg = svgFallback(payload);
+    const QByteArray svg = svgFallback(payload, work);
+    if (!work.isRunning()) {
+        operations.deleteEnhancedMetafile(metafile);
+        return interruptedResult(work);
+    }
     QWindow* activeWindow = QGuiApplication::focusWindow();
     if (!activeWindow) {
         const auto windows = QGuiApplication::topLevelWindows();
         activeWindow = windows.isEmpty() ? nullptr : windows.front();
     }
-    const HWND owner = activeWindow ? reinterpret_cast<HWND>(activeWindow->winId()) : nullptr;
-    ClipboardTransaction transaction(owner, openAttempt);
-    if (!transaction.open() || !EmptyClipboard()) {
-        DeleteEnhMetaFile(metafile);
+    void* owner = activeWindow ? reinterpret_cast<void*>(activeWindow->winId()) : nullptr;
+
+    // Final cooperative checkpoint. After this succeeds publication is a short,
+    // non-interruptible ownership transaction: no cancelled result can leave a
+    // half-published clipboard behind.
+    if (!work.consume()) {
+        operations.deleteEnhancedMetafile(metafile);
+        return interruptedResult(work);
+    }
+    ClipboardTransaction transaction(owner, operations, openAttempt);
+    if (!transaction.open() || !operations.emptyClipboard()) {
+        operations.deleteEnhancedMetafile(metafile);
         return ClipboardPublicationResult::fromFormats(
             false, false, false, false,
             QStringLiteral("The clipboard is busy. Close the app using it and try again."));
     }
-    if (!SetClipboardData(CF_ENHMETAFILE, metafile)) {
-        DeleteEnhMetaFile(metafile);
+    if (!operations.publish(CF_ENHMETAFILE, metafile)) {
+        operations.deleteEnhancedMetafile(metafile);
         return ClipboardPublicationResult::fromFormats(
             false, false, false, false,
             QStringLiteral("Windows rejected the enhanced metafile clipboard format."));
     }
     metafile = nullptr; // Clipboard owns the handle only after a successful transfer.
-    const UINT svgFormat = RegisterClipboardFormatW(L"image/svg+xml");
-    const UINT pngFormat = RegisterClipboardFormatW(L"PNG");
-    const bool svgPublished = setBytes(svgFormat, svg);
-    const bool pngPublished = setBytes(pngFormat, png);
+    const unsigned svgFormat = operations.registerFormat(L"image/svg+xml");
+    const unsigned pngFormat = operations.registerFormat(L"PNG");
+    const bool svgPublished = setBytes(svgFormat, svg, operations);
+    const bool pngPublished = setBytes(pngFormat, png, operations);
     bool textPublished = false;
     const std::wstring wideText = payload.plainText.toStdWString();
-    GlobalMemory unicode((wideText.size() + 1) * sizeof(wchar_t));
+    GlobalMemory unicode(operations, (wideText.size() + 1) * sizeof(wchar_t));
     if (unicode.handle) {
-        void* data = GlobalLock(unicode.handle);
+        void* data = operations.lockGlobal(unicode.handle);
         if (data) {
             memcpy(data, wideText.c_str(), (wideText.size() + 1) * sizeof(wchar_t));
-            GlobalUnlock(unicode.handle);
-            if (SetClipboardData(CF_UNICODETEXT, unicode.handle)) {
+            operations.unlockGlobal(unicode.handle);
+            if (operations.publish(CF_UNICODETEXT, unicode.handle)) {
                 static_cast<void>(unicode.release()); // success transfers ownership
                 textPublished = true;
             }
@@ -271,16 +378,27 @@ ClipboardPublicationResult copyForOfficeImpl(const VectorExportPayload& payload,
 } // namespace
 
 ClipboardPublicationResult WindowsVectorClipboardService::copyForOffice(
-    const VectorExportPayload& payload)
+    const VectorExportPayload& payload,
+    const WorkControl& work)
 {
-    return copyForOfficeImpl(payload, {});
+    Win32ClipboardOperations operations;
+    return copyForOfficeImpl(payload, operations, work, {});
 }
 
 ClipboardPublicationResult WindowsVectorClipboardService::copyForOfficeWithOpenAttemptForTesting(
     const VectorExportPayload& payload,
     const std::function<bool()>& openAttempt)
 {
-    return copyForOfficeImpl(payload, openAttempt);
+    Win32ClipboardOperations operations;
+    return copyForOfficeImpl(payload, operations, WorkControl::withBudget(), openAttempt);
+}
+
+ClipboardPublicationResult WindowsVectorClipboardService::copyForOfficeWithOperationsForTesting(
+    const VectorExportPayload& payload,
+    WindowsClipboardOperations& operations,
+    const WorkControl& work)
+{
+    return copyForOfficeImpl(payload, operations, work, {});
 }
 
 } // namespace vt

@@ -14,6 +14,7 @@
 #include <QJsonDocument>
 #include <QLineF>
 #include <QElapsedTimer>
+#include <QSet>
 #include <QTest>
 
 #include <limits>
@@ -112,6 +113,74 @@ TextObject semanticTextFixture()
     return object;
 }
 
+QJsonObject budgetObject(int sourceUnits = 1,
+                         int effectCount = 0,
+                         int maskStrokesPerEffect = 0,
+                         int maskPointsPerStroke = 0,
+                         int deformationStrokes = 0,
+                         int samplesPerDeformationStroke = 0)
+{
+    QJsonArray effects;
+    for (int effectIndex = 0; effectIndex < effectCount; ++effectIndex) {
+        QJsonArray mask;
+        for (int strokeIndex = 0; strokeIndex < maskStrokesPerEffect; ++strokeIndex) {
+            QJsonArray points;
+            for (int pointIndex = 0; pointIndex < maskPointsPerStroke; ++pointIndex) {
+                points.append(QJsonObject{{QStringLiteral("x"), pointIndex},
+                                          {QStringLiteral("y"), strokeIndex}});
+            }
+            mask.append(QJsonObject{{QStringLiteral("points"), points}});
+        }
+        effects.append(QJsonObject{{QStringLiteral("mask"), mask}});
+    }
+    QJsonArray strokes;
+    for (int strokeIndex = 0; strokeIndex < deformationStrokes; ++strokeIndex) {
+        QJsonArray samples;
+        for (int sampleIndex = 0; sampleIndex < samplesPerDeformationStroke; ++sampleIndex) {
+            samples.append(QJsonObject{});
+        }
+        strokes.append(QJsonObject{{QStringLiteral("samples"), samples}});
+    }
+    return {{QStringLiteral("sourceText"), QString(sourceUnits, QLatin1Char('x'))},
+            {QStringLiteral("effects"), effects},
+            {QStringLiteral("deformation"), QJsonObject{{QStringLiteral("strokes"), strokes}}}};
+}
+
+QJsonDocument budgetProject(int pageCount,
+                            int layersPerPage,
+                            int objectsPerLayer,
+                            const QJsonObject& object = budgetObject())
+{
+    QJsonArray pages;
+    for (int pageIndex = 0; pageIndex < pageCount; ++pageIndex) {
+        QJsonArray layers;
+        for (int layerIndex = 0; layerIndex < layersPerPage; ++layerIndex) {
+            QJsonArray objects;
+            for (int objectIndex = 0; objectIndex < objectsPerLayer; ++objectIndex) {
+                objects.append(object);
+            }
+            layers.append(QJsonObject{{QStringLiteral("objects"), objects}});
+        }
+        pages.append(QJsonObject{{QStringLiteral("layers"), layers}});
+    }
+    return QJsonDocument(QJsonObject{
+        {QStringLiteral("formatVersion"), Document::CurrentFormatVersion},
+        {QStringLiteral("pages"), pages},
+    });
+}
+
+QJsonDocument budgetProjectWithObjects(const QJsonArray& objects)
+{
+    return QJsonDocument(QJsonObject{
+        {QStringLiteral("formatVersion"), Document::CurrentFormatVersion},
+        {QStringLiteral("pages"), QJsonArray{QJsonObject{
+            {QStringLiteral("layers"), QJsonArray{QJsonObject{
+                {QStringLiteral("objects"), objects},
+            }}},
+        }}},
+    });
+}
+
 Document semanticDocumentFixture()
 {
     Document document;
@@ -172,6 +241,8 @@ private slots:
     void semanticFingerprintExcludesOnlyDeclaredTransientState();
     void invariantCheckerRejectsSyntheticCorruption();
     void currentSchemaLoaderRejectsIdentityCorruption();
+    void historicalIdentityMigrationIsDeterministic();
+    void serializedResourceBudgetsHaveExactBoundaries();
     void frameRoundTripIsStableForStaticSnapshots();
     void workloadBuildersAreDeterministicAndInspectable();
 };
@@ -349,6 +420,31 @@ void OracleSelfTests::currentSchemaLoaderRejectsIdentityCorruption()
     duplicatePage.insert(QStringLiteral("pages"), pages);
     QVERIFY(expectRejected(duplicatePage, QStringLiteral("missing or duplicate page ID")));
 
+    QJsonObject duplicateLayer = validRoot;
+    pages = duplicateLayer.value(QStringLiteral("pages")).toArray();
+    page = pages.at(0).toObject();
+    layers = page.value(QStringLiteral("layers")).toArray();
+    layers.append(layers.at(0));
+    page.insert(QStringLiteral("layers"), layers);
+    pages.replace(0, page);
+    duplicateLayer.insert(QStringLiteral("pages"), pages);
+    QVERIFY(expectRejected(duplicateLayer, QStringLiteral("pages[0].layers[1].id")));
+
+    QJsonObject duplicateObject = validRoot;
+    pages = duplicateObject.value(QStringLiteral("pages")).toArray();
+    page = pages.at(0).toObject();
+    layers = page.value(QStringLiteral("layers")).toArray();
+    layer = layers.at(0).toObject();
+    objects = layer.value(QStringLiteral("objects")).toArray();
+    objects.append(objects.at(0));
+    layer.insert(QStringLiteral("objects"), objects);
+    layers.replace(0, layer);
+    page.insert(QStringLiteral("layers"), layers);
+    pages.replace(0, page);
+    duplicateObject.insert(QStringLiteral("pages"), pages);
+    QVERIFY(expectRejected(duplicateObject,
+                           QStringLiteral("pages[0].layers[0].objects[1].id")));
+
     QJsonObject duplicateEffect = validRoot;
     pages = duplicateEffect.value(QStringLiteral("pages")).toArray();
     page = pages.at(0).toObject();
@@ -393,6 +489,285 @@ void OracleSelfTests::currentSchemaLoaderRejectsIdentityCorruption()
     nonLocalActiveObject.insert(QStringLiteral("activeLayerId"), QStringLiteral("layer-semantic-contract"));
     nonLocalActiveObject.insert(QStringLiteral("activeObjectId"), QStringLiteral("text-other"));
     QVERIFY(expectRejected(nonLocalActiveObject, QStringLiteral("active object is not on its current page")));
+}
+
+void OracleSelfTests::historicalIdentityMigrationIsDeterministic()
+{
+    QJsonObject legacyObject = ProjectSerializer::textObjectToJson(semanticTextFixture());
+    legacyObject.insert(QStringLiteral("id"), QStringLiteral("ambiguous-legacy-id"));
+    QJsonArray legacyEffects = legacyObject.value(QStringLiteral("effects")).toArray();
+    QJsonObject legacyEffect = legacyEffects.at(0).toObject();
+    legacyEffect.remove(QStringLiteral("id"));
+    legacyEffects.replace(0, legacyEffect);
+    legacyObject.insert(QStringLiteral("effects"), legacyEffects);
+    const QJsonObject root{
+        {QStringLiteral("format"), QStringLiteral("vectorTypographyProject")},
+        {QStringLiteral("formatVersion"), 3},
+        {QStringLiteral("metadata"), QJsonObject{
+            {QStringLiteral("createdAt"), QStringLiteral("2024-01-01T00:00:00.000Z")},
+            {QStringLiteral("modifiedAt"), QStringLiteral("2024-01-01T00:00:00.000Z")},
+        }},
+        {QStringLiteral("objects"), QJsonArray{legacyObject, legacyObject}},
+    };
+
+    Document first;
+    Document second;
+    QString error;
+    QVERIFY2(ProjectSerializer::fromJson(QJsonDocument(root), &first, &error), qPrintable(error));
+    error.clear();
+    QVERIFY2(ProjectSerializer::fromJson(QJsonDocument(root), &second, &error), qPrintable(error));
+    QVERIFY2(test::checkInvariants(first).ok(), qPrintable(test::checkInvariants(first).summary()));
+    QCOMPARE(first.currentPageId, QStringLiteral("migrated-v3-page-0"));
+    QCOMPARE(first.activeLayerId, QStringLiteral("migrated-v3-page-0-layer-0"));
+    QCOMPARE(first.pages.front()->layers.front()->objects.size(), size_t(2));
+
+    QSet<QString> identities;
+    for (int objectIndex = 0; objectIndex < 2; ++objectIndex) {
+        const TextObject* left = first.pages.front()->layers.front()->objects.at(objectIndex).get();
+        const TextObject* right = second.pages.front()->layers.front()->objects.at(objectIndex).get();
+        QVERIFY(left && right);
+        QCOMPARE(left->id, right->id);
+        QCOMPARE(left->id,
+                 QStringLiteral("migrated-v3-page-0-layer-0-object-%1").arg(objectIndex));
+        QVERIFY(!identities.contains(left->id));
+        identities.insert(left->id);
+        QCOMPARE(left->effects.at(0)->instanceId, right->effects.at(0)->instanceId);
+        QCOMPARE(left->effects.at(0)->instanceId,
+                 QStringLiteral("migrated-v3-page-0-layer-0-object-%1-effect-0")
+                     .arg(objectIndex));
+        QVERIFY(!identities.contains(left->effects.at(0)->instanceId));
+        identities.insert(left->effects.at(0)->instanceId);
+    }
+
+    // Versions that introduced the authoritative hierarchy never rename
+    // collisions silently, including historical v4/v5 files.
+    for (int version : {4, 5, Document::CurrentFormatVersion}) {
+        QJsonObject hierarchical = ProjectSerializer::toJson(semanticDocumentFixture()).object();
+        hierarchical.insert(QStringLiteral("formatVersion"), version);
+        QJsonArray pages = hierarchical.value(QStringLiteral("pages")).toArray();
+        pages.append(pages.at(0));
+        hierarchical.insert(QStringLiteral("pages"), pages);
+        const QString before = test::semanticFingerprint(first);
+        error.clear();
+        QVERIFY(!ProjectSerializer::fromJson(QJsonDocument(hierarchical), &first, &error));
+        QVERIFY(error.contains(QStringLiteral("missing or duplicate page ID")));
+        QCOMPARE(test::semanticFingerprint(first), before);
+    }
+}
+
+void OracleSelfTests::serializedResourceBudgetsHaveExactBoundaries()
+{
+    QString error;
+    const ProjectResourceLimits production = ProjectSerializer::resourceLimits();
+    QVERIFY(ProjectSerializer::validateProjectInputSize(
+        production.maximumProjectInputBytes, &error));
+    QVERIFY(!ProjectSerializer::validateProjectInputSize(
+        production.maximumProjectInputBytes + 1, &error));
+    QVERIFY(error.contains(QStringLiteral("maximum")));
+    error.clear();
+    QVERIFY(ProjectSerializer::validateClipboardInputSize(
+        production.maximumClipboardInputBytes, &error));
+    QVERIFY(!ProjectSerializer::validateClipboardInputSize(
+        production.maximumClipboardInputBytes + 1, &error));
+
+    ProjectResourceLimits limits;
+    limits.maximumPages = 100;
+    limits.maximumLayersPerPage = 100;
+    limits.maximumLayers = 100;
+    limits.maximumObjectsPerLayer = 100;
+    limits.maximumObjects = 100;
+    limits.maximumEffectsPerObject = 100;
+    limits.maximumEffects = 100;
+    limits.maximumSourceUtf16PerObject = 100;
+    limits.maximumSourceUtf16 = 100;
+    limits.maximumMaskStrokesPerEffect = 100;
+    limits.maximumMaskStrokes = 100;
+    limits.maximumMaskPointsPerStroke = 100;
+    limits.maximumMaskPoints = 100;
+    limits.maximumDeformationStrokesPerObject = 100;
+    limits.maximumDeformationStrokes = 100;
+    limits.maximumDeformationSamplesPerStroke = 100;
+    limits.maximumDeformationSamples = 100;
+    limits.maximumEstimatedWork = 1'000'000;
+
+    auto accepted = [](const QJsonDocument& document,
+                       const ProjectResourceLimits& candidate,
+                       const QString& diagnostic = QString()) {
+        QString budgetError;
+        const bool result = ProjectSerializer::validateResourceBudget(
+            document, candidate, &budgetError);
+        if (!result && !diagnostic.isEmpty() && !budgetError.contains(diagnostic)) {
+            qWarning().noquote() << "unexpected budget diagnostic:" << budgetError
+                                 << "expected:" << diagnostic;
+        }
+        if (diagnostic.isEmpty()) return result;
+        return !result && budgetError.contains(diagnostic);
+    };
+
+    ProjectResourceLimits candidate = limits;
+    candidate.maximumPages = 2;
+    QVERIFY(accepted(budgetProject(2, 0, 0), candidate));
+    QVERIFY(accepted(budgetProject(3, 0, 0), candidate, QStringLiteral("pages")));
+
+    candidate = limits;
+    candidate.maximumLayersPerPage = 2;
+    QVERIFY(accepted(budgetProject(1, 2, 0), candidate));
+    QVERIFY(accepted(budgetProject(1, 3, 0), candidate, QStringLiteral("layers per page")));
+
+    candidate = limits;
+    candidate.maximumLayers = 2;
+    QVERIFY(accepted(budgetProject(2, 1, 0), candidate));
+    QVERIFY(accepted(budgetProject(3, 1, 0), candidate, QStringLiteral("aggregate layers")));
+
+    candidate = limits;
+    candidate.maximumObjectsPerLayer = 2;
+    QVERIFY(accepted(budgetProject(1, 1, 2), candidate));
+    QVERIFY(accepted(budgetProject(1, 1, 3), candidate, QStringLiteral("objects per layer")));
+
+    candidate = limits;
+    candidate.maximumObjects = 2;
+    QVERIFY(accepted(budgetProject(1, 2, 1), candidate));
+    QVERIFY(accepted(budgetProject(1, 3, 1), candidate, QStringLiteral("aggregate objects")));
+
+    candidate = limits;
+    candidate.maximumEffectsPerObject = 2;
+    QVERIFY(accepted(budgetProject(1, 1, 1, budgetObject(1, 2)), candidate));
+    QVERIFY(accepted(budgetProject(1, 1, 1, budgetObject(1, 3)), candidate,
+                     QStringLiteral("effects per object")));
+
+    candidate = limits;
+    candidate.maximumEffects = 2;
+    QVERIFY(accepted(budgetProjectWithObjects(
+        QJsonArray{budgetObject(1, 1), budgetObject(1, 1)}), candidate));
+    QVERIFY(accepted(budgetProjectWithObjects(
+        QJsonArray{budgetObject(1, 1), budgetObject(1, 2)}), candidate,
+                     QStringLiteral("aggregate effects")));
+
+    candidate = limits;
+    candidate.maximumSourceUtf16PerObject = 2;
+    QVERIFY(accepted(budgetProject(1, 1, 1, budgetObject(2)), candidate));
+    QVERIFY(accepted(budgetProject(1, 1, 1, budgetObject(3)), candidate,
+                     QStringLiteral("UTF-16 code units")));
+
+    candidate = limits;
+    candidate.maximumSourceUtf16 = 4;
+    QVERIFY(accepted(budgetProjectWithObjects(
+        QJsonArray{budgetObject(2), budgetObject(2)}), candidate));
+    QVERIFY(accepted(budgetProjectWithObjects(
+        QJsonArray{budgetObject(2), budgetObject(3)}), candidate,
+                     QStringLiteral("aggregate UTF-16")));
+
+    candidate = limits;
+    candidate.maximumMaskStrokesPerEffect = 2;
+    QVERIFY(accepted(budgetProject(1, 1, 1, budgetObject(1, 1, 2)), candidate));
+    QVERIFY(accepted(budgetProject(1, 1, 1, budgetObject(1, 1, 3)), candidate,
+                     QStringLiteral("mask strokes per effect")));
+
+    candidate = limits;
+    candidate.maximumMaskStrokes = 2;
+    QVERIFY(accepted(budgetProjectWithObjects(
+        QJsonArray{budgetObject(1, 1, 1), budgetObject(1, 1, 1)}), candidate));
+    QVERIFY(accepted(budgetProjectWithObjects(
+        QJsonArray{budgetObject(1, 1, 1), budgetObject(1, 1, 2)}), candidate,
+                     QStringLiteral("aggregate mask strokes")));
+
+    candidate = limits;
+    candidate.maximumMaskPointsPerStroke = 2;
+    QVERIFY(accepted(budgetProject(1, 1, 1, budgetObject(1, 1, 1, 2)), candidate));
+    QVERIFY(accepted(budgetProject(1, 1, 1, budgetObject(1, 1, 1, 3)), candidate,
+                     QStringLiteral("mask points per stroke")));
+
+    candidate = limits;
+    candidate.maximumMaskPoints = 4;
+    QVERIFY(accepted(budgetProjectWithObjects(
+        QJsonArray{budgetObject(1, 1, 1, 2), budgetObject(1, 1, 1, 2)}), candidate));
+    QVERIFY(accepted(budgetProjectWithObjects(
+        QJsonArray{budgetObject(1, 1, 1, 2), budgetObject(1, 1, 1, 3)}), candidate,
+                     QStringLiteral("aggregate mask points")));
+
+    candidate = limits;
+    candidate.maximumDeformationStrokesPerObject = 2;
+    QVERIFY(accepted(budgetProject(1, 1, 1, budgetObject(1, 0, 0, 0, 2, 1)), candidate));
+    QVERIFY(accepted(budgetProject(1, 1, 1, budgetObject(1, 0, 0, 0, 3, 1)), candidate,
+                     QStringLiteral("deformation strokes per object")));
+
+    candidate = limits;
+    candidate.maximumDeformationStrokes = 2;
+    QVERIFY(accepted(budgetProjectWithObjects(QJsonArray{
+        budgetObject(1, 0, 0, 0, 1, 1), budgetObject(1, 0, 0, 0, 1, 1)}), candidate));
+    QVERIFY(accepted(budgetProjectWithObjects(QJsonArray{
+        budgetObject(1, 0, 0, 0, 1, 1), budgetObject(1, 0, 0, 0, 2, 1)}), candidate,
+                     QStringLiteral("aggregate deformation strokes")));
+
+    candidate = limits;
+    candidate.maximumDeformationSamplesPerStroke = 2;
+    QVERIFY(accepted(budgetProject(1, 1, 1, budgetObject(1, 0, 0, 0, 1, 2)), candidate));
+    QVERIFY(accepted(budgetProject(1, 1, 1, budgetObject(1, 0, 0, 0, 1, 3)), candidate,
+                     QStringLiteral("deformation samples per stroke")));
+
+    candidate = limits;
+    candidate.maximumDeformationSamples = 4;
+    QVERIFY(accepted(budgetProjectWithObjects(QJsonArray{
+        budgetObject(1, 0, 0, 0, 1, 2), budgetObject(1, 0, 0, 0, 1, 2)}), candidate));
+    QVERIFY(accepted(budgetProjectWithObjects(QJsonArray{
+        budgetObject(1, 0, 0, 0, 1, 2), budgetObject(1, 0, 0, 0, 1, 3)}), candidate,
+                     QStringLiteral("aggregate deformation samples")));
+
+    candidate = limits;
+    candidate.maximumEstimatedWork = 8;
+    QVERIFY(accepted(budgetProject(1, 1, 1, budgetObject(1, 1, 1, 6)), candidate));
+    QVERIFY(accepted(budgetProject(1, 1, 1, budgetObject(1, 1, 1, 7)), candidate,
+                     QStringLiteral("estimated geometry work")));
+
+    // Production loader gate: every child remains under its local limit, but
+    // the composed text x mask workload is one aggregate operation too large.
+    QJsonObject adversarial = ProjectSerializer::toJson(semanticDocumentFixture()).object();
+    QJsonArray pages = adversarial.value(QStringLiteral("pages")).toArray();
+    QJsonObject page = pages.at(0).toObject();
+    QJsonArray layers = page.value(QStringLiteral("layers")).toArray();
+    QJsonObject layer = layers.at(0).toObject();
+    QJsonArray objects = layer.value(QStringLiteral("objects")).toArray();
+    QJsonObject object = objects.at(0).toObject();
+    object.insert(QStringLiteral("sourceText"), QString(2000, QLatin1Char('x')));
+    QJsonArray effects = object.value(QStringLiteral("effects")).toArray();
+    QJsonObject effect = effects.at(0).toObject();
+    QJsonArray mask;
+    for (int strokeIndex = 0; strokeIndex < 2; ++strokeIndex) {
+        QJsonArray points;
+        for (int pointIndex = 0; pointIndex < 2000; ++pointIndex) {
+            points.append(QJsonObject{{QStringLiteral("x"), pointIndex},
+                                      {QStringLiteral("y"), strokeIndex}});
+        }
+        mask.append(QJsonObject{{QStringLiteral("points"), points}});
+    }
+    effect.insert(QStringLiteral("mask"), mask);
+    effects.replace(0, effect);
+    object.insert(QStringLiteral("effects"), effects);
+    objects.replace(0, object);
+    layer.insert(QStringLiteral("objects"), objects);
+    layers.replace(0, layer);
+    page.insert(QStringLiteral("layers"), layers);
+    pages.replace(0, page);
+    adversarial.insert(QStringLiteral("pages"), pages);
+    Document destination = semanticDocumentFixture();
+    const QString before = test::semanticFingerprint(destination);
+    error.clear();
+    QVERIFY(!ProjectSerializer::fromJson(QJsonDocument(adversarial), &destination, &error));
+    QVERIFY(error.contains(QStringLiteral("estimated geometry work")));
+    QCOMPARE(test::semanticFingerprint(destination), before);
+
+    QJsonObject transientObject = budgetObject(1, 0, 0, 0, 1, 1);
+    QJsonObject deformation = transientObject.value(QStringLiteral("deformation")).toObject();
+    QJsonArray transientStrokes = deformation.value(QStringLiteral("strokes")).toArray();
+    QJsonObject transientStroke = transientStrokes.at(0).toObject();
+    transientStroke.insert(QStringLiteral("coordinateSpace"), QStringLiteral("pageInput"));
+    transientStrokes.replace(0, transientStroke);
+    deformation.insert(QStringLiteral("strokes"), transientStrokes);
+    transientObject.insert(QStringLiteral("deformation"), deformation);
+    error.clear();
+    QVERIFY(!ProjectSerializer::validateResourceBudget(
+        QJsonDocument(QJsonArray{transientObject}), production, &error));
+    QVERIFY(error.contains(QStringLiteral("cannot be persisted")));
 }
 
 void OracleSelfTests::frameRoundTripIsStableForStaticSnapshots()

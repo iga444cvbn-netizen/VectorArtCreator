@@ -115,6 +115,9 @@ void ProceduralEffect::apply(VectorGeometry& geometry, const EffectContext& cont
     constexpr qreal twoPi = 2.0 * pi;
 
     for (int index = 0; index < geometry.pieces.size(); ++index) {
+        if (!context.work.consume(qMax(1, geometry.pieces.at(index).path.elementCount()))) {
+            break;
+        }
         GeometryPiece& piece = geometry.pieces[index];
         const int glyphIndex = piece.sourceGlyphIndex >= 0 ? piece.sourceGlyphIndex : index;
         const qreal progress = qBound<qreal>(

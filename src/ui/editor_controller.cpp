@@ -17,7 +17,6 @@
 #include <QMimeData>
 #include <QStandardPaths>
 #include <QUuid>
-#include <QFontDatabase>
 
 #include <cmath>
 #include <utility>
@@ -61,14 +60,6 @@ FontDescriptor resolvedExactStyle(FontDescriptor descriptor, const QString& fami
     descriptor.weight = resolved.weight();
     descriptor.italic = resolved.italic();
     return descriptor;
-}
-
-QRectF localReferenceBounds(const TextObject& object)
-{
-    TextEngine engine;
-    const ShapedText shaped = engine.shape(object);
-    return GlyphGeometryBuilder::build(shaped, object.typography.fontSize,
-                                       object.font.underline, object.font.strikeOut).referenceBounds;
 }
 
 Layer* currentPageLayerForObject(Document& document, const QString& objectId)
@@ -142,6 +133,11 @@ EditorController::EditorController(QObject* parent)
     rebuildScene();
 }
 
+EditorController::~EditorController()
+{
+    m_activeEvaluationWork.cancel();
+}
+
 Document& EditorController::document()
 {
     return m_document;
@@ -179,10 +175,7 @@ QUndoStack* EditorController::undoStack()
 
 bool EditorController::isModified() const
 {
-    if (!m_undoStack.isClean()) return true;
-    if (!m_effectStackStrengthGestureActive) return false;
-    const TextObject* object = m_document.objectById(m_effectStackStrengthGestureObjectId);
-    return object && !nearlyEqual(object->effectStackStrength, m_effectStackStrengthGestureStart);
+    return !m_undoStack.isClean();
 }
 
 QStringList EditorController::fontFamilies() const
@@ -289,6 +282,8 @@ void EditorController::refreshFonts()
 {
     m_textEngine.clearCache();
     SceneEvaluator::invalidateFontCaches();
+    ++m_spatialRevision;
+    m_authoritativeFrameCache.clear();
     rebuildScene();
     emit fontsChanged(fontFamilies());
     emit statusMessageChanged(QStringLiteral("System font list refreshed."));
@@ -372,6 +367,8 @@ void EditorController::newDocument()
     synchronizeSelectionWithDocument();
     m_selectedEffectId.clear();
     m_textEngine.clearCache();
+    ++m_spatialRevision;
+    m_authoritativeFrameCache.clear();
     rebuildScene();
     emit documentChanged();
     emit statusMessageChanged(QStringLiteral("New project created."));
@@ -404,37 +401,31 @@ void EditorController::setEffectStackStrength(qreal strength)
     if (!object) return;
     const qreal bounded = qBound<qreal>(0.0, strength, 2.0);
     if (nearlyEqual(object->effectStackStrength, bounded)) return;
-    if (m_effectStackStrengthGestureActive && object->id == m_effectStackStrengthGestureObjectId) {
-        object->effectStackStrength = bounded;
-        onCommandChanged();
-        return;
-    }
+    const quint64 mergeToken = m_effectStackStrengthGestureActive
+            && object->id == m_effectStackStrengthGestureObjectId
+        ? m_effectStackStrengthGestureToken
+        : 0;
     m_undoStack.push(new SetEffectStackStrengthCommand(
-        m_document, object->id, object->effectStackStrength, bounded, [this] { onCommandChanged(); }));
+        m_document, object->id, object->effectStackStrength, bounded, mergeToken,
+        [this] { onCommandChanged(); }));
 }
 
 void EditorController::beginEffectStackStrengthGesture()
 {
     TextObject* object = editableActiveObject();
     if (!object) return;
+    endEffectStackStrengthGesture();
     m_effectStackStrengthGestureActive = true;
     m_effectStackStrengthGestureObjectId = object->id;
-    m_effectStackStrengthGestureStart = object->effectStackStrength;
+    m_effectStackStrengthGestureToken = ++m_effectStackStrengthGestureSerial;
 }
 
 void EditorController::endEffectStackStrengthGesture()
 {
     if (!m_effectStackStrengthGestureActive) return;
-    const QString objectId = m_effectStackStrengthGestureObjectId;
-    const qreal start = m_effectStackStrengthGestureStart;
     m_effectStackStrengthGestureActive = false;
     m_effectStackStrengthGestureObjectId.clear();
-    TextObject* object = m_document.objectById(objectId);
-    if (!object || nearlyEqual(start, object->effectStackStrength)) return;
-    const qreal final = object->effectStackStrength;
-    object->effectStackStrength = start;
-    m_undoStack.push(new SetEffectStackStrengthCommand(m_document, objectId, start, final,
-        [this] { onCommandChanged(); }));
+    m_effectStackStrengthGestureToken = 0;
 }
 
 void EditorController::setTextRange(int start, int end)
@@ -848,13 +839,25 @@ void EditorController::nudgeSelectedObjects(const QPointF& delta)
 
 void EditorController::setObjectTransform(const QString& objectId, const ObjectTransform& transform)
 {
+    setObjectTransform(objectId, transform, 0);
+}
+
+void EditorController::setObjectTransform(const QString& objectId,
+                                          const ObjectTransform& transform,
+                                          quint64 inputSpatialRevision)
+{
     TextObject* object = m_document.objectById(objectId);
     const Layer* layer = currentPageLayerForObject(m_document, objectId);
+    if (inputSpatialRevision != 0 && inputSpatialRevision != m_spatialRevision) {
+        publishError(QStringLiteral(
+            "The object changed while the transform gesture was active; try the gesture again."));
+        return;
+    }
     ObjectTransform normalized = transform;
     normalized.normalizeScale();
     if (!normalized.hasPivot) {
-        if (const SceneObjectGeometry* sceneObject = m_sceneGeometry.objectById(objectId)) {
-            normalized.pivotLocal = sceneObject->frame.pivotLocal;
+        if (const std::optional<ObjectFrame> frame = authoritativeObjectFrame(objectId)) {
+            normalized.pivotLocal = frame->pivotLocal;
             normalized.hasPivot = true;
         }
     }
@@ -1382,6 +1385,14 @@ void EditorController::addEffectMaskStroke(const QString& objectId,
                                             const QString& effectId,
                                             const EffectMaskStroke& stroke)
 {
+    addEffectMaskStroke(objectId, effectId, stroke, 0);
+}
+
+void EditorController::addEffectMaskStroke(const QString& objectId,
+                                            const QString& effectId,
+                                            const EffectMaskStroke& stroke,
+                                            quint64 inputSpatialRevision)
+{
     clearEffectMaskPreview();
     if (objectId.isEmpty() || effectId.isEmpty() || stroke.points.isEmpty()) {
         return;
@@ -1416,15 +1427,16 @@ void EditorController::addEffectMaskStroke(const QString& objectId,
     }
 
     EffectMaskStroke localStroke = stroke;
-    const ObjectFrame frame = m_sceneGeometry.objectById(objectId)
-        ? m_sceneGeometry.objectById(objectId)->frame
-        : ObjectFrame::fromTransform(object->transform, localReferenceBounds(*object));
-    if (!frame.localToPage.isIdentity() || !frame.pageToLocal.isIdentity()) {
-        for (QPointF& point : localStroke.points) {
-            point = frame.pagePointToLocal(point);
-        }
-        localStroke.radius = qMax<qreal>(0.1, frame.pageRadiusToLocalEquivalentArea(localStroke.radius));
+    Q_UNUSED(inputSpatialRevision);
+    const std::optional<ObjectFrame> frame = authoritativeObjectFrame(objectId);
+    if (!frame.has_value()) {
+        publishError(QStringLiteral("Could not obtain a current frame for the effect mask."));
+        return;
     }
+    for (QPointF& point : localStroke.points) {
+        point = frame->pagePointToLocal(point);
+    }
+    localStroke.radius = qMax<qreal>(0.1, frame->pageRadiusToLocalEquivalentArea(localStroke.radius));
     localStroke.opacity = qBound<qreal>(0.0, localStroke.opacity, 1.0);
     localStroke.hardness = qBound<qreal>(0.0, localStroke.hardness, 1.0);
     m_undoStack.push(new AddEffectMaskStrokeCommand(
@@ -1434,6 +1446,14 @@ void EditorController::addEffectMaskStroke(const QString& objectId,
 void EditorController::setEffectMaskPreview(const QString& objectId,
                                              const QString& effectId,
                                              const EffectMaskStroke& stroke)
+{
+    setEffectMaskPreview(objectId, effectId, stroke, 0);
+}
+
+void EditorController::setEffectMaskPreview(const QString& objectId,
+                                             const QString& effectId,
+                                             const EffectMaskStroke& stroke,
+                                             quint64 inputSpatialRevision)
 {
     if (objectId.isEmpty() || effectId.isEmpty() || stroke.points.isEmpty()) {
         clearEffectMaskPreview();
@@ -1448,13 +1468,16 @@ void EditorController::setEffectMaskPreview(const QString& objectId,
         return;
     }
     EffectMaskStroke localStroke = stroke;
-    const ObjectFrame frame = m_sceneGeometry.objectById(objectId)
-        ? m_sceneGeometry.objectById(objectId)->frame
-        : ObjectFrame::fromTransform(object->transform, localReferenceBounds(*object));
-    for (QPointF& point : localStroke.points) {
-        point = frame.pagePointToLocal(point);
+    Q_UNUSED(inputSpatialRevision);
+    const std::optional<ObjectFrame> frame = authoritativeObjectFrame(objectId);
+    if (!frame.has_value()) {
+        clearEffectMaskPreview();
+        return;
     }
-    localStroke.radius = qMax<qreal>(0.1, frame.pageRadiusToLocalEquivalentArea(localStroke.radius));
+    for (QPointF& point : localStroke.points) {
+        point = frame->pagePointToLocal(point);
+    }
+    localStroke.radius = qMax<qreal>(0.1, frame->pageRadiusToLocalEquivalentArea(localStroke.radius));
     localStroke.opacity = qBound<qreal>(0.0, localStroke.opacity, 1.0);
     localStroke.hardness = qBound<qreal>(0.0, localStroke.hardness, 1.0);
     m_previewEffectMask = std::move(localStroke);
@@ -1500,6 +1523,13 @@ void EditorController::addDeformationStroke(const DeformationStroke& stroke)
 void EditorController::addDeformationStroke(const QString& objectId,
                                             const DeformationStroke& stroke)
 {
+    addDeformationStroke(objectId, stroke, 0);
+}
+
+void EditorController::addDeformationStroke(const QString& objectId,
+                                            const DeformationStroke& stroke,
+                                            quint64 inputSpatialRevision)
+{
     if (stroke.samples.isEmpty() || !std::isfinite(stroke.radius) || stroke.radius <= 0.0) {
         return;
     }
@@ -1525,7 +1555,11 @@ void EditorController::addDeformationStroke(const QString& objectId,
     if (!editable) {
         return;
     }
-    DeformationStroke normalizedStroke = stroke;
+    DeformationStroke normalizedStroke;
+    if (!normalizeDeformationInput(
+            objectId, stroke, inputSpatialRevision, &normalizedStroke)) {
+        return;
+    }
     if (normalizedStroke.mode == BrushMode::Smooth) {
         // Smooth is always a contour operation. Keep the controller boundary
         // consistent with the canvas, evaluator and serializer so a valid
@@ -1549,11 +1583,24 @@ void EditorController::setDeformationPreview(const DeformationStroke& stroke)
 void EditorController::setDeformationPreview(const QString& objectId,
                                              const DeformationStroke& stroke)
 {
+    setDeformationPreview(objectId, stroke, 0);
+}
+
+void EditorController::setDeformationPreview(const QString& objectId,
+                                             const DeformationStroke& stroke,
+                                             quint64 inputSpatialRevision)
+{
     if (stroke.samples.isEmpty()) {
         clearDeformationPreview();
         return;
     }
-    m_previewStroke = stroke;
+    DeformationStroke normalizedStroke;
+    if (!normalizeDeformationInput(
+            objectId, stroke, inputSpatialRevision, &normalizedStroke)) {
+        clearDeformationPreview();
+        return;
+    }
+    m_previewStroke = std::move(normalizedStroke);
     m_previewObjectId = objectId;
     rebuildScene();
 }
@@ -1639,9 +1686,15 @@ void EditorController::copySelectedObjects()
     if (objects.isEmpty()) {
         return;
     }
+    const QByteArray serialized = QJsonDocument(objects).toJson(QJsonDocument::Compact);
+    QString sizeError;
+    if (!ProjectSerializer::validateClipboardInputSize(serialized.size(), &sizeError)) {
+        publishError(sizeError);
+        return;
+    }
     auto* mimeData = new QMimeData();
     mimeData->setData(QStringLiteral("application/x-vector-typography-objects"),
-                      QJsonDocument(objects).toJson(QJsonDocument::Compact));
+                      serialized);
     QStringList fallback;
     for (const QJsonValue& value : objects) {
         fallback.push_back(value.toObject().value(QStringLiteral("sourceText")).toString());
@@ -1673,25 +1726,53 @@ void EditorController::pasteObjects()
         publishError(QStringLiteral("The active layer is locked or hidden."));
         return;
     }
+    const QByteArray serialized = mimeData->data(
+        QStringLiteral("application/x-vector-typography-objects"));
+    QString sizeError;
+    if (!ProjectSerializer::validateClipboardInputSize(serialized.size(), &sizeError)) {
+        publishError(sizeError);
+        return;
+    }
     QJsonParseError parseError;
-    const QJsonDocument document = QJsonDocument::fromJson(
-        mimeData->data(QStringLiteral("application/x-vector-typography-objects")), &parseError);
+    const QJsonDocument document = QJsonDocument::fromJson(serialized, &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isArray()) {
         publishError(QStringLiteral("The clipboard does not contain editor objects."));
         return;
     }
 
-    QStringList pastedIds;
-    m_undoStack.beginMacro(QStringLiteral("Paste objects"));
-    for (const QJsonValue& value : document.array()) {
+    QString resourceError;
+    if (!ProjectSerializer::validateResourceBudget(
+            document, ProjectSerializer::resourceLimits(), &resourceError)) {
+        publishError(resourceError);
+        return;
+    }
+
+    QVector<TextObject> parsedObjects;
+    parsedObjects.reserve(document.array().size());
+    for (int index = 0; index < document.array().size(); ++index) {
+        const QJsonValue value = document.array().at(index);
         if (!value.isObject()) {
-            continue;
+            publishError(QStringLiteral("Clipboard object entry %1 is not an object.").arg(index));
+            return;
         }
         TextObject object;
         QString error;
         if (!ProjectSerializer::textObjectFromJson(value.toObject(), &object, &error)) {
-            continue;
+            publishError(QStringLiteral("Clipboard object entry %1 is invalid: %2")
+                             .arg(index)
+                             .arg(error));
+            return;
         }
+        parsedObjects.push_back(std::move(object));
+    }
+    if (parsedObjects.isEmpty()) {
+        publishError(QStringLiteral("The clipboard object list is empty."));
+        return;
+    }
+
+    QStringList pastedIds;
+    m_undoStack.beginMacro(QStringLiteral("Paste objects"));
+    for (TextObject& object : parsedObjects) {
         object.id = createStableId(QStringLiteral("text"));
         assignFreshEffectInstanceIds(&object.effects);
         object.transform.position += QPointF(24.0, 24.0);
@@ -1874,6 +1955,8 @@ bool EditorController::openProject(const QString& filePath, QString* error)
     m_textEngine.clearCache();
     m_selectionModel->clear();
     synchronizeSelectionWithDocument();
+    ++m_spatialRevision;
+    m_authoritativeFrameCache.clear();
     rebuildScene();
     emit documentChanged();
     emit statusMessageChanged(QStringLiteral("Project opened: %1").arg(filePath));
@@ -1887,9 +1970,10 @@ bool EditorController::exportSvg(const QString& filePath, QString* error) const
 
 bool EditorController::exportSvg(const QString& filePath, ExportScope scope, QString* error) const
 {
+    const WorkControl work = WorkControl::withBudget();
     VectorExportPayload payload;
-    if (!buildExportPayload(scope, &payload, error)) return false;
-    return m_svgExporter.exportPayload(payload, filePath, error);
+    if (!buildExportPayload(scope, &payload, error, work)) return false;
+    return m_svgExporter.exportPayload(payload, filePath, error, work);
 }
 
 bool EditorController::copyForWord(ExportScope scope, QString* error) const
@@ -1901,12 +1985,16 @@ bool EditorController::copyForWord(ExportScope scope, QString* error) const
 
 ClipboardPublicationResult EditorController::copyForWordResult(ExportScope scope) const
 {
+    const WorkControl work = WorkControl::withBudget();
     VectorExportPayload payload;
     QString error;
-    if (!buildExportPayload(scope, &payload, &error)) {
+    if (!buildExportPayload(scope, &payload, &error, work)) {
+        if (work.status() == WorkControlStatus::Cancelled) {
+            return {ClipboardPublicationStatus::Cancelled, error};
+        }
         return {ClipboardPublicationStatus::Failure, error};
     }
-    return VectorClipboardService::copyForOfficeResult(payload);
+    return VectorClipboardService::copyForOfficeResult(payload, work);
 }
 
 bool EditorController::canExport(ExportScope scope) const
@@ -1931,7 +2019,8 @@ bool EditorController::canExport(ExportScope scope) const
 
 bool EditorController::buildExportPayload(ExportScope scope,
                                           VectorExportPayload* payload,
-                                          QString* error) const
+                                          QString* error,
+                                          const WorkControl& work) const
 {
     const Page* page = m_document.currentPage();
     if (!page) {
@@ -1943,9 +2032,90 @@ bool EditorController::buildExportPayload(ExportScope scope,
     // Export always evaluates a value-copy snapshot, never the asynchronously
     // published scene, so output cannot race edits or use stale geometry.
     const Page snapshot = *page;
-    const SceneGeometry scene = SceneEvaluator::evaluate(snapshot);
+    const SceneGeometry scene = SceneEvaluator::evaluate(snapshot, m_spatialRevision, work);
+    if (scene.evaluationStatus != EvaluationStatus::Complete) {
+        if (error) *error = scene.evaluationMessage;
+        return false;
+    }
     return ExportPayloadBuilder::build(m_document, snapshot, scene, scope,
-                                       selectedObjectIds(), payload, error);
+                                       selectedObjectIds(), payload, error, work);
+}
+
+std::optional<ObjectFrame> EditorController::authoritativeObjectFrame(
+    const QString& objectId)
+{
+    const TextObject* object = m_document.objectById(objectId);
+    if (!object || !currentPageLayerForObject(m_document, objectId)) {
+        return std::nullopt;
+    }
+    if (const SceneObjectGeometry* published = m_sceneGeometry.objectById(objectId);
+        published && !m_sceneGeometry.containsTransientPreview
+        && published->spatialRevision == m_spatialRevision
+        && published->frame.spatialRevision == m_spatialRevision
+        && published->pageId == m_document.currentPageId) {
+        if (m_authoritativeFrameCacheRevision != m_spatialRevision) {
+            m_authoritativeFrameCache.clear();
+            m_authoritativeFrameCacheRevision = m_spatialRevision;
+        }
+        m_authoritativeFrameCache.insert(objectId, published->frame);
+        return published->frame;
+    }
+    if (m_authoritativeFrameCacheRevision != m_spatialRevision) {
+        m_authoritativeFrameCache.clear();
+        m_authoritativeFrameCacheRevision = m_spatialRevision;
+    }
+    const auto cached = m_authoritativeFrameCache.constFind(objectId);
+    if (cached != m_authoritativeFrameCache.cend()) {
+        return cached.value();
+    }
+    ObjectFrame frame = SceneEvaluator::evaluateObjectFrame(*object, m_spatialRevision);
+    if (frame.spatialRevision != m_spatialRevision) {
+        return std::nullopt;
+    }
+    m_authoritativeFrameCache.insert(objectId, frame);
+    return frame;
+}
+
+bool EditorController::normalizeDeformationInput(
+    const QString& objectId,
+    const DeformationStroke& input,
+    quint64 inputSpatialRevision,
+    DeformationStroke* normalized)
+{
+    if (!normalized) {
+        return false;
+    }
+    *normalized = input;
+    if (input.coordinateSpace == DeformationCoordinateSpace::ObjectLocal) {
+        return true;
+    }
+    if (input.coordinateSpace != DeformationCoordinateSpace::PageInput) {
+        publishError(QStringLiteral("Ambiguous legacy deformation coordinates cannot be edited."));
+        return false;
+    }
+
+    // inputSpatialRevision documents which published projection originated
+    // the pointer stream. It never authorizes persistence: conversion always
+    // uses a frame proven against the controller's current revision.
+    Q_UNUSED(inputSpatialRevision);
+    const std::optional<ObjectFrame> frame = authoritativeObjectFrame(objectId);
+    if (!frame.has_value()) {
+        publishError(QStringLiteral("Could not obtain a current frame for the deformation stroke."));
+        return false;
+    }
+    normalized->coordinateSpace = DeformationCoordinateSpace::ObjectLocal;
+    normalized->radius = qMax<qreal>(
+        0.01, frame->pageRadiusToLocalEquivalentArea(input.radius));
+    for (BrushSample& sample : normalized->samples) {
+        sample.position = frame->pagePointToLocal(sample.position);
+        sample.delta = frame->pageVectorToLocal(sample.delta);
+        if (!std::isfinite(sample.position.x()) || !std::isfinite(sample.position.y())
+            || !std::isfinite(sample.delta.x()) || !std::isfinite(sample.delta.y())) {
+            publishError(QStringLiteral("The deformation stroke could not be mapped safely."));
+            return false;
+        }
+    }
+    return true;
 }
 
 void EditorController::onCommandChanged()
@@ -1954,6 +2124,8 @@ void EditorController::onCommandChanged()
     // created (notably Duplicate).  Never leave the UI model pointing at a
     // deleted object while publishing the next asynchronous scene.
     synchronizeSelectionWithDocument();
+    ++m_spatialRevision;
+    m_authoritativeFrameCache.clear();
     rebuildScene();
     emit documentChanged();
 }
@@ -1965,7 +2137,9 @@ void EditorController::rebuildScene()
         return;
     }
     Page snapshot = *currentPage;
+    bool containsTransientPreview = false;
     if (m_previewStroke.has_value()) {
+        containsTransientPreview = true;
         for (const auto& layer : snapshot.layers) {
             if (!layer) {
                 continue;
@@ -1979,6 +2153,7 @@ void EditorController::rebuildScene()
         }
     }
     if (m_previewEffectMask.has_value()) {
+        containsTransientPreview = true;
         for (const auto& layer : snapshot.layers) {
             if (!layer) {
                 continue;
@@ -1992,41 +2167,65 @@ void EditorController::rebuildScene()
         }
     }
     const quint64 generation = ++m_evaluationGeneration;
+    const quint64 spatialRevision = m_spatialRevision;
     if (m_evaluationWatcher) {
-        // The worker remains cancellable only at the task boundary. Retain
-        // exactly one latest snapshot instead of queueing every keystroke or
-        // brush sample behind the current evaluation.
-        m_pendingEvaluation = std::move(snapshot);
+        // Every expensive stage shares this control. Retain exactly one newest
+        // snapshot while the superseded worker exits at its next checkpoint.
+        m_activeEvaluationWork.cancel();
+        m_pendingEvaluation = PendingEvaluation{
+            std::move(snapshot), generation, spatialRevision, containsTransientPreview};
         return;
     }
-    startEvaluation(std::move(snapshot), generation);
+    startEvaluation(
+        std::move(snapshot), generation, spatialRevision, containsTransientPreview);
 }
 
-void EditorController::startEvaluation(Page snapshot, quint64 generation)
+void EditorController::startEvaluation(Page snapshot,
+                                       quint64 generation,
+                                       quint64 spatialRevision,
+                                       bool containsTransientPreview)
 {
     auto* watcher = new QFutureWatcher<SceneGeometry>(this);
+    const WorkControl work = WorkControl::withBudget();
+    m_activeEvaluationWork = work;
     m_evaluationWatcher = watcher;
-    connect(watcher, &QFutureWatcher<SceneGeometry>::finished, this, [this, watcher, generation] {
+    connect(watcher, &QFutureWatcher<SceneGeometry>::finished, this,
+            [this, watcher, generation, spatialRevision] {
         SceneGeometry scene = watcher->result();
         watcher->deleteLater();
         m_evaluationWatcher = nullptr;
-        if (generation == m_evaluationGeneration) {
-            publishSceneResult(std::move(scene), generation);
+        if (scene.evaluationStatus == EvaluationStatus::Complete
+            && generation == m_evaluationGeneration && spatialRevision == m_spatialRevision) {
+            publishSceneResult(std::move(scene), generation, spatialRevision);
+        } else if (generation == m_evaluationGeneration
+                   && spatialRevision == m_spatialRevision
+                   && scene.evaluationStatus == EvaluationStatus::BudgetExceeded) {
+            publishError(scene.evaluationMessage);
         }
         if (m_pendingEvaluation.has_value()) {
-            Page pending = std::move(*m_pendingEvaluation);
+            PendingEvaluation pending = std::move(*m_pendingEvaluation);
             m_pendingEvaluation.reset();
-            startEvaluation(std::move(pending), m_evaluationGeneration);
+            startEvaluation(std::move(pending.snapshot),
+                            pending.generation,
+                            pending.spatialRevision,
+                            pending.containsTransientPreview);
         }
     });
-    watcher->setFuture(QtConcurrent::run([snapshot = std::move(snapshot)] {
-        return SceneEvaluator::evaluate(snapshot);
+    watcher->setFuture(QtConcurrent::run(
+        [snapshot = std::move(snapshot), spatialRevision, containsTransientPreview, work] {
+        SceneGeometry result = SceneEvaluator::evaluate(snapshot, spatialRevision, work);
+        result.containsTransientPreview = containsTransientPreview;
+        return result;
     }));
 }
 
-void EditorController::publishSceneResult(SceneGeometry scene, quint64 generation)
+void EditorController::publishSceneResult(SceneGeometry scene,
+                                          quint64 generation,
+                                          quint64 spatialRevision)
 {
-    if (generation != m_evaluationGeneration) {
+    if (generation != m_evaluationGeneration || spatialRevision != m_spatialRevision
+        || scene.spatialRevision != spatialRevision
+        || scene.pageId != m_document.currentPageId) {
         return;
     }
     m_sceneGeometry = std::move(scene);

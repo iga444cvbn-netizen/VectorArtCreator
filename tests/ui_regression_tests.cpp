@@ -509,7 +509,9 @@ void EffectsPanelUiTests::styleIntensityGestureHasImmediateDirtyTruthAndOneUndoS
     QTest::mouseMove(slider, away, 10);
     QVERIFY(controller->document().objectById(first)->effectStackStrength != 1.0);
     QVERIFY2(controller->isModified(), "held persistent gesture must be immediately dirty");
-    QVERIFY(controller->undoStack()->isClean()); // command is committed on transaction end
+    QVERIFY2(!controller->undoStack()->isClean(),
+             "QUndoStack clean state must remain the sole dirty-state authority");
+    QCOMPARE(controller->undoStack()->count(), savedCount + 1);
     QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, away);
     QVERIFY(controller->isModified());
     QVERIFY(controller->undoStack()->canUndo());

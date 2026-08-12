@@ -7,6 +7,7 @@
 #include <QSaveFile>
 #include <QSet>
 
+#include <limits>
 #include <utility>
 
 namespace vt {
@@ -22,7 +23,7 @@ bool identityError(const QString& message, QString* error)
 // Current-schema IDs are persisted semantic identity, not optional hints.
 // Validate the raw hierarchy before constructors can replace missing IDs with
 // fresh defaults and accidentally turn corruption into a different project.
-bool validateCurrentSchemaIdentity(const QJsonObject& root, QString* error)
+bool validateHierarchicalIdentity(const QJsonObject& root, QString* error)
 {
     const QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
     QSet<QString> pageIds;
@@ -36,8 +37,9 @@ bool validateCurrentSchemaIdentity(const QJsonObject& root, QString* error)
         const QJsonObject page = pages.at(pageIndex).toObject();
         const QString pageId = page.value(QStringLiteral("id")).toString();
         if (pageId.isEmpty() || pageIds.contains(pageId)) {
-            return identityError(QStringLiteral("Project contains a missing or duplicate page ID at page %1.")
-                                     .arg(pageIndex), error);
+            return identityError(
+                QStringLiteral("Project contains a missing or duplicate page ID at pages[%1].id.")
+                    .arg(pageIndex), error);
         }
         pageIds.insert(pageId);
         const QJsonArray layers = page.value(QStringLiteral("layers")).toArray();
@@ -48,8 +50,9 @@ bool validateCurrentSchemaIdentity(const QJsonObject& root, QString* error)
             const QJsonObject layer = layers.at(layerIndex).toObject();
             const QString layerId = layer.value(QStringLiteral("id")).toString();
             if (layerId.isEmpty() || layerIds.contains(layerId)) {
-                return identityError(QStringLiteral("Project contains a missing or duplicate layer ID at page %1 layer %2.")
-                                         .arg(pageIndex).arg(layerIndex), error);
+                return identityError(
+                    QStringLiteral("Project contains a missing or duplicate layer ID at pages[%1].layers[%2].id.")
+                        .arg(pageIndex).arg(layerIndex), error);
             }
             layerIds.insert(layerId);
             layerIdsByPage[pageId].insert(layerId);
@@ -58,8 +61,9 @@ bool validateCurrentSchemaIdentity(const QJsonObject& root, QString* error)
                 const QJsonObject object = objects.at(objectIndex).toObject();
                 const QString objectId = object.value(QStringLiteral("id")).toString();
                 if (objectId.isEmpty() || objectIds.contains(objectId)) {
-                    return identityError(QStringLiteral("Project contains a missing or duplicate object ID at page %1 layer %2 object %3.")
-                                             .arg(pageIndex).arg(layerIndex).arg(objectIndex), error);
+                    return identityError(
+                        QStringLiteral("Project contains a missing or duplicate object ID at pages[%1].layers[%2].objects[%3].id.")
+                            .arg(pageIndex).arg(layerIndex).arg(objectIndex), error);
                 }
                 objectIds.insert(objectId);
                 objectIdsByPage[pageId].insert(objectId);
@@ -68,8 +72,9 @@ bool validateCurrentSchemaIdentity(const QJsonObject& root, QString* error)
                     const QString effectId = effects.at(effectIndex).toObject()
                                                  .value(QStringLiteral("id")).toString();
                     if (effectId.isEmpty() || effectIds.contains(effectId)) {
-                        return identityError(QStringLiteral("Project contains a missing or duplicate effect ID at page %1 layer %2 object %3 effect %4.")
-                                                 .arg(pageIndex).arg(layerIndex).arg(objectIndex).arg(effectIndex), error);
+                        return identityError(
+                            QStringLiteral("Project contains a missing or duplicate effect ID at pages[%1].layers[%2].objects[%3].effects[%4].id.")
+                                .arg(pageIndex).arg(layerIndex).arg(objectIndex).arg(effectIndex), error);
                     }
                     effectIds.insert(effectId);
                 }
@@ -90,6 +95,254 @@ bool validateCurrentSchemaIdentity(const QJsonObject& root, QString* error)
         return identityError(QStringLiteral("Current-schema project active object is not on its current page."), error);
     }
     return true;
+}
+
+struct ResourceBudgetTracker {
+    qint64 layers = 0;
+    qint64 objects = 0;
+    qint64 effects = 0;
+    qint64 sourceUtf16 = 0;
+    qint64 maskStrokes = 0;
+    qint64 maskPoints = 0;
+    qint64 deformationStrokes = 0;
+    qint64 deformationSamples = 0;
+    qint64 estimatedWork = 0;
+};
+
+bool resourceError(const QString& path,
+                   const QString& resource,
+                   qint64 actual,
+                   qint64 maximum,
+                   QString* error)
+{
+    if (error) {
+        *error = QStringLiteral("Project resource limit exceeded at %1: %2 is %3; maximum is %4.")
+                     .arg(path, resource)
+                     .arg(actual)
+                     .arg(maximum);
+    }
+    return false;
+}
+
+bool checkLimit(qint64 actual,
+                qint64 maximum,
+                const QString& path,
+                const QString& resource,
+                QString* error)
+{
+    return actual <= maximum
+        || resourceError(path, resource, actual, maximum, error);
+}
+
+qint64 saturatedAdd(qint64 left, qint64 right)
+{
+    if (right > 0 && left > std::numeric_limits<qint64>::max() - right) {
+        return std::numeric_limits<qint64>::max();
+    }
+    return left + right;
+}
+
+qint64 saturatedMultiply(qint64 left, qint64 right)
+{
+    if (left <= 0 || right <= 0) return 0;
+    if (left > std::numeric_limits<qint64>::max() / right) {
+        return std::numeric_limits<qint64>::max();
+    }
+    return left * right;
+}
+
+bool validateTextObjectResources(const QJsonObject& object,
+                                 const QString& path,
+                                 const ProjectResourceLimits& limits,
+                                 ResourceBudgetTracker* tracker,
+                                 QString* error)
+{
+    const qint64 sourceUnits = object.value(QStringLiteral("sourceText")).toString().size();
+    if (!checkLimit(sourceUnits, limits.maximumSourceUtf16PerObject,
+                    path + QStringLiteral(".sourceText"), QStringLiteral("UTF-16 code units"), error)) {
+        return false;
+    }
+    tracker->sourceUtf16 = saturatedAdd(tracker->sourceUtf16, sourceUnits);
+    if (!checkLimit(tracker->sourceUtf16, limits.maximumSourceUtf16,
+                    path + QStringLiteral(".sourceText"),
+                    QStringLiteral("aggregate UTF-16 code units"), error)) {
+        return false;
+    }
+
+    const QJsonArray effects = object.value(QStringLiteral("effects")).toArray();
+    if (!checkLimit(effects.size(), limits.maximumEffectsPerObject,
+                    path + QStringLiteral(".effects"), QStringLiteral("effects per object"), error)) {
+        return false;
+    }
+    tracker->effects = saturatedAdd(tracker->effects, effects.size());
+    if (!checkLimit(tracker->effects, limits.maximumEffects,
+                    path + QStringLiteral(".effects"), QStringLiteral("aggregate effects"), error)) {
+        return false;
+    }
+
+    qint64 objectMaskPoints = 0;
+    for (int effectIndex = 0; effectIndex < effects.size(); ++effectIndex) {
+        const QString effectPath = path + QStringLiteral(".effects[%1]").arg(effectIndex);
+        const QJsonArray strokes = effects.at(effectIndex).toObject()
+                                       .value(QStringLiteral("mask")).toArray();
+        if (!checkLimit(strokes.size(), limits.maximumMaskStrokesPerEffect,
+                        effectPath + QStringLiteral(".mask"),
+                        QStringLiteral("mask strokes per effect"), error)) {
+            return false;
+        }
+        tracker->maskStrokes = saturatedAdd(tracker->maskStrokes, strokes.size());
+        if (!checkLimit(tracker->maskStrokes, limits.maximumMaskStrokes,
+                        effectPath + QStringLiteral(".mask"),
+                        QStringLiteral("aggregate mask strokes"), error)) {
+            return false;
+        }
+        for (int strokeIndex = 0; strokeIndex < strokes.size(); ++strokeIndex) {
+            const QString strokePath = effectPath
+                + QStringLiteral(".mask[%1].points").arg(strokeIndex);
+            const QJsonArray points = strokes.at(strokeIndex).toObject()
+                                          .value(QStringLiteral("points")).toArray();
+            if (!checkLimit(points.size(), limits.maximumMaskPointsPerStroke,
+                            strokePath, QStringLiteral("mask points per stroke"), error)) {
+                return false;
+            }
+            objectMaskPoints = saturatedAdd(objectMaskPoints, points.size());
+            tracker->maskPoints = saturatedAdd(tracker->maskPoints, points.size());
+            if (!checkLimit(tracker->maskPoints, limits.maximumMaskPoints,
+                            strokePath, QStringLiteral("aggregate mask points"), error)) {
+                return false;
+            }
+        }
+    }
+
+    qint64 objectDeformationSamples = 0;
+    const QJsonArray deformationStrokes = object.value(QStringLiteral("deformation"))
+                                              .toObject()
+                                              .value(QStringLiteral("strokes"))
+                                              .toArray();
+    if (!checkLimit(deformationStrokes.size(), limits.maximumDeformationStrokesPerObject,
+                    path + QStringLiteral(".deformation.strokes"),
+                    QStringLiteral("deformation strokes per object"), error)) {
+        return false;
+    }
+    tracker->deformationStrokes = saturatedAdd(
+        tracker->deformationStrokes, deformationStrokes.size());
+    if (!checkLimit(tracker->deformationStrokes, limits.maximumDeformationStrokes,
+                    path + QStringLiteral(".deformation.strokes"),
+                    QStringLiteral("aggregate deformation strokes"), error)) {
+        return false;
+    }
+    for (int strokeIndex = 0; strokeIndex < deformationStrokes.size(); ++strokeIndex) {
+        const QJsonObject serializedStroke = deformationStrokes.at(strokeIndex).toObject();
+        const QString samplesPath = path
+            + QStringLiteral(".deformation.strokes[%1].samples").arg(strokeIndex);
+        if (serializedStroke.value(QStringLiteral("coordinateSpace")).toString()
+            == QStringLiteral("pageInput")) {
+            if (error) {
+                *error = QStringLiteral(
+                    "Transient page-input coordinates cannot be persisted at %1.coordinateSpace.")
+                             .arg(path + QStringLiteral(".deformation.strokes[%1]")
+                                             .arg(strokeIndex));
+            }
+            return false;
+        }
+        const QJsonArray samples = serializedStroke.value(QStringLiteral("samples")).toArray();
+        if (!checkLimit(samples.size(), limits.maximumDeformationSamplesPerStroke,
+                        samplesPath, QStringLiteral("deformation samples per stroke"), error)) {
+            return false;
+        }
+        objectDeformationSamples = saturatedAdd(objectDeformationSamples, samples.size());
+        tracker->deformationSamples = saturatedAdd(tracker->deformationSamples, samples.size());
+        if (!checkLimit(tracker->deformationSamples, limits.maximumDeformationSamples,
+                        samplesPath, QStringLiteral("aggregate deformation samples"), error)) {
+            return false;
+        }
+    }
+
+    // The expensive paths scale approximately with glyph/piece count multiplied
+    // by ordered effects, mask segments, and deformation samples. This rejects
+    // adversarial products whose individual child arrays all remain legal.
+    const qint64 geometryUnits = qMax<qint64>(1, sourceUnits);
+    const qint64 nestedUnits = saturatedAdd(
+        saturatedAdd(effects.size(), objectMaskPoints), objectDeformationSamples);
+    const qint64 objectWork = saturatedMultiply(geometryUnits, saturatedAdd(1, nestedUnits));
+    tracker->estimatedWork = saturatedAdd(tracker->estimatedWork, objectWork);
+    return checkLimit(tracker->estimatedWork, limits.maximumEstimatedWork,
+                      path, QStringLiteral("aggregate estimated geometry work units"), error);
+}
+
+bool validateObjectArrayResources(const QJsonArray& objects,
+                                  const QString& path,
+                                  const ProjectResourceLimits& limits,
+                                  ResourceBudgetTracker* tracker,
+                                  QString* error)
+{
+    if (!checkLimit(objects.size(), limits.maximumObjectsPerLayer,
+                    path, QStringLiteral("objects per layer"), error)) {
+        return false;
+    }
+    tracker->objects = saturatedAdd(tracker->objects, objects.size());
+    if (!checkLimit(tracker->objects, limits.maximumObjects,
+                    path, QStringLiteral("aggregate objects"), error)) {
+        return false;
+    }
+    for (int objectIndex = 0; objectIndex < objects.size(); ++objectIndex) {
+        if (!validateTextObjectResources(objects.at(objectIndex).toObject(),
+                                         path + QStringLiteral("[%1]").arg(objectIndex),
+                                         limits, tracker, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validateProjectResources(const QJsonObject& root,
+                              int version,
+                              const ProjectResourceLimits& limits,
+                              QString* error)
+{
+    ResourceBudgetTracker tracker;
+    const QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+    if (version >= 4 && !pages.isEmpty()) {
+        if (!checkLimit(pages.size(), limits.maximumPages,
+                        QStringLiteral("pages"), QStringLiteral("pages"), error)) {
+            return false;
+        }
+        for (int pageIndex = 0; pageIndex < pages.size(); ++pageIndex) {
+            const QString pagePath = QStringLiteral("pages[%1]").arg(pageIndex);
+            const QJsonArray layers = pages.at(pageIndex).toObject()
+                                          .value(QStringLiteral("layers")).toArray();
+            if (!checkLimit(layers.size(), limits.maximumLayersPerPage,
+                            pagePath + QStringLiteral(".layers"),
+                            QStringLiteral("layers per page"), error)) {
+                return false;
+            }
+            tracker.layers = saturatedAdd(tracker.layers, layers.size());
+            if (!checkLimit(tracker.layers, limits.maximumLayers,
+                            pagePath + QStringLiteral(".layers"),
+                            QStringLiteral("aggregate layers"), error)) {
+                return false;
+            }
+            for (int layerIndex = 0; layerIndex < layers.size(); ++layerIndex) {
+                const QString objectsPath = pagePath
+                    + QStringLiteral(".layers[%1].objects").arg(layerIndex);
+                const QJsonArray objects = layers.at(layerIndex).toObject()
+                                               .value(QStringLiteral("objects")).toArray();
+                if (!validateObjectArrayResources(
+                        objects, objectsPath, limits, &tracker, error)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    tracker.layers = 1;
+    if (!checkLimit(tracker.layers, limits.maximumLayers,
+                    QStringLiteral("objects"), QStringLiteral("aggregate layers"), error)) {
+        return false;
+    }
+    return validateObjectArrayResources(root.value(QStringLiteral("objects")).toArray(),
+                                        QStringLiteral("objects"), limits, &tracker, error);
 }
 
 QJsonObject serializeTextObject(const TextObject& textObject)
@@ -146,7 +399,24 @@ bool deserializeTextObject(const QJsonObject& object,
         return false;
     }
     QString effectError;
-    result.effects = EffectStack::fromJson(effectValue.toArray(), &effectError);
+    if (formatVersion < 4) {
+        // Flat schemas treated IDs as incidental. Parse their ordered effects
+        // first; the migration path below replaces every identity by a stable
+        // path-derived value, including missing or colliding legacy IDs.
+        const QJsonArray serializedEffects = effectValue.toArray();
+        for (int index = 0; index < serializedEffects.size(); ++index) {
+            if (!serializedEffects.at(index).isObject()) {
+                effectError = QStringLiteral("Effect entry %1 is not an object.").arg(index);
+                break;
+            }
+            std::unique_ptr<Effect> effect = effectFromJson(
+                serializedEffects.at(index).toObject(), &effectError);
+            if (!effect) break;
+            result.effects.append(std::move(effect));
+        }
+    } else {
+        result.effects = EffectStack::fromJson(effectValue.toArray(), &effectError);
+    }
     if (!effectError.isEmpty()) {
         if (error) {
             *error = effectError;
@@ -294,6 +564,40 @@ bool pageFromJson(const QJsonObject& object, Page* page, int formatVersion, QStr
 
 } // namespace
 
+ProjectResourceLimits ProjectSerializer::resourceLimits()
+{
+    return {};
+}
+
+namespace {
+bool validateInputSize(qint64 bytes,
+                       qint64 maximum,
+                       const QString& context,
+                       QString* error)
+{
+    if (bytes >= 0 && bytes <= maximum) return true;
+    if (error) {
+        *error = QStringLiteral("%1 input is %2 bytes; maximum is %3 bytes.")
+                     .arg(context)
+                     .arg(bytes)
+                     .arg(maximum);
+    }
+    return false;
+}
+} // namespace
+
+bool ProjectSerializer::validateProjectInputSize(qint64 bytes, QString* error)
+{
+    return validateInputSize(
+        bytes, resourceLimits().maximumProjectInputBytes, QStringLiteral("Project"), error);
+}
+
+bool ProjectSerializer::validateClipboardInputSize(qint64 bytes, QString* error)
+{
+    return validateInputSize(
+        bytes, resourceLimits().maximumClipboardInputBytes, QStringLiteral("Clipboard object"), error);
+}
+
 QJsonObject ProjectSerializer::textObjectToJson(const TextObject& object)
 {
     return serializeTextObject(object);
@@ -303,7 +607,30 @@ bool ProjectSerializer::textObjectFromJson(const QJsonObject& json,
                                            TextObject* object,
                                            QString* error)
 {
+    ResourceBudgetTracker tracker;
+    if (!validateTextObjectResources(
+            json, QStringLiteral("object"), resourceLimits(), &tracker, error)) {
+        return false;
+    }
     return deserializeTextObject(json, object, Document::CurrentFormatVersion, error);
+}
+
+bool ProjectSerializer::validateResourceBudget(const QJsonDocument& json,
+                                               const ProjectResourceLimits& limits,
+                                               QString* error)
+{
+    if (json.isArray()) {
+        ResourceBudgetTracker tracker;
+        return validateObjectArrayResources(
+            json.array(), QStringLiteral("objects"), limits, &tracker, error);
+    }
+    if (!json.isObject()) {
+        if (error) *error = QStringLiteral("Serialized resource budget input must be an object or array.");
+        return false;
+    }
+    const QJsonObject root = json.object();
+    return validateProjectResources(
+        root, root.value(QStringLiteral("formatVersion")).toInt(-1), limits, error);
 }
 
 QJsonDocument ProjectSerializer::toJson(const Document& document)
@@ -374,6 +701,10 @@ bool ProjectSerializer::fromJson(const QJsonDocument& json, Document* document, 
         return false;
     }
 
+    if (!validateProjectResources(root, version, resourceLimits(), error)) {
+        return false;
+    }
+
     const QJsonValue pagesValue = root.value(QStringLiteral("pages"));
     const QJsonValue objectsValue = root.value(QStringLiteral("objects"));
     if ((!pagesValue.isArray() || pagesValue.toArray().isEmpty())
@@ -384,8 +715,7 @@ bool ProjectSerializer::fromJson(const QJsonDocument& json, Document* document, 
         return false;
     }
 
-    if (version == Document::CurrentFormatVersion
-        && !validateCurrentSchemaIdentity(root, error)) {
+    if (version >= 4 && !validateHierarchicalIdentity(root, error)) {
         return false;
     }
 
@@ -433,9 +763,11 @@ bool ProjectSerializer::fromJson(const QJsonDocument& json, Document* document, 
         // Version 1-3 stored a flat objects[] array. Preserve its order by
         // placing every object in one migrated page and layer.
         auto page = std::make_unique<Page>();
+        page->id = QStringLiteral("migrated-v%1-page-0").arg(version);
         page->name = QStringLiteral("Page 1");
         page->layers.clear();
         auto layer = std::make_unique<Layer>();
+        layer->id = QStringLiteral("migrated-v%1-page-0-layer-0").arg(version);
         layer->name = QStringLiteral("Layer 1");
         const QJsonArray objects = objectsValue.toArray();
         for (int index = 0; index < objects.size(); ++index) {
@@ -448,6 +780,18 @@ bool ProjectSerializer::fromJson(const QJsonDocument& json, Document* document, 
             auto textObject = std::make_unique<TextObject>();
             if (!deserializeTextObject(objects.at(index).toObject(), textObject.get(), version, error)) {
                 return false;
+            }
+            textObject->id = QStringLiteral("migrated-v%1-page-0-layer-0-object-%2")
+                                 .arg(version)
+                                 .arg(index);
+            for (int effectIndex = 0; effectIndex < textObject->effects.size(); ++effectIndex) {
+                if (Effect* effect = textObject->effects.at(effectIndex)) {
+                    effect->instanceId = QStringLiteral(
+                        "migrated-v%1-page-0-layer-0-object-%2-effect-%3")
+                                             .arg(version)
+                                             .arg(index)
+                                             .arg(effectIndex);
+                }
             }
             layer->objects.push_back(std::move(textObject));
         }
@@ -505,6 +849,16 @@ bool ProjectSerializer::fromJson(const QJsonDocument& json, Document* document, 
 
 bool ProjectSerializer::saveToFile(const Document& document, const QString& filePath, QString* error)
 {
+    const QJsonDocument json = toJson(document);
+    if (!validateProjectResources(
+            json.object(), Document::CurrentFormatVersion, resourceLimits(), error)) {
+        return false;
+    }
+    const QByteArray data = json.toJson(QJsonDocument::Indented);
+    if (!validateProjectInputSize(data.size(), error)) {
+        return false;
+    }
+
     QSaveFile file(filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         if (error) {
@@ -513,7 +867,6 @@ bool ProjectSerializer::saveToFile(const Document& document, const QString& file
         return false;
     }
 
-    const QByteArray data = toJson(document).toJson(QJsonDocument::Indented);
     if (file.write(data) != data.size()) {
         if (error) {
             *error = QStringLiteral("Could not write the complete project file: %1").arg(file.errorString());
@@ -536,6 +889,10 @@ bool ProjectSerializer::loadFromFile(const QString& filePath, Document* document
         if (error) {
             *error = QStringLiteral("Cannot open project: %1").arg(file.errorString());
         }
+        return false;
+    }
+
+    if (!validateProjectInputSize(file.size(), error)) {
         return false;
     }
 

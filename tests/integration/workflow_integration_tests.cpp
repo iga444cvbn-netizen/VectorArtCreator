@@ -6,6 +6,7 @@
 
 #include "core/effects/effect_registry.h"
 #include "core/export/export_payload_builder.h"
+#include "core/export/svg_exporter.h"
 #include "core/scene/scene_evaluator.h"
 #include "core/serialization/project_serializer.h"
 #include "ui/editor_controller.h"
@@ -13,14 +14,21 @@
 #include <QCoreApplication>
 #include <QFile>
 #include <QFont>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QHash>
 #include <QJsonArray>
+#include <QLineF>
 #include <QRandomGenerator>
 #include <QSet>
+#include <QSemaphore>
 #include <QThreadPool>
 #include <QTest>
 #include <QTemporaryDir>
+#include <QtConcurrentRun>
+
+#include <atomic>
+#include <cmath>
 
 using namespace vt;
 
@@ -31,6 +39,9 @@ private slots:
     void semanticSaveLoadAndUndoRedoEquivalence();
     void latestAsyncTextGenerationWins();
     void latestAsyncSemanticSnapshotWins();
+    void staleFrameCannotAuthorizeSpatialMutation();
+    void cooperativeWorkBudgetAndCancellationAreDeterministic();
+    void cancelledSvgNeverCommitsPartialOutput();
     void pageSwitchRejectsLatePreviousPage();
     void deletedObjectCannotBeRepublished();
     void controllerDestructionWithQueuedEvaluationIsSafe();
@@ -118,7 +129,8 @@ void WorkflowIntegrationTests::latestAsyncSemanticSnapshotWins()
     controller.setDeformationStrength(1.35);
     controller.setObjectTransform(id, transformB);
 
-    const SceneGeometry expectedScene = SceneEvaluator::evaluate(*controller.document().currentPage());
+    const SceneGeometry expectedScene = SceneEvaluator::evaluate(
+        *controller.document().currentPage(), controller.spatialRevision());
     const SceneObjectGeometry* expectedObject = expectedScene.objectById(id);
     QVERIFY(expectedObject);
     const test::SceneObjectSignature expected = test::sceneObjectSignature(*expectedObject);
@@ -139,6 +151,173 @@ void WorkflowIntegrationTests::latestAsyncSemanticSnapshotWins()
     QVERIFY2(report.ok(), qPrintable(report.summary()));
 }
 
+void WorkflowIntegrationTests::staleFrameCannotAuthorizeSpatialMutation()
+{
+    EditorController controller;
+    const QString id = controller.createTextObject(
+        QPointF(80.0, 60.0), QStringLiteral("revision mapped"));
+    QTRY_VERIFY_WITH_TIMEOUT(controller.sceneGeometry().objectById(id) != nullptr, 5000);
+    const SceneObjectGeometry* publishedN = controller.sceneGeometry().objectById(id);
+    QVERIFY(publishedN);
+    const ObjectFrame frameN = publishedN->frame;
+    const quint64 revisionN = controller.sceneGeometry().spatialRevision;
+    QCOMPARE(frameN.spatialRevision, revisionN);
+    QCOMPARE(revisionN, controller.spatialRevision());
+
+    test::AsyncEvaluationGate gate;
+    QVERIFY2(gate.waitUntilHolding(), "Could not hold publication at revision N");
+
+    ObjectTransform transform = controller.document().objectById(id)->transform;
+    transform.position = QPointF(310.0, 175.0);
+    transform.rotation = 31.0;
+    transform.scale = QPointF(-0.72, 1.45);
+    transform.pivotLocal = frameN.pivotLocal;
+    transform.hasPivot = true;
+    controller.setObjectTransform(id, transform);
+    QVERIFY(controller.spatialRevision() > revisionN);
+    QCOMPARE(controller.sceneGeometry().spatialRevision, revisionN);
+
+    const QPointF intendedPageStart(445.0, 318.0);
+    const QPointF intendedPageEnd(471.0, 337.0);
+    DeformationStroke pageInput;
+    pageInput.coordinateSpace = DeformationCoordinateSpace::PageInput;
+    pageInput.mode = BrushMode::Push;
+    pageInput.target = BrushTarget::Shape;
+    pageInput.radius = 28.0;
+    pageInput.samples = {
+        {intendedPageStart, QPointF(), 1.0},
+        {intendedPageEnd, intendedPageEnd - intendedPageStart, 1.0},
+    };
+    controller.addDeformationStroke(id, pageInput, revisionN);
+
+    const TextObject* storedObject = controller.document().objectById(id);
+    QVERIFY(storedObject);
+    QVERIFY(!storedObject->deformation.strokes.isEmpty());
+    const DeformationStroke& stored = storedObject->deformation.strokes.back();
+    QCOMPARE(stored.coordinateSpace, DeformationCoordinateSpace::ObjectLocal);
+    const ObjectFrame currentFrame = SceneEvaluator::evaluateObjectFrame(
+        *storedObject, controller.spatialRevision());
+    QVERIFY(QLineF(currentFrame.localPointToPage(stored.samples.at(0).position),
+                   intendedPageStart).length() < 1.0e-6);
+    QVERIFY(QLineF(currentFrame.localPointToPage(stored.samples.at(1).position),
+                   intendedPageEnd).length() < 1.0e-6);
+    QVERIFY2(QLineF(frameN.localPointToPage(stored.samples.at(0).position),
+                    intendedPageStart).length() > 10.0,
+             "obsolete revision N frame authorized the stored local mutation");
+
+    const ObjectTransform beforeRejectedGesture = storedObject->transform;
+    ObjectTransform staleTransform = beforeRejectedGesture;
+    staleTransform.rotation += 45.0;
+    controller.setObjectTransform(id, staleTransform, revisionN);
+    QCOMPARE(controller.document().objectById(id)->transform.toJson(),
+             beforeRejectedGesture.toJson());
+
+    gate.release();
+    QTRY_COMPARE_WITH_TIMEOUT(controller.sceneGeometry().spatialRevision,
+                              controller.spatialRevision(), 8000);
+    QCOMPARE(controller.sceneGeometry().objectById(id)->frame.spatialRevision,
+             controller.spatialRevision());
+}
+
+void WorkflowIntegrationTests::cooperativeWorkBudgetAndCancellationAreDeterministic()
+{
+    Document document;
+    TextObject& object = document.primaryTextObject();
+    object.sourceText = QString(200, QLatin1Char('W'));
+    object.font.family = QFontDatabase::families().value(0);
+    object.font.styleName = QFontDatabase::styles(object.font.family).value(0);
+    object.typography.fontSize = 72.0;
+
+    std::unique_ptr<Effect> wave = EffectRegistry::instance().create(QStringLiteral("wave"));
+    QVERIFY(wave);
+    EffectMaskStroke mask;
+    mask.radius = 60.0;
+    for (int index = 0; index < 64; ++index) {
+        mask.points.push_back(QPointF(index * 5.0, std::sin(index * 0.2) * 20.0));
+    }
+    wave->maskStrokes = {mask};
+    object.effects.append(std::move(wave));
+
+    DeformationStroke deformation;
+    deformation.coordinateSpace = DeformationCoordinateSpace::ObjectLocal;
+    deformation.mode = BrushMode::Push;
+    deformation.target = BrushTarget::Shape;
+    deformation.radius = 80.0;
+    for (int index = 0; index < 64; ++index) {
+        deformation.samples.push_back(
+            {QPointF(index * 4.0, 0.0), QPointF(0.0, 2.0), 1.0});
+    }
+    object.deformation.strokes = {deformation};
+
+    QSemaphore reachedCheckpoint;
+    QSemaphore continueWork;
+    std::atomic_bool paused = false;
+    const WorkControl work = WorkControl::withBudget(1'000'000);
+    constexpr qint64 cancellationUnit = 13'000;
+    work.setCheckpointCallback([&](qint64 consumed) {
+        if (consumed >= cancellationUnit && !paused.exchange(true)) {
+            reachedCheckpoint.release();
+            continueWork.acquire();
+        }
+    });
+    const Page snapshot = *document.currentPage();
+    QFuture<SceneGeometry> future = QtConcurrent::run([snapshot, work] {
+        return SceneEvaluator::evaluate(snapshot, 73, work);
+    });
+    if (!reachedCheckpoint.tryAcquire(1, 5000)) {
+        work.cancel();
+        continueWork.release();
+        future.waitForFinished();
+        QFAIL("Evaluation did not reach the deterministic work-unit checkpoint");
+    }
+    work.cancel();
+    continueWork.release();
+    const SceneGeometry cancelled = future.result();
+    QCOMPARE(cancelled.evaluationStatus, EvaluationStatus::Cancelled);
+    QVERIFY(cancelled.objects.isEmpty());
+    QVERIFY(work.unitsConsumed() >= cancellationUnit);
+    QVERIFY(work.unitsConsumed() < cancellationUnit + 12'000);
+
+    const WorkControl bounded = WorkControl::withBudget(3);
+    const SceneGeometry exceeded = SceneEvaluator::evaluate(snapshot, 74, bounded);
+    QCOMPARE(exceeded.evaluationStatus, EvaluationStatus::BudgetExceeded);
+    QVERIFY(exceeded.objects.isEmpty());
+    QCOMPARE(bounded.unitsConsumed(), qint64(3));
+}
+
+void WorkflowIntegrationTests::cancelledSvgNeverCommitsPartialOutput()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("atomic-cancel.svg"));
+    const QByteArray sentinel("previous-good-output");
+    {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write(sentinel), qint64(sentinel.size()));
+    }
+
+    VectorExportPayload payload;
+    payload.bounds = QRectF(0.0, 0.0, 100.0, 40.0);
+    VectorExportRecord record;
+    record.path.addRect(payload.bounds);
+    record.fill = Qt::black;
+    payload.records = {record};
+
+    const WorkControl work = WorkControl::withBudget(1000);
+    work.setCheckpointCallback([work](qint64 consumed) {
+        if (consumed == 1) work.cancel();
+    });
+    SvgExporter exporter;
+    QString error;
+    QVERIFY(!exporter.exportPayload(payload, path, &error, work));
+    QCOMPARE(work.status(), WorkControlStatus::Cancelled);
+    QVERIFY(error.contains(QStringLiteral("cancelled"), Qt::CaseInsensitive));
+    QFile unchanged(path);
+    QVERIFY(unchanged.open(QIODevice::ReadOnly));
+    QCOMPARE(unchanged.readAll(), sentinel);
+}
+
 void WorkflowIntegrationTests::pageSwitchRejectsLatePreviousPage()
 {
     EditorController controller;
@@ -157,7 +336,8 @@ void WorkflowIntegrationTests::pageSwitchRejectsLatePreviousPage()
     QVERIFY(gate.waitUntilHolding());
     controller.setText(QStringLiteral("late Page A result"));
     controller.switchPage(pageB);
-    const SceneGeometry expected = SceneEvaluator::evaluate(*controller.document().currentPage());
+    const SceneGeometry expected = SceneEvaluator::evaluate(
+        *controller.document().currentPage(), controller.spatialRevision());
     gate.release();
 
     QTRY_COMPARE_WITH_TIMEOUT(controller.sceneGeometry().pageId, pageB, 8000);

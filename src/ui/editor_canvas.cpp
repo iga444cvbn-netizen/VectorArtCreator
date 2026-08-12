@@ -566,12 +566,16 @@ bool EditorCanvas::handleCanvasMousePress(Qt::MouseButton button,
         m_cursorPosition = widgetPosition.toPoint();
         m_hasCursorPosition = true;
         m_brushing = true;
+        m_brushSpatialRevision = m_sceneGeometry.spatialRevision;
         m_brushTargetId = m_maskTargetId;
         m_brushEffectId = m_maskEffectId;
         m_brushPositions.clear();
         m_brushPositions.push_back(documentPoint);
         grabMouse();
-        emit effectMaskPreviewChanged(m_brushTargetId, m_brushEffectId, currentMaskStroke());
+        emit effectMaskPreviewChanged(m_brushTargetId,
+                                      m_brushEffectId,
+                                      currentMaskStroke(),
+                                      m_brushSpatialRevision);
         update();
         return true;
     }
@@ -582,6 +586,7 @@ bool EditorCanvas::handleCanvasMousePress(Qt::MouseButton button,
         m_cursorPosition = widgetPosition.toPoint();
         m_hasCursorPosition = true;
         m_brushing = true;
+        m_brushSpatialRevision = m_sceneGeometry.spatialRevision;
         m_brushTargetId = hitTestObject(documentPosition(widgetPosition));
         if (m_brushTargetId.isEmpty()) {
             m_brushTargetId = m_activeObjectId;
@@ -646,7 +651,10 @@ void EditorCanvas::mouseMoveEvent(QMouseEvent* event)
         if (m_brushPositions.isEmpty() || m_brushPositions.last() != position) {
             m_brushPositions.push_back(position);
             if (m_tool == EditorTool::EffectMask) {
-                emit effectMaskPreviewChanged(m_brushTargetId, m_brushEffectId, currentMaskStroke());
+                emit effectMaskPreviewChanged(m_brushTargetId,
+                                              m_brushEffectId,
+                                              currentMaskStroke(),
+                                              m_brushSpatialRevision);
             } else {
                 updateBrushPreview();
             }
@@ -700,9 +708,11 @@ void EditorCanvas::mouseReleaseEvent(QMouseEvent* event)
         if (m_transformPreview.position != m_transformBefore.position
             || !qFuzzyCompare(m_transformPreview.rotation, m_transformBefore.rotation)
             || m_transformPreview.scale != m_transformBefore.scale) {
-            emit objectTransformCommitted(m_transformObjectId, m_transformPreview);
+            emit objectTransformCommitted(
+                m_transformObjectId, m_transformPreview, m_transformSpatialRevision);
         }
         m_transformObjectId.clear();
+        m_transformSpatialRevision = 0;
         update();
         event->accept();
         return;
@@ -718,13 +728,15 @@ void EditorCanvas::mouseReleaseEvent(QMouseEvent* event)
         if (m_tool == EditorTool::EffectMask) {
             emit effectMaskPreviewCleared();
             if (!maskStroke.points.isEmpty()) {
-            emit effectMaskStrokeReady(targetId, m_brushEffectId, maskStroke);
+                emit effectMaskStrokeReady(
+                    targetId, m_brushEffectId, maskStroke, m_brushSpatialRevision);
             }
         } else if (!stroke.samples.isEmpty()) {
-            emit deformationStrokeReady(targetId, stroke);
+            emit deformationStrokeReady(targetId, stroke, m_brushSpatialRevision);
         }
         m_brushTargetId.clear();
         m_brushEffectId.clear();
+        m_brushSpatialRevision = 0;
         updateCursorShape();
         update();
         event->accept();
@@ -743,6 +755,9 @@ void EditorCanvas::keyPressEvent(QKeyEvent* event)
             m_movingObjects = false;
             m_transforming = false;
             m_sceneGeometry = cancelTransform ? m_sceneBeforeTransform : m_sceneBeforeMove;
+            if (cancelTransform) {
+                m_transformSpatialRevision = 0;
+            }
             releaseMouse();
             update();
         }
@@ -919,20 +934,11 @@ DeformationStroke EditorCanvas::currentStroke() const
     DeformationStroke stroke;
     stroke.mode = m_brushMode;
     stroke.target = m_brushTarget;
-    const SceneObjectGeometry* object = m_sceneGeometry.objectById(m_brushTargetId);
-    stroke.radius = object ? object->frame.pageRadiusToLocalEquivalentArea(m_brushRadius) : m_brushRadius;
+    stroke.coordinateSpace = DeformationCoordinateSpace::PageInput;
+    stroke.radius = m_brushRadius;
     stroke.strength = m_brushStrength;
     stroke.hardness = m_brushHardness;
-    QVector<QPointF> localPositions;
-    localPositions.reserve(m_brushPositions.size());
-    if (object) {
-        for (const QPointF& position : m_brushPositions) {
-            localPositions.push_back(object->frame.pagePointToLocal(position));
-        }
-    } else {
-        localPositions = m_brushPositions;
-    }
-    stroke.samples = resampleBrushStroke(localPositions,
+    stroke.samples = resampleBrushStroke(m_brushPositions,
                                          qMax<qreal>(0.5, stroke.radius * 0.25), 1.0, 4096);
     return stroke;
 }
@@ -952,7 +958,7 @@ void EditorCanvas::updateBrushPreview()
 {
     const DeformationStroke stroke = currentStroke();
     if (!stroke.samples.isEmpty()) {
-        emit deformationPreviewChanged(m_brushTargetId, stroke);
+        emit deformationPreviewChanged(m_brushTargetId, stroke, m_brushSpatialRevision);
     }
 }
 
@@ -966,6 +972,7 @@ void EditorCanvas::cancelBrushStroke()
     m_brushPositions.clear();
     m_brushTargetId.clear();
     m_brushEffectId.clear();
+    m_brushSpatialRevision = 0;
     emit deformationPreviewCleared();
     if (m_tool == EditorTool::EffectMask) {
         emit effectMaskPreviewCleared();
@@ -1099,6 +1106,7 @@ bool EditorCanvas::beginTransform(const QPointF& documentPoint)
     m_rotatingObject = rotation;
     m_scaleHandle = handle;
     m_transformObjectId = object->objectId;
+    m_transformSpatialRevision = m_sceneGeometry.spatialRevision;
     m_sceneBeforeTransform = m_sceneGeometry;
     m_transformBefore = object->transform;
     m_transformPreview = m_transformBefore;
@@ -1153,15 +1161,17 @@ void EditorCanvas::applyPreviewTransform(SceneObjectGeometry* preview,
     const ObjectFrame frame = ObjectFrame::fromTransform(transform,
                                                           source.frame.baseLocalBounds,
                                                           source.frame.currentLocalBounds);
+    ObjectFrame revisionedFrame = frame;
+    revisionedFrame.spatialRevision = source.frame.spatialRevision;
     // Scene geometry is in page coordinates.  Always reconstruct the local
     // geometry from the unchanged drag-start frame before applying the one
     // authoritative preview transform.  Incremental page-space deltas were
     // the source of rotation/move drift when an object already had rotation.
     preview->geometry = source.geometry;
     preview->geometry.transformAll(source.frame.pageToLocal);
-    preview->geometry.transformAll(frame.localToPage);
-    preview->frame = frame;
-    preview->visualBounds = frame.pageAabb();
+    preview->geometry.transformAll(revisionedFrame.localToPage);
+    preview->frame = revisionedFrame;
+    preview->visualBounds = revisionedFrame.pageAabb();
     preview->transform = transform;
 }
 

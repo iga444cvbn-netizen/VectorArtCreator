@@ -69,9 +69,10 @@ void flattenCubic(const QPointF& p0,
                   qreal toleranceSquared,
                   int depth,
                   int maxPoints,
-                  QVector<QPointF>* points)
+                  QVector<QPointF>* points,
+                  const WorkControl& work)
 {
-    if (!points) {
+    if (!points || !work.consume()) {
         return;
     }
     if (points->size() >= maxPoints) {
@@ -92,13 +93,16 @@ void flattenCubic(const QPointF& p0,
     const QPointF p012 = (p01 + p12) * 0.5;
     const QPointF p123 = (p12 + p23) * 0.5;
     const QPointF midpoint = (p012 + p123) * 0.5;
-    flattenCubic(p0, p01, p012, midpoint, toleranceSquared, depth + 1, maxPoints, points);
-    flattenCubic(midpoint, p123, p23, p3, toleranceSquared, depth + 1, maxPoints, points);
+    flattenCubic(p0, p01, p012, midpoint, toleranceSquared, depth + 1,
+                 maxPoints, points, work);
+    flattenCubic(midpoint, p123, p23, p3, toleranceSquared, depth + 1,
+                 maxPoints, points, work);
 }
 
 QVector<QPointF> simplifyContour(const QVector<QPointF>& points,
                                  bool closed,
-                                 qreal tolerance)
+                                 qreal tolerance,
+                                 const WorkControl& work)
 {
     if (points.size() < 3) {
         return points;
@@ -108,6 +112,9 @@ QVector<QPointF> simplifyContour(const QVector<QPointF>& points,
     QVector<QPointF> result;
     result.reserve(points.size());
     for (const QPointF& point : points) {
+        if (!work.consume()) {
+            return {};
+        }
         if (result.isEmpty() || distanceSquared(result.last(), point) > minimumDistanceSquared) {
             result.push_back(point);
         }
@@ -128,6 +135,9 @@ QVector<QPointF> simplifyContour(const QVector<QPointF>& points,
         const int begin = closed ? 0 : 1;
         const int end = closed ? count : count - 1;
         for (int index = begin; index < end; ++index) {
+            if (!work.consume()) {
+                return {};
+            }
             const int previousIndex = (index - 1 + count) % count;
             const int nextIndex = (index + 1) % count;
             if (!closed && (index == 0 || index == count - 1)) {
@@ -149,7 +159,8 @@ QVector<QPointF> simplifyContour(const QVector<QPointF>& points,
 
 QVector<SampledContour> ContourSampler::samplePath(const QPainterPath& path,
                                                    qreal tolerance,
-                                                   int maxPointsPerContour)
+                                                   int maxPointsPerContour,
+                                                   const WorkControl& work)
 {
     QVector<SampledContour> contours;
     if (path.isEmpty()) {
@@ -177,7 +188,7 @@ QVector<SampledContour> ContourSampler::samplePath(const QPainterPath& path,
         }
         SampledContour contour;
         contour.closed = closed;
-        contour.points = simplifyContour(points, closed, boundedTolerance);
+        contour.points = simplifyContour(points, closed, boundedTolerance, work);
         if (contour.points.size() >= (closed ? 3 : 2)) {
             contours.push_back(std::move(contour));
         }
@@ -185,6 +196,9 @@ QVector<SampledContour> ContourSampler::samplePath(const QPainterPath& path,
     };
 
     for (int index = 0; index < path.elementCount(); ++index) {
+        if (!work.consume()) {
+            break;
+        }
         const QPainterPath::Element element = path.elementAt(index);
         switch (element.type) {
         case QPainterPath::MoveToElement:
@@ -218,7 +232,8 @@ QVector<SampledContour> ContourSampler::samplePath(const QPainterPath& path,
                          boundedTolerance * boundedTolerance,
                          0,
                          boundedMaximum,
-                         &points);
+                         &points,
+                         work);
             current = end;
             index += 2;
             break;
@@ -233,18 +248,25 @@ QVector<SampledContour> ContourSampler::samplePath(const QPainterPath& path,
 
 QPainterPath ContourSampler::reconstructPath(const QVector<SampledContour>& contours,
                                              Qt::FillRule fillRule,
-                                             qreal simplificationTolerance)
+                                             qreal simplificationTolerance,
+                                             const WorkControl& work)
 {
     QPainterPath result;
     result.setFillRule(fillRule);
     for (const SampledContour& contour : contours) {
+        if (!work.consume()) {
+            break;
+        }
         const QVector<QPointF> points = simplifyContour(
-            contour.points, contour.closed, qMax<qreal>(0.01, simplificationTolerance));
+            contour.points, contour.closed, qMax<qreal>(0.01, simplificationTolerance), work);
         if (points.size() < (contour.closed ? 3 : 2)) {
             continue;
         }
         result.moveTo(points.first());
         for (int index = 1; index < points.size(); ++index) {
+            if (!work.consume()) {
+                return result;
+            }
             result.lineTo(points[index]);
         }
         if (contour.closed) {

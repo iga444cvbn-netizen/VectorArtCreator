@@ -17,6 +17,7 @@ endif()
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Test Concurrent)
 
 set(CORE_SOURCES
+    src/core/evaluation/work_control.cpp
     src/core/document/document.cpp
     src/core/scene/scene_geometry.cpp
     src/core/scene/object_frame.cpp
@@ -28,6 +29,7 @@ set(CORE_SOURCES
     src/core/text/text_engine.cpp
     src/core/geometry/vector_geometry.cpp
     src/core/effects/effect.cpp
+    src/core/effects/effect_mask_distance.cpp
     src/core/effects/effect_registry.cpp
     src/core/effects/text_range_rebaser.cpp
     src/core/effects/effect_stack.cpp

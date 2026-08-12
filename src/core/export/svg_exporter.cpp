@@ -15,12 +15,15 @@ QString SvgExporter::number(qreal value)
     return QString::number(value, 'f', 4);
 }
 
-QString SvgExporter::pathData(const QPainterPath& path)
+QString SvgExporter::pathData(const QPainterPath& path, const WorkControl& work)
 {
     QString data;
     data.reserve(path.elementCount() * 24);
 
     for (int index = 0; index < path.elementCount(); ++index) {
+        if (!work.consume()) {
+            return {};
+        }
         const QPainterPath::Element element = path.elementAt(index);
         switch (element.type) {
         case QPainterPath::MoveToElement:
@@ -53,6 +56,7 @@ bool SvgExporter::exportGeometry(const Document& document,
                                  const QString& filePath,
                                  QString* error) const
 {
+    const WorkControl work = WorkControl::withBudget();
     const TextObject& textObject = document.primaryTextObject();
     QRectF viewBounds = geometry.bounds;
     if (viewBounds.isEmpty()) {
@@ -85,11 +89,31 @@ bool SvgExporter::exportGeometry(const Document& document,
     xml.writeAttribute(QStringLiteral("width"), number(viewBounds.width()));
     xml.writeAttribute(QStringLiteral("height"), number(viewBounds.height()));
 
-    for (const GeometryPiece& piece : geometry.pieces) { xml.writeStartElement(QStringLiteral("path")); xml.writeAttribute(QStringLiteral("d"),pathData(piece.path)); xml.writeAttribute(QStringLiteral("fill"),textObject.fill.name(QColor::HexRgb)); xml.writeAttribute(QStringLiteral("fill-opacity"),number(textObject.fill.alphaF()*piece.opacityMultiplier)); xml.writeAttribute(QStringLiteral("fill-rule"),QStringLiteral("nonzero")); xml.writeEndElement(); }
+    for (const GeometryPiece& piece : geometry.pieces) {
+        if (!work.consume()) {
+            if (error) *error = work.interruptionMessage();
+            return false;
+        }
+        xml.writeStartElement(QStringLiteral("path"));
+        xml.writeAttribute(QStringLiteral("d"), pathData(piece.path, work));
+        if (!work.isRunning()) {
+            if (error) *error = work.interruptionMessage();
+            return false;
+        }
+        xml.writeAttribute(QStringLiteral("fill"), textObject.fill.name(QColor::HexRgb));
+        xml.writeAttribute(QStringLiteral("fill-opacity"),
+                           number(textObject.fill.alphaF() * piece.opacityMultiplier));
+        xml.writeAttribute(QStringLiteral("fill-rule"), QStringLiteral("nonzero"));
+        xml.writeEndElement();
+    }
 
     xml.writeEndElement();
     xml.writeEndDocument();
 
+    if (!work.consume()) {
+        if (error) *error = work.interruptionMessage();
+        return false;
+    }
     if (!file.commit()) {
         if (error) {
             *error = QStringLiteral("Could not commit SVG file: %1").arg(file.errorString());
@@ -102,7 +126,8 @@ bool SvgExporter::exportGeometry(const Document& document,
 bool SvgExporter::exportScene(const Document& document,
                               const SceneGeometry& scene,
                               const QString& filePath,
-                              QString* error) const
+                              QString* error,
+                              const WorkControl& work) const
 {
     Q_UNUSED(document);
     QRectF viewBounds = scene.pageSize.isEmpty() ? scene.bounds : QRectF(QPointF(0.0, 0.0), scene.pageSize);
@@ -134,14 +159,39 @@ bool SvgExporter::exportScene(const Document& document,
     xml.writeAttribute(QStringLiteral("height"), number(viewBounds.height()));
 
     for (const SceneObjectGeometry& object : scene.objects) {
+        if (!work.consume()) {
+            if (error) *error = work.interruptionMessage();
+            return false;
+        }
         if (!object.visible || !object.geometry.hasVisibleGeometry()) {
             continue;
         }
-        for (const GeometryPiece& piece : object.geometry.pieces) { xml.writeStartElement(QStringLiteral("path")); xml.writeAttribute(QStringLiteral("id"), object.objectId); xml.writeAttribute(QStringLiteral("d"),pathData(piece.path)); xml.writeAttribute(QStringLiteral("fill"),object.fill.name(QColor::HexRgb)); xml.writeAttribute(QStringLiteral("fill-opacity"),number(object.fill.alphaF()*piece.opacityMultiplier)); xml.writeAttribute(QStringLiteral("fill-rule"),QStringLiteral("nonzero")); xml.writeEndElement(); }
+        for (const GeometryPiece& piece : object.geometry.pieces) {
+            if (!work.consume()) {
+                if (error) *error = work.interruptionMessage();
+                return false;
+            }
+            xml.writeStartElement(QStringLiteral("path"));
+            xml.writeAttribute(QStringLiteral("id"), object.objectId);
+            xml.writeAttribute(QStringLiteral("d"), pathData(piece.path, work));
+            if (!work.isRunning()) {
+                if (error) *error = work.interruptionMessage();
+                return false;
+            }
+            xml.writeAttribute(QStringLiteral("fill"), object.fill.name(QColor::HexRgb));
+            xml.writeAttribute(QStringLiteral("fill-opacity"),
+                               number(object.fill.alphaF() * piece.opacityMultiplier));
+            xml.writeAttribute(QStringLiteral("fill-rule"), QStringLiteral("nonzero"));
+            xml.writeEndElement();
+        }
     }
 
     xml.writeEndElement();
     xml.writeEndDocument();
+    if (!work.consume()) {
+        if (error) *error = work.interruptionMessage();
+        return false;
+    }
     if (!file.commit()) {
         if (error) {
             *error = QStringLiteral("Could not commit SVG file: %1").arg(file.errorString());
@@ -151,7 +201,10 @@ bool SvgExporter::exportScene(const Document& document,
     return true;
 }
 
-bool SvgExporter::exportPayload(const VectorExportPayload& payload, const QString& filePath, QString* error) const
+bool SvgExporter::exportPayload(const VectorExportPayload& payload,
+                                const QString& filePath,
+                                QString* error,
+                                const WorkControl& work) const
 {
     if (payload.records.isEmpty() || !payload.bounds.isValid() || payload.bounds.isEmpty()) {
         if (error) *error = QStringLiteral("The export payload has no valid vector geometry.");
@@ -175,8 +228,16 @@ bool SvgExporter::exportPayload(const VectorExportPayload& payload, const QStrin
     xml.writeAttribute(QStringLiteral("width"), number(bounds.width()));
     xml.writeAttribute(QStringLiteral("height"), number(bounds.height()));
     for (const VectorExportRecord& record : payload.records) {
+        if (!work.consume()) {
+            if (error) *error = work.interruptionMessage();
+            return false;
+        }
         xml.writeStartElement(QStringLiteral("path"));
-        xml.writeAttribute(QStringLiteral("d"), pathData(record.path));
+        xml.writeAttribute(QStringLiteral("d"), pathData(record.path, work));
+        if (!work.isRunning()) {
+            if (error) *error = work.interruptionMessage();
+            return false;
+        }
         xml.writeAttribute(QStringLiteral("fill"), record.fill.name(QColor::HexRgb));
         xml.writeAttribute(QStringLiteral("fill-opacity"), number(record.opacity));
         xml.writeAttribute(QStringLiteral("fill-rule"), QStringLiteral("nonzero"));
@@ -184,6 +245,10 @@ bool SvgExporter::exportPayload(const VectorExportPayload& payload, const QStrin
     }
     xml.writeEndElement();
     xml.writeEndDocument();
+    if (!work.consume()) {
+        if (error) *error = work.interruptionMessage();
+        return false;
+    }
     if (!file.commit()) {
         if (error) *error = QStringLiteral("Could not commit SVG file: %1").arg(file.errorString());
         return false;

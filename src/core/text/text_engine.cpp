@@ -10,8 +10,10 @@
 #include <QTextLayout>
 #include <QTextOption>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace vt {
 
@@ -111,6 +113,35 @@ QString fallbackWarning(const ShapedText& result)
 
 } // namespace
 
+QVector<LogicalClusterSpan> TextEngine::logicalClusterSpans(
+    int lineLength, const QVector<QVector<int>>& runStringIndexes)
+{
+    const int boundedLineLength = qMax(0, lineLength);
+    QVector<int> boundaries;
+    for (const QVector<int>& run : runStringIndexes) {
+        for (int start : run) {
+            if (start >= 0 && start < boundedLineLength) {
+                boundaries.push_back(start);
+            }
+        }
+    }
+    std::sort(boundaries.begin(), boundaries.end());
+    boundaries.erase(std::unique(boundaries.begin(), boundaries.end()), boundaries.end());
+
+    QVector<LogicalClusterSpan> spans;
+    spans.reserve(boundaries.size());
+    for (int index = 0; index < boundaries.size(); ++index) {
+        const int start = boundaries.at(index);
+        const int end = index + 1 < boundaries.size()
+            ? boundaries.at(index + 1)
+            : boundedLineLength;
+        if (end > start) {
+            spans.push_back({start, end - start});
+        }
+    }
+    return spans;
+}
+
 QString TextEngine::cacheKey(const TextObject& object) const
 {
     const FontDescriptor& font = object.font;
@@ -135,8 +166,11 @@ QString TextEngine::cacheKey(const TextObject& object) const
         + QString::number(object.typography.lineSpacing, 'g', 16);
 }
 
-ShapedText TextEngine::shape(const TextObject& object)
+ShapedText TextEngine::shape(const TextObject& object, const WorkControl& work)
 {
+    if (!work.consume(qMax(1, object.sourceText.size()))) {
+        return {};
+    }
     const QString key = cacheKey(object);
     if (m_cachedResult.has_value() && m_cachedKey == key) {
         return *m_cachedResult;
@@ -178,6 +212,9 @@ ShapedText TextEngine::shape(const TextObject& object)
     QVector<int> lineGlyphCounts;
     qreal lineTop = 0.0;
     auto appendLine = [&](const QString& lineText, int sourceStart) {
+        if (!work.consume(qMax(1, lineText.size()))) {
+            return;
+        }
         const int lineIndex = result.lineBounds.size();
         QTextLayout lineLayout(lineText, shapedFont);
         lineLayout.setTextOption(option);
@@ -215,6 +252,39 @@ ShapedText TextEngine::shape(const TextObject& object)
                 }
             }
         }
+        QVector<QVector<int>> runClusterStarts;
+        runClusterStarts.reserve(runs.size());
+        for (const QGlyphRun& run : runs) {
+            if (!work.consume()) {
+                return;
+            }
+            const QList<quint32> glyphIndexes = run.glyphIndexes();
+            const QList<qsizetype> stringIndexes = run.stringIndexes();
+            if (stringIndexes.size() != glyphIndexes.size()) {
+                continue;
+            }
+            if (!work.consume(qMax<qsizetype>(1, stringIndexes.size()))) {
+                return;
+            }
+            QVector<int> starts;
+            starts.reserve(stringIndexes.size());
+            for (qsizetype start : stringIndexes) {
+                if (start >= 0 && start < lineText.size()) {
+                    starts.push_back(static_cast<int>(start));
+                }
+            }
+            runClusterStarts.push_back(std::move(starts));
+        }
+        const QVector<LogicalClusterSpan> clusterSpans = logicalClusterSpans(
+            static_cast<int>(lineText.size()), runClusterStarts);
+        const auto clusterLengthFor = [&clusterSpans](int start) {
+            const auto found = std::lower_bound(
+                clusterSpans.cbegin(), clusterSpans.cend(), start,
+                [](const LogicalClusterSpan& span, int value) { return span.start < value; });
+            return found != clusterSpans.cend() && found->start == start
+                ? found->length
+                : 1;
+        };
         const qreal trackingDistance = object.typography.trackingEm * result.resolvedEmSize;
         for (const QGlyphRun& run : runs) {
             const QList<quint32> glyphIndexes = run.glyphIndexes();
@@ -232,6 +302,9 @@ ShapedText TextEngine::shape(const TextObject& object)
                 recordFallbackFont(&result, rawFont, glyphIndexes.size());
             }
             for (int i = 0; i < glyphIndexes.size(); ++i) {
+                if (!work.consume()) {
+                    return;
+                }
                 const QPointF rawPosition = positions.value(i, QPointF());
                 const int lineOrdinal = lineGlyphCounts[lineIndex]++;
                 const bool hasClusterIndexes = stringIndexes.size() == glyphIndexes.size();
@@ -241,15 +314,9 @@ ShapedText TextEngine::shape(const TextObject& object)
                 const int clusterStart = localClusterStart >= 0
                     ? sourceStart + static_cast<int>(localClusterStart)
                     : -1;
-                int clusterLength = 1;
-                if (localClusterStart >= 0 && i + 1 < stringIndexes.size()) {
-                    const qsizetype nextStart = stringIndexes.at(i + 1);
-                    if (nextStart > localClusterStart) {
-                        clusterLength = qMax(1, static_cast<int>(nextStart - localClusterStart));
-                    }
-                } else if (localClusterStart >= 0) {
-                    clusterLength = qMax(1, lineText.size() - static_cast<int>(localClusterStart));
-                }
+                const int clusterLength = localClusterStart >= 0
+                    ? clusterLengthFor(static_cast<int>(localClusterStart))
+                    : 1;
                 ShapedGlyph glyph;
                 glyph.glyphIndex = glyphIndexes[i];
                 glyph.rawFont = rawFont;
@@ -285,6 +352,9 @@ ShapedText TextEngine::shape(const TextObject& object)
                 lineText.chop(1);
             }
             appendLine(lineText, sourceStart);
+            if (!work.isRunning()) {
+                break;
+            }
             if (newline < 0) {
                 break;
             }
@@ -309,8 +379,10 @@ ShapedText TextEngine::shape(const TextObject& object)
         result.error = QStringLiteral("Qt did not return shaped glyph data for the current text and font.");
     }
 
-    m_cachedKey = key;
-    m_cachedResult = result;
+    if (work.isRunning()) {
+        m_cachedKey = key;
+        m_cachedResult = result;
+    }
     return result;
 }
 
@@ -323,13 +395,17 @@ void TextEngine::clearCache()
 VectorGeometry GlyphGeometryBuilder::build(const ShapedText& shaped,
                                            qreal fallbackReferenceHeight,
                                            bool underline,
-                                           bool strikeOut)
+                                           bool strikeOut,
+                                           const WorkControl& work)
 {
     VectorGeometry geometry;
     QRectF visibleBounds;
     bool hasVisibleBounds = false;
 
     for (const ShapedGlyph& glyph : shaped.glyphs) {
+        if (!work.consume()) {
+            break;
+        }
         GeometryPiece piece;
         piece.sourceGlyphIndex = glyph.ordinal;
         piece.sourceClusterStart = glyph.clusterStart;
@@ -339,6 +415,9 @@ VectorGeometry GlyphGeometryBuilder::build(const ShapedText& shaped,
         piece.originalAnchor = glyph.position;
 
         QPainterPath glyphPath = glyph.rawFont.pathForGlyph(glyph.glyphIndex);
+        if (!work.consume(qMax(1, glyphPath.elementCount()))) {
+            break;
+        }
         QTransform placement;
         Q_UNUSED(placement.translate(glyph.position.x(), glyph.position.y()));
         piece.path = placement.map(glyphPath);
@@ -375,6 +454,9 @@ VectorGeometry GlyphGeometryBuilder::build(const ShapedText& shaped,
     };
     if (underline || strikeOut) {
         for (int lineIndex = 0; lineIndex < shaped.lineBounds.size(); ++lineIndex) {
+            if (!work.consume()) {
+                break;
+            }
             const QRectF line = shaped.lineBounds.at(lineIndex);
             const qreal thickness = qMax<qreal>(1.0, line.height() * 0.055);
             if (underline) {

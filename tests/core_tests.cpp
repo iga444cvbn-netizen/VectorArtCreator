@@ -2,6 +2,7 @@
 #include "core/deformation/contour_sampler.h"
 #include "core/deformation/manual_deformation.h"
 #include "core/effects/glyph_jitter_effect.h"
+#include "core/effects/effect_mask_distance.h"
 #include "core/effects/effect_registry.h"
 #include "core/effects/text_range_rebaser.h"
 #include "core/effects/procedural_effect.h"
@@ -33,6 +34,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPainterPath>
+#include <QPolygonF>
 #include <QSet>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -210,6 +212,8 @@ private slots:
     void documentHierarchyHasStableIds();
     void legacyFlatProjectMigratesToPageAndLayer();
     void multilineShapingPreservesLinesAndClusters();
+    void logicalClusterSpansUseWholeLineContext();
+    void mixedUtf16ShapingUsesGlobalClusterSpans();
     void scopedEffectsOnlyTouchSelectedClusters();
     void proceduralEffectsAreDeterministicAndAvailable();
     void selectionModelSupportsSingleAndRangeSelection();
@@ -234,6 +238,7 @@ private slots:
     void fontDescriptorTraitsAndExactStylesRemainConsistent();
     void transformScaleDomainAndPivotRoundTrip();
     void maskUsesPieceGeometryWhenAnchorIsOutsideBrush();
+    void contourMaskDistanceRejectsHolesAndConcavities();
     void fontCacheEpochInvalidatesWorkerShapingKeys();
     void effectRegistryDescriptorsAgreeWithFactories();
     void builtInPresetCatalogParses();
@@ -1471,6 +1476,70 @@ void CoreTests::multilineShapingPreservesLinesAndClusters()
     QVERIFY(geometry.hasVisibleGeometry());
 }
 
+void CoreTests::logicalClusterSpansUseWholeLineContext()
+{
+    // UTF-16 layout: Latin [0], Cyrillic [1], base+combining mark [2,4),
+    // surrogate pair [4,6), ligature-capable "fi" [6,8), Latin [8]. The
+    // starts are intentionally split and out of logical order across two
+    // simulated physical-font/bidi runs.
+    const QVector<LogicalClusterSpan> spans = TextEngine::logicalClusterSpans(
+        9, {{0, 2, 6, 8}, {4, 1, 2}});
+    const QVector<LogicalClusterSpan> expected = {
+        {0, 1}, {1, 1}, {2, 2}, {4, 2}, {6, 2}, {8, 1}};
+    QCOMPARE(spans.size(), expected.size());
+    for (int index = 0; index < expected.size(); ++index) {
+        QCOMPARE(spans.at(index).start, expected.at(index).start);
+        QCOMPARE(spans.at(index).length, expected.at(index).length);
+    }
+
+    // The last glyph in either run must stop at the next logical boundary,
+    // never claim the remainder of the line merely because its run ended.
+    QCOMPARE(spans.at(1).length, 1);
+    QCOMPARE(spans.at(3).length, 2);
+    EffectScope range;
+    range.kind = EffectScopeKind::TextRange;
+    range.start = 4;
+    range.end = 6;
+    QVERIFY(range.includes(spans.at(3).start, spans.at(3).length));
+    QVERIFY(!range.includes(spans.at(2).start, spans.at(2).length));
+    QVERIFY(!range.includes(spans.at(4).start, spans.at(4).length));
+}
+
+void CoreTests::mixedUtf16ShapingUsesGlobalClusterSpans()
+{
+    const QString source = QStringLiteral("A\u0416e\u0301\U0001F600fi\u05D0\u05D1Z");
+    TextObject object = configuredText(source);
+    TextEngine engine;
+    const ShapedText shaped = engine.shape(object);
+    QVERIFY2(shaped.error.isEmpty(), qPrintable(shaped.error));
+    QVERIFY(!shaped.glyphs.isEmpty());
+
+    QVector<int> starts;
+    for (const ShapedGlyph& glyph : shaped.glyphs) {
+        if (glyph.lineIndex == 0 && glyph.clusterStart >= 0) starts.push_back(glyph.clusterStart);
+    }
+    std::sort(starts.begin(), starts.end());
+    starts.erase(std::unique(starts.begin(), starts.end()), starts.end());
+    QVERIFY(starts.size() >= 5);
+    for (const ShapedGlyph& glyph : shaped.glyphs) {
+        if (glyph.lineIndex != 0 || glyph.clusterStart < 0) continue;
+        const auto position = std::lower_bound(starts.cbegin(), starts.cend(), glyph.clusterStart);
+        QVERIFY(position != starts.cend() && *position == glyph.clusterStart);
+        const int index = static_cast<int>(position - starts.cbegin());
+        const int next = index + 1 < starts.size() ? starts.at(index + 1) : source.size();
+        QCOMPARE(glyph.clusterLength, next - glyph.clusterStart);
+    }
+
+    const VectorGeometry geometry = GlyphGeometryBuilder::build(
+        shaped, object.typography.fontSize);
+    for (const GeometryPiece& piece : geometry.pieces) {
+        if (piece.sourceGlyphIndex < 0 || piece.sourceGlyphIndex >= shaped.glyphs.size()) continue;
+        const ShapedGlyph& glyph = shaped.glyphs.at(piece.sourceGlyphIndex);
+        QCOMPARE(piece.sourceClusterStart, glyph.clusterStart);
+        QCOMPARE(piece.sourceClusterLength, glyph.clusterLength);
+    }
+}
+
 void CoreTests::scopedEffectsOnlyTouchSelectedClusters()
 {
     VectorGeometry original = rectangleGeometry();
@@ -2029,6 +2098,44 @@ void CoreTests::maskUsesPieceGeometryWhenAnchorIsOutsideBrush()
     stack.append(effect.clone());
     stack.apply(geometry);
     QVERIFY(geometry.pieces.at(0).anchor.y() > 10.0);
+}
+
+void CoreTests::contourMaskDistanceRejectsHolesAndConcavities()
+{
+    QPainterPath donut;
+    donut.setFillRule(Qt::OddEvenFill);
+    donut.addRect(QRectF(0.0, 0.0, 100.0, 100.0));
+    donut.addRect(QRectF(20.0, 20.0, 60.0, 60.0));
+
+    // This brush stays wholly inside the counter. Its AABB overlaps the glyph,
+    // but it remains far from both actual contours.
+    const QVector<QPointF> throughHole = {QPointF(40.0, 50.0), QPointF(60.0, 50.0)};
+    QCOMPARE(EffectMaskDistance::strokeInfluence(
+                 donut, throughHole, 8.0, 0.5, 1.0), 0.0);
+    QVERIFY(EffectMaskDistance::strokeInfluence(
+                donut, {QPointF(20.0, 35.0), QPointF(20.0, 65.0)}, 8.0, 0.5, 1.0) > 0.99);
+    QVERIFY(EffectMaskDistance::strokeInfluence(
+                donut, {QPointF(10.0, 50.0)}, 2.0, 0.5, 1.0) > 0.99);
+
+    QPainterPath concave;
+    QPolygonF lShape;
+    lShape << QPointF(0.0, 0.0) << QPointF(100.0, 0.0)
+           << QPointF(100.0, 20.0) << QPointF(20.0, 20.0)
+           << QPointF(20.0, 100.0) << QPointF(0.0, 100.0);
+    concave.addPolygon(lShape);
+    concave.closeSubpath();
+    QCOMPARE(EffectMaskDistance::strokeInfluence(
+                 concave, {QPointF(70.0, 70.0)}, 10.0, 0.4, 1.0), 0.0);
+    QVERIFY(EffectMaskDistance::strokeInfluence(
+                concave, {QPointF(20.0, 70.0)}, 10.0, 0.4, 1.0) > 0.99);
+
+    const qreal near = EffectMaskDistance::strokeInfluence(
+        concave, {QPointF(23.0, 70.0)}, 12.0, 0.0, 1.0);
+    const qreal farther = EffectMaskDistance::strokeInfluence(
+        concave, {QPointF(28.0, 70.0)}, 12.0, 0.0, 1.0);
+    QVERIFY(near >= farther);
+    QVERIFY(near >= 0.0 && near <= 1.0);
+    QVERIFY(farther >= 0.0 && farther <= 1.0);
 }
 
 void CoreTests::fontCacheEpochInvalidatesWorkerShapingKeys()

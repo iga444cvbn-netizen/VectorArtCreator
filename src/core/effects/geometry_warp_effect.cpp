@@ -58,7 +58,9 @@ QPointF GeometryWarpEffect::warp(const QPointF& p, const EffectContext& c) const
 void GeometryWarpEffect::apply(VectorGeometry& geometry, const EffectContext& context) const {
     if (qFuzzyIsNull(context.effectiveStrength(*this))) return;
     for (GeometryPiece& piece : geometry.pieces) {
-        for (int i=0;i<piece.path.elementCount();++i) { const auto e=piece.path.elementAt(i); const QPointF q=warp({e.x,e.y},context); piece.path.setElementPositionAt(i,q.x(),q.y()); }
+        if (!context.work.consume()) break;
+        for (int i=0;i<piece.path.elementCount();++i) { if (!context.work.consume()) break; const auto e=piece.path.elementAt(i); const QPointF q=warp({e.x,e.y},context); piece.path.setElementPositionAt(i,q.x(),q.y()); }
+        if (!context.work.isRunning()) break;
         piece.anchor=warp(piece.anchor,context);
     }
     geometry.recomputeBounds();

@@ -34,7 +34,9 @@ public:
 
     [[nodiscard]] bool hasUniqueInstanceIds() const;
 
-    void apply(VectorGeometry& geometry, qreal stackStrength = 1.0) const;
+    void apply(VectorGeometry& geometry,
+               qreal stackStrength = 1.0,
+               const WorkControl& work = WorkControl::unlimited()) const;
 
     [[nodiscard]] QJsonArray toJson() const;
     [[nodiscard]] static EffectStack fromJson(const QJsonArray& array, QString* error);

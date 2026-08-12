@@ -319,12 +319,16 @@ private:
 class SetEffectStackStrengthCommand final : public QUndoCommand {
 public:
     SetEffectStackStrengthCommand(Document& document, QString objectId, qreal oldValue,
-                                  qreal newValue, DocumentChangeCallback onChanged);
+                                  qreal newValue, quint64 mergeToken,
+                                  DocumentChangeCallback onChanged);
     void undo() override;
     void redo() override;
+    [[nodiscard]] int id() const override;
+    bool mergeWith(const QUndoCommand* other) override;
 private:
     qreal m_oldValue = 1.0;
     qreal m_newValue = 1.0;
+    quint64 m_mergeToken = 0;
     Document& m_document;
     QString m_objectId;
     DocumentChangeCallback m_onChanged;

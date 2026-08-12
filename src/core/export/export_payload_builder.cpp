@@ -11,7 +11,8 @@ bool ExportPayloadBuilder::build(const Document&,
                                 ExportScope scope,
                                 const QStringList& selected,
                                 VectorExportPayload* out,
-                                QString* error)
+                                QString* error,
+                                const WorkControl& work)
 {
     if (!out) {
         if (error) *error = QStringLiteral("No export payload destination.");
@@ -30,10 +31,18 @@ bool ExportPayloadBuilder::build(const Document&,
     bool hasBounds = false;
 
     for (const SceneObjectGeometry& object : scene.objects) {
+        if (!work.consume()) {
+            if (error) *error = work.interruptionMessage();
+            return false;
+        }
         if (!object.visible || (scope == ExportScope::Selection && !selected.contains(object.objectId))) {
             continue;
         }
         for (const GeometryPiece& piece : object.geometry.pieces) {
+            if (!work.consume(qMax(1, piece.path.elementCount()))) {
+                if (error) *error = work.interruptionMessage();
+                return false;
+            }
             if (piece.path.isEmpty()) continue;
             const QRectF pieceBounds = piece.path.boundingRect();
             if (!pieceBounds.isValid() || pieceBounds.isEmpty()) continue;
@@ -61,7 +70,13 @@ bool ExportPayloadBuilder::build(const Document&,
         const QPointF origin = result.bounds.topLeft();
         QTransform translate;
         translate.translate(-origin.x(), -origin.y());
-        for (VectorExportRecord& record : result.records) record.path = translate.map(record.path);
+        for (VectorExportRecord& record : result.records) {
+            if (!work.consume(qMax(1, record.path.elementCount()))) {
+                if (error) *error = work.interruptionMessage();
+                return false;
+            }
+            record.path = translate.map(record.path);
+        }
         result.bounds = QRectF(QPointF(), result.bounds.size());
     } else {
         if (page.size.isEmpty() || page.size.width() <= 0.0 || page.size.height() <= 0.0) {
@@ -69,6 +84,10 @@ bool ExportPayloadBuilder::build(const Document&,
             return false;
         }
         result.bounds = QRectF(QPointF(), page.size);
+    }
+    if (!work.consume()) {
+        if (error) *error = work.interruptionMessage();
+        return false;
     }
     *out = std::move(result);
     return true;
