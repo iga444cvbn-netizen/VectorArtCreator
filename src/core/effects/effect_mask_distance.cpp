@@ -12,6 +12,22 @@ namespace vt {
 
 namespace {
 
+bool finitePoint(const QPointF& point)
+{
+    return std::isfinite(point.x()) && std::isfinite(point.y());
+}
+
+bool finitePath(const QPainterPath& path)
+{
+    for (int index = 0; index < path.elementCount(); ++index) {
+        const QPainterPath::Element element = path.elementAt(index);
+        if (!std::isfinite(element.x) || !std::isfinite(element.y)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 qreal pointSegmentDistance(const QPointF& point, const QPointF& start, const QPointF& end)
 {
     const QPointF segment = end - start;
@@ -47,12 +63,23 @@ qreal EffectMaskDistance::minimumContourDistance(const QPainterPath& path,
                                                  qreal flattenTolerance,
                                                  const WorkControl& work)
 {
-    if (path.isEmpty() || brushPoints.isEmpty()) {
-        return std::numeric_limits<qreal>::infinity();
+    const qreal infinity = std::numeric_limits<qreal>::infinity();
+    if (path.isEmpty() || brushPoints.isEmpty()
+        || !std::isfinite(flattenTolerance) || flattenTolerance <= 0.0
+        || !finitePath(path)) {
+        return infinity;
+    }
+    for (const QPointF& brushPoint : brushPoints) {
+        if (!finitePoint(brushPoint)) {
+            return infinity;
+        }
+    }
+    if (!work.isRunning()) {
+        return infinity;
     }
     for (const QPointF& brushPoint : brushPoints) {
         if (!work.consume(qMax(1, path.elementCount()))) {
-            return std::numeric_limits<qreal>::infinity();
+            return infinity;
         }
         // Distance is to the painted fill, not merely its outline. Counters and
         // concave gaps remain outside according to the path's fill rule.
@@ -62,17 +89,20 @@ qreal EffectMaskDistance::minimumContourDistance(const QPainterPath& path,
     }
     const QVector<SampledContour> contours = ContourSampler::samplePath(
         path, qBound<qreal>(0.02, flattenTolerance, 1.0), 8192, work);
-    qreal minimum = std::numeric_limits<qreal>::infinity();
+    if (!work.isRunning()) {
+        return infinity;
+    }
+    qreal minimum = infinity;
     for (const SampledContour& contour : contours) {
         if (!work.consume()) {
-            return minimum;
+            return infinity;
         }
         const int contourSegments = contour.closed
             ? contour.points.size()
             : qMax(0, contour.points.size() - 1);
         for (int contourIndex = 0; contourIndex < contourSegments; ++contourIndex) {
             if (!work.consume()) {
-                return minimum;
+                return infinity;
             }
             const QPointF contourStart = contour.points.at(contourIndex);
             const QPointF contourEnd = contour.points.at(
@@ -84,7 +114,7 @@ qreal EffectMaskDistance::minimumContourDistance(const QPainterPath& path,
             }
             for (int brushIndex = 1; brushIndex < brushPoints.size(); ++brushIndex) {
                 if (!work.consume()) {
-                    return minimum;
+                    return infinity;
                 }
                 minimum = qMin(minimum,
                                segmentDistance(contourStart,
@@ -97,7 +127,7 @@ qreal EffectMaskDistance::minimumContourDistance(const QPainterPath& path,
             }
         }
     }
-    return minimum;
+    return work.isRunning() ? minimum : infinity;
 }
 
 qreal EffectMaskDistance::strokeInfluence(const QPainterPath& path,
@@ -107,12 +137,14 @@ qreal EffectMaskDistance::strokeInfluence(const QPainterPath& path,
                                           qreal opacity,
                                           const WorkControl& work)
 {
-    if (radius <= 0.0 || brushPoints.isEmpty()) {
+    if (!std::isfinite(radius) || radius <= 0.0
+        || !std::isfinite(hardness) || !std::isfinite(opacity)
+        || brushPoints.isEmpty() || !work.isRunning()) {
         return 0.0;
     }
     const qreal distance = minimumContourDistance(
         path, brushPoints, qBound<qreal>(0.02, radius * 0.02, 0.5), work);
-    if (!std::isfinite(distance) || distance >= radius) {
+    if (!work.isRunning() || !std::isfinite(distance) || distance >= radius) {
         return 0.0;
     }
     const qreal boundedHardness = qBound<qreal>(0.0, hardness, 1.0);

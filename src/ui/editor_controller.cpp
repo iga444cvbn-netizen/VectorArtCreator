@@ -356,11 +356,7 @@ void EditorController::newDocument()
     m_effectStackStrengthGestureActive = false;
     m_effectStackStrengthGestureObjectId.clear();
     m_document = Document();
-    m_previewStroke.reset();
-    m_previewObjectId.clear();
-    m_previewEffectMask.reset();
-    m_previewEffectMaskObjectId.clear();
-    m_previewEffectMaskEffectId.clear();
+    resetTransientPreviews();
     m_undoStack.clear();
     m_undoStack.setClean();
     m_selectionModel->clear();
@@ -1948,8 +1944,7 @@ bool EditorController::openProject(const QString& filePath, QString* error)
     m_effectStackStrengthGestureActive = false;
     m_effectStackStrengthGestureObjectId.clear();
     m_document = std::move(loaded);
-    m_previewStroke.reset();
-    m_previewObjectId.clear();
+    resetTransientPreviews();
     m_undoStack.clear();
     m_undoStack.setClean();
     m_textEngine.clearCache();
@@ -2120,6 +2115,11 @@ bool EditorController::normalizeDeformationInput(
 
 void EditorController::onCommandChanged()
 {
+    // A preview belongs to the exact persisted snapshot on which its pointer
+    // stream was captured. Any semantic command (including undo/redo and page
+    // changes) invalidates it; carrying it forward would make a transient
+    // scene look authoritative for a newer document revision.
+    resetTransientPreviews();
     // Undo/redo may remove the object that was selected when the command was
     // created (notably Duplicate).  Never leave the UI model pointing at a
     // deleted object while publishing the next asynchronous scene.
@@ -2128,6 +2128,15 @@ void EditorController::onCommandChanged()
     m_authoritativeFrameCache.clear();
     rebuildScene();
     emit documentChanged();
+}
+
+void EditorController::resetTransientPreviews()
+{
+    m_previewStroke.reset();
+    m_previewObjectId.clear();
+    m_previewEffectMask.reset();
+    m_previewEffectMaskObjectId.clear();
+    m_previewEffectMaskEffectId.clear();
 }
 
 void EditorController::rebuildScene()

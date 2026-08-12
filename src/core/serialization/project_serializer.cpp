@@ -264,7 +264,8 @@ bool validateTextObjectResources(const QJsonObject& object,
     const qint64 geometryUnits = qMax<qint64>(1, sourceUnits);
     const qint64 nestedUnits = saturatedAdd(
         saturatedAdd(effects.size(), objectMaskPoints), objectDeformationSamples);
-    const qint64 objectWork = saturatedMultiply(geometryUnits, saturatedAdd(1, nestedUnits));
+    const qint64 objectWork = ProjectSerializer::saturatedEstimatedObjectWork(
+        geometryUnits, nestedUnits);
     tracker->estimatedWork = saturatedAdd(tracker->estimatedWork, objectWork);
     return checkLimit(tracker->estimatedWork, limits.maximumEstimatedWork,
                       path, QStringLiteral("aggregate estimated geometry work units"), error);
@@ -567,6 +568,13 @@ bool pageFromJson(const QJsonObject& object, Page* page, int formatVersion, QStr
 ProjectResourceLimits ProjectSerializer::resourceLimits()
 {
     return {};
+}
+
+qint64 ProjectSerializer::saturatedEstimatedObjectWork(qint64 sourceUnits,
+                                                       qint64 nestedUnits)
+{
+    return saturatedMultiply(qMax<qint64>(0, sourceUnits),
+                             saturatedAdd(1, qMax<qint64>(0, nestedUnits)));
 }
 
 namespace {

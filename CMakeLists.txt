@@ -14,6 +14,19 @@ if (MSVC)
     add_compile_options(/utf-8)
 endif()
 
+function(vt_enable_first_party_warnings target)
+    if (MSVC)
+        # Keep warnings in VectorArtCreator-owned code fatal while treating Qt
+        # and other angle-bracket includes as external dependencies.
+        target_compile_options(${target} PRIVATE
+            /W4
+            /WX
+            /external:anglebrackets
+            /external:W0
+        )
+    endif()
+endfunction()
+
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Test Concurrent)
 
 set(CORE_SOURCES
@@ -55,6 +68,7 @@ set(CORE_SOURCES
 add_library(vector_typography_core STATIC ${CORE_SOURCES})
 target_include_directories(vector_typography_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vector_typography_core PUBLIC Qt6::Core Qt6::Gui Qt6::Concurrent)
+vt_enable_first_party_warnings(vector_typography_core)
 
 if (WIN32)
     target_compile_definitions(vector_typography_core PUBLIC VT_PLATFORM_WINDOWS=1)
@@ -110,6 +124,7 @@ target_link_libraries(vector_typography_editor PRIVATE
     Qt6::Widgets
     Qt6::Concurrent
 )
+vt_enable_first_party_warnings(vector_typography_editor)
 
 if (WIN32)
     set_target_properties(vector_typography_editor PROPERTIES WIN32_EXECUTABLE TRUE)
@@ -140,6 +155,7 @@ target_link_libraries(vector_typography_test_support PUBLIC
     Qt6::Widgets
     Qt6::Test
 )
+vt_enable_first_party_warnings(vector_typography_test_support)
 
 set(CONTROLLER_TEST_SOURCES
     src/ui/editor_controller.h
@@ -160,12 +176,14 @@ add_executable(vector_typography_tests
 )
 target_include_directories(vector_typography_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vector_typography_tests PRIVATE
+    vector_typography_test_support
     vector_typography_core
     Qt6::Core
     Qt6::Gui
     Qt6::Test
     Qt6::Concurrent
 )
+vt_enable_first_party_warnings(vector_typography_tests)
 
 add_test(NAME vector_typography_core_tests COMMAND vector_typography_tests)
 set_tests_properties(vector_typography_core_tests PROPERTIES LABELS "core")
@@ -175,6 +193,7 @@ add_executable(vector_typography_effect_contract_tests
 )
 target_include_directories(vector_typography_effect_contract_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vector_typography_effect_contract_tests PRIVATE vector_typography_test_support Qt6::Core Qt6::Gui Qt6::Test)
+vt_enable_first_party_warnings(vector_typography_effect_contract_tests)
 add_test(NAME vector_typography_effect_contract_tests COMMAND vector_typography_effect_contract_tests)
 set_tests_properties(vector_typography_effect_contract_tests PROPERTIES LABELS "core;integration;effects")
 
@@ -183,6 +202,7 @@ add_executable(vector_typography_oracle_tests
 )
 target_include_directories(vector_typography_oracle_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vector_typography_oracle_tests PRIVATE vector_typography_test_support Qt6::Core Qt6::Gui Qt6::Test)
+vt_enable_first_party_warnings(vector_typography_oracle_tests)
 add_test(NAME vector_typography_oracle_tests COMMAND vector_typography_oracle_tests)
 set_tests_properties(vector_typography_oracle_tests PROPERTIES LABELS "core;integration;oracle")
 
@@ -192,6 +212,7 @@ add_executable(vector_typography_integration_tests
 )
 target_include_directories(vector_typography_integration_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vector_typography_integration_tests PRIVATE vector_typography_test_support Qt6::Core Qt6::Gui Qt6::Test Qt6::Concurrent)
+vt_enable_first_party_warnings(vector_typography_integration_tests)
 add_test(NAME vector_typography_integration_tests COMMAND vector_typography_integration_tests)
 set_tests_properties(vector_typography_integration_tests PROPERTIES LABELS "integration;undo;serialization;async")
 
@@ -203,6 +224,7 @@ add_executable(vector_typography_ui_smoke_tests
 set_target_properties(vector_typography_ui_smoke_tests PROPERTIES AUTOUIC OFF)
 target_include_directories(vector_typography_ui_smoke_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vector_typography_ui_smoke_tests PRIVATE vector_typography_test_support vector_typography_core Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test Qt6::Concurrent)
+vt_enable_first_party_warnings(vector_typography_ui_smoke_tests)
 add_test(NAME vector_typography_ui_smoke_tests COMMAND vector_typography_ui_smoke_tests)
 set_tests_properties(vector_typography_ui_smoke_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "ui;smoke")
 
@@ -219,12 +241,14 @@ target_link_libraries(vector_typography_ui_tests PRIVATE
     Qt6::Widgets
     Qt6::Test
 )
+vt_enable_first_party_warnings(vector_typography_ui_tests)
 add_test(NAME vector_typography_ui_tests COMMAND vector_typography_ui_tests)
 set_tests_properties(vector_typography_ui_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "ui;regression")
 
 add_executable(vector_typography_windows_tests tests/platform/windows/clipboard_tests.cpp)
 target_include_directories(vector_typography_windows_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vector_typography_windows_tests PRIVATE vector_typography_core Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+vt_enable_first_party_warnings(vector_typography_windows_tests)
 add_test(NAME vector_typography_windows_tests COMMAND vector_typography_windows_tests)
 set_tests_properties(vector_typography_windows_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "windows;export")
 

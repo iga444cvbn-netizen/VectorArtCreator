@@ -194,6 +194,7 @@ signals:
 
 private:
     void onCommandChanged();
+    void resetTransientPreviews();
     void rebuildScene();
     void publishSceneResult(SceneGeometry scene,
                             quint64 generation,

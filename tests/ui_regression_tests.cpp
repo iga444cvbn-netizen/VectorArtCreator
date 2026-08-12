@@ -28,6 +28,7 @@
 #include <QStyle>
 #include <QStyleOptionSpinBox>
 #include <QTest>
+#include <QTemporaryDir>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QWheelEvent>
@@ -495,6 +496,8 @@ void EffectsPanelUiTests::styleIntensityGestureHasImmediateDirtyTruthAndOneUndoS
 
     const QString first = controller->createTextObject(QPointF(100, 100), QStringLiteral("gesture one"));
     const QString second = controller->createTextObject(QPointF(400, 100), QStringLiteral("gesture two"));
+    QVERIFY(!first.isEmpty());
+    QVERIFY(!second.isEmpty());
     QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(first)
                                  && controller->sceneGeometry().objectById(second), 5000);
     controller->selectObject(first);
@@ -545,10 +548,80 @@ void EffectsPanelUiTests::styleIntensityGestureHasImmediateDirtyTruthAndOneUndoS
     QVERIFY(controller->isModified());
     controller->selectObject(second);
     QCOMPARE(controller->selectionModel()->activeObjectId(), second);
+    slider->setValue(650);
+    QCOMPARE(controller->document().objectById(second)->effectStackStrength, 1.3);
     QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, away);
-    QVERIFY(controller->undoStack()->canUndo());
+    QCOMPARE(controller->undoStack()->count(), 2);
+    controller->undoStack()->undo();
+    QCOMPARE(controller->document().objectById(second)->effectStackStrength, 1.0);
+    QVERIFY(controller->document().objectById(first)->effectStackStrength != 1.0);
     controller->undoStack()->undo();
     QCOMPARE(controller->document().objectById(first)->effectStackStrength, 1.0);
+
+    controller->undoStack()->clear();
+    controller->selectObject(first);
+    controller->undoStack()->setClean();
+    const QString multiStart = test::semanticFingerprint(controller->document());
+
+    // Many values inside one physical press/release are one command, while a
+    // second press receives a fresh token and therefore a separate command.
+    QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, start);
+    slider->setValue(575);
+    slider->setValue(700);
+    slider->setValue(825);
+    QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, away);
+    QCOMPARE(controller->document().objectById(first)->effectStackStrength, 1.65);
+    QCOMPARE(controller->undoStack()->count(), 1);
+    const QString firstGestureFinal = test::semanticFingerprint(controller->document());
+    controller->undoStack()->undo();
+    QCOMPARE(test::semanticFingerprint(controller->document()), multiStart);
+    controller->undoStack()->redo();
+    QCOMPARE(test::semanticFingerprint(controller->document()), firstGestureFinal);
+
+    const QPoint current(slider->width() * 4 / 5, slider->height() / 2);
+    QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, current);
+    slider->setValue(750);
+    slider->setValue(625);
+    QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, start);
+    QCOMPARE(controller->document().objectById(first)->effectStackStrength, 1.25);
+    QCOMPARE(controller->undoStack()->count(), 2);
+    const QString secondGestureFinal = test::semanticFingerprint(controller->document());
+    controller->undoStack()->undo();
+    QCOMPARE(test::semanticFingerprint(controller->document()), firstGestureFinal);
+    controller->undoStack()->redo();
+    QCOMPARE(test::semanticFingerprint(controller->document()), secondGestureFinal);
+
+    // A real save is a clean/merge boundary even if invoked while the widget
+    // still holds the mouse interaction. The following gesture must not merge
+    // backward across the clean index.
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, start);
+    slider->setValue(550);
+    const qreal savedStrength =
+        controller->document().objectById(first)->effectStackStrength;
+    QString saveError;
+    QVERIFY2(controller->saveProject(directory.filePath(QStringLiteral("gesture-clean.vtype")),
+                                     &saveError),
+             qPrintable(saveError));
+    QVERIFY(controller->undoStack()->isClean());
+    const int cleanIndex = controller->undoStack()->index();
+    const int cleanCount = controller->undoStack()->count();
+    QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, start);
+
+    QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, start);
+    slider->setValue(725);
+    slider->setValue(775);
+    QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, away);
+    QCOMPARE(controller->undoStack()->count(), cleanCount + 1);
+    QVERIFY(!controller->undoStack()->isClean());
+    const QString afterCleanGesture = test::semanticFingerprint(controller->document());
+    controller->undoStack()->undo();
+    QCOMPARE(controller->document().objectById(first)->effectStackStrength, savedStrength);
+    QCOMPARE(controller->undoStack()->index(), cleanIndex);
+    QVERIFY(controller->undoStack()->isClean());
+    controller->undoStack()->redo();
+    QCOMPARE(test::semanticFingerprint(controller->document()), afterCleanGesture);
 }
 
 void EffectsPanelUiTests::rotatedMarqueeUsesInkAsNarrowPhase()
@@ -648,7 +721,9 @@ void EffectsPanelUiTests::objectRowLayerButtonsOperateOnParentLayer()
     QVERIFY(tree);
     QVERIFY(visible);
     QVERIFY(lock);
-    controller->createTextObject(QPointF(100, 100), QStringLiteral("row metadata"));
+    const QString rowObjectId =
+        controller->createTextObject(QPointF(100, 100), QStringLiteral("row metadata"));
+    QVERIFY(!rowObjectId.isEmpty());
     QCoreApplication::processEvents();
     QVERIFY(tree->topLevelItemCount() > 0);
     QTreeWidgetItem* layerItem = tree->topLevelItem(0);
@@ -669,7 +744,7 @@ void EffectsPanelUiTests::objectRowLayerButtonsOperateOnParentLayer()
     objectItem = layerItem->child(0);
     QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier,
                       tree->visualItemRect(objectItem).center());
-    QVERIFY(!controller->selectionModel()->activeObjectId().isEmpty());
+    QCOMPARE(controller->selectionModel()->activeObjectId(), rowObjectId);
     QTest::mouseClick(visible, Qt::LeftButton);
     QTRY_VERIFY(!controller->document().layerById(layerId)->visible);
     QTest::mouseClick(visible, Qt::LeftButton);

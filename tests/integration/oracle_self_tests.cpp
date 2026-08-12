@@ -487,6 +487,58 @@ void OracleSelfTests::currentSchemaLoaderRejectsIdentityCorruption()
     nonLocalActiveLayer.insert(QStringLiteral("activeLayerId"), QStringLiteral("layer-other"));
     QVERIFY(expectRejected(nonLocalActiveLayer, QStringLiteral("active layer is not on its current page")));
 
+    QJsonObject twoPageValid = nonLocalActiveLayer;
+    twoPageValid.insert(QStringLiteral("activeLayerId"), QStringLiteral("layer-semantic-contract"));
+
+    QJsonObject crossPageLayer = twoPageValid;
+    pages = crossPageLayer.value(QStringLiteral("pages")).toArray();
+    otherPage = pages.at(1).toObject();
+    otherLayers = otherPage.value(QStringLiteral("layers")).toArray();
+    otherLayer = otherLayers.at(0).toObject();
+    otherLayer.insert(QStringLiteral("id"), QStringLiteral("layer-semantic-contract"));
+    otherLayers.replace(0, otherLayer);
+    otherPage.insert(QStringLiteral("layers"), otherLayers);
+    pages.replace(1, otherPage);
+    crossPageLayer.insert(QStringLiteral("pages"), pages);
+    QVERIFY(expectRejected(crossPageLayer, QStringLiteral("pages[1].layers[0].id")));
+
+    QJsonObject crossPageObject = twoPageValid;
+    pages = crossPageObject.value(QStringLiteral("pages")).toArray();
+    otherPage = pages.at(1).toObject();
+    otherLayers = otherPage.value(QStringLiteral("layers")).toArray();
+    otherLayer = otherLayers.at(0).toObject();
+    otherObjects = otherLayer.value(QStringLiteral("objects")).toArray();
+    otherObject = otherObjects.at(0).toObject();
+    otherObject.insert(QStringLiteral("id"), QStringLiteral("text-semantic-contract"));
+    otherObjects.replace(0, otherObject);
+    otherLayer.insert(QStringLiteral("objects"), otherObjects);
+    otherLayers.replace(0, otherLayer);
+    otherPage.insert(QStringLiteral("layers"), otherLayers);
+    pages.replace(1, otherPage);
+    crossPageObject.insert(QStringLiteral("pages"), pages);
+    QVERIFY(expectRejected(crossPageObject,
+                           QStringLiteral("pages[1].layers[0].objects[0].id")));
+
+    QJsonObject crossPageEffect = twoPageValid;
+    pages = crossPageEffect.value(QStringLiteral("pages")).toArray();
+    otherPage = pages.at(1).toObject();
+    otherLayers = otherPage.value(QStringLiteral("layers")).toArray();
+    otherLayer = otherLayers.at(0).toObject();
+    otherObjects = otherLayer.value(QStringLiteral("objects")).toArray();
+    otherObject = otherObjects.at(0).toObject();
+    otherEffects = otherObject.value(QStringLiteral("effects")).toArray();
+    otherEffect = otherEffects.at(0).toObject();
+    otherEffect.insert(QStringLiteral("id"), QStringLiteral("effect-semantic-contract"));
+    otherEffects.replace(0, otherEffect);
+    otherObject.insert(QStringLiteral("effects"), otherEffects);
+    otherObjects.replace(0, otherObject);
+    otherLayer.insert(QStringLiteral("objects"), otherObjects);
+    otherLayers.replace(0, otherLayer);
+    otherPage.insert(QStringLiteral("layers"), otherLayers);
+    pages.replace(1, otherPage);
+    crossPageEffect.insert(QStringLiteral("pages"), pages);
+    QVERIFY(expectRejected(crossPageEffect, QStringLiteral("missing or duplicate effect ID")));
+
     QJsonObject nonLocalActiveObject = nonLocalActiveLayer;
     nonLocalActiveObject.insert(QStringLiteral("activeLayerId"), QStringLiteral("layer-semantic-contract"));
     nonLocalActiveObject.insert(QStringLiteral("activeObjectId"), QStringLiteral("text-other"));
@@ -515,50 +567,73 @@ void OracleSelfTests::currentSchemaLoaderRejectsIdentityCorruption()
 
 void OracleSelfTests::historicalIdentityMigrationIsDeterministic()
 {
-    QJsonObject legacyObject = ProjectSerializer::textObjectToJson(semanticTextFixture());
-    legacyObject.insert(QStringLiteral("id"), QStringLiteral("ambiguous-legacy-id"));
-    QJsonArray legacyEffects = legacyObject.value(QStringLiteral("effects")).toArray();
+    QJsonObject firstLegacyObject = ProjectSerializer::textObjectToJson(semanticTextFixture());
+    firstLegacyObject.insert(QStringLiteral("id"), QStringLiteral("ambiguous-legacy-id"));
+    QJsonArray legacyEffects = firstLegacyObject.value(QStringLiteral("effects")).toArray();
     QJsonObject legacyEffect = legacyEffects.at(0).toObject();
     legacyEffect.remove(QStringLiteral("id"));
     legacyEffects.replace(0, legacyEffect);
-    legacyObject.insert(QStringLiteral("effects"), legacyEffects);
-    const QJsonObject root{
-        {QStringLiteral("format"), QStringLiteral("vectorTypographyProject")},
-        {QStringLiteral("formatVersion"), 3},
-        {QStringLiteral("metadata"), QJsonObject{
-            {QStringLiteral("createdAt"), QStringLiteral("2024-01-01T00:00:00.000Z")},
-            {QStringLiteral("modifiedAt"), QStringLiteral("2024-01-01T00:00:00.000Z")},
-        }},
-        {QStringLiteral("objects"), QJsonArray{legacyObject, legacyObject}},
-    };
+    firstLegacyObject.insert(QStringLiteral("effects"), legacyEffects);
+    QJsonObject secondLegacyObject = firstLegacyObject;
+    secondLegacyObject.insert(QStringLiteral("sourceText"), QStringLiteral("second in legacy order"));
 
-    Document first;
-    Document second;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Document lastMigrated;
     QString error;
-    QVERIFY2(ProjectSerializer::fromJson(QJsonDocument(root), &first, &error), qPrintable(error));
-    error.clear();
-    QVERIFY2(ProjectSerializer::fromJson(QJsonDocument(root), &second, &error), qPrintable(error));
-    QVERIFY2(test::checkInvariants(first).ok(), qPrintable(test::checkInvariants(first).summary()));
-    QCOMPARE(first.currentPageId, QStringLiteral("migrated-v3-page-0"));
-    QCOMPARE(first.activeLayerId, QStringLiteral("migrated-v3-page-0-layer-0"));
-    QCOMPARE(first.pages.front()->layers.front()->objects.size(), size_t(2));
+    for (int version : {1, 2, 3}) {
+        const QJsonObject root{
+            {QStringLiteral("format"), QStringLiteral("vectorTypographyProject")},
+            {QStringLiteral("formatVersion"), version},
+            {QStringLiteral("metadata"), QJsonObject{
+                {QStringLiteral("createdAt"), QStringLiteral("2024-01-01T00:00:00.000Z")},
+                {QStringLiteral("modifiedAt"), QStringLiteral("2024-01-01T00:00:00.000Z")},
+            }},
+            {QStringLiteral("objects"), QJsonArray{firstLegacyObject, secondLegacyObject}},
+        };
 
-    QSet<QString> identities;
-    for (int objectIndex = 0; objectIndex < 2; ++objectIndex) {
-        const TextObject* left = first.pages.front()->layers.front()->objects.at(objectIndex).get();
-        const TextObject* right = second.pages.front()->layers.front()->objects.at(objectIndex).get();
-        QVERIFY(left && right);
-        QCOMPARE(left->id, right->id);
-        QCOMPARE(left->id,
-                 QStringLiteral("migrated-v3-page-0-layer-0-object-%1").arg(objectIndex));
-        QVERIFY(!identities.contains(left->id));
-        identities.insert(left->id);
-        QCOMPARE(left->effects.at(0)->instanceId, right->effects.at(0)->instanceId);
-        QCOMPARE(left->effects.at(0)->instanceId,
-                 QStringLiteral("migrated-v3-page-0-layer-0-object-%1-effect-0")
-                     .arg(objectIndex));
-        QVERIFY(!identities.contains(left->effects.at(0)->instanceId));
-        identities.insert(left->effects.at(0)->instanceId);
+        Document first;
+        Document replay;
+        error.clear();
+        QVERIFY2(ProjectSerializer::fromJson(QJsonDocument(root), &first, &error), qPrintable(error));
+        error.clear();
+        QVERIFY2(ProjectSerializer::fromJson(QJsonDocument(root), &replay, &error), qPrintable(error));
+        QVERIFY2(test::checkInvariants(first).ok(), qPrintable(test::checkInvariants(first).summary()));
+        QCOMPARE(first.currentPageId, QStringLiteral("migrated-v%1-page-0").arg(version));
+        QCOMPARE(first.activeLayerId, QStringLiteral("migrated-v%1-page-0-layer-0").arg(version));
+        QCOMPARE(first.pages.front()->layers.front()->objects.size(), size_t(2));
+        QCOMPARE(first.pages.front()->layers.front()->objects.at(1)->sourceText,
+                 QStringLiteral("second in legacy order"));
+
+        QSet<QString> identities;
+        for (int objectIndex = 0; objectIndex < 2; ++objectIndex) {
+            const TextObject* left = first.pages.front()->layers.front()->objects.at(objectIndex).get();
+            const TextObject* right = replay.pages.front()->layers.front()->objects.at(objectIndex).get();
+            QVERIFY(left && right);
+            QCOMPARE(left->id, right->id);
+            QCOMPARE(left->id,
+                     QStringLiteral("migrated-v%1-page-0-layer-0-object-%2")
+                         .arg(version).arg(objectIndex));
+            QVERIFY(!identities.contains(left->id));
+            identities.insert(left->id);
+            QCOMPARE(left->effects.at(0)->instanceId, right->effects.at(0)->instanceId);
+            QCOMPARE(left->effects.at(0)->instanceId,
+                     QStringLiteral("migrated-v%1-page-0-layer-0-object-%2-effect-0")
+                         .arg(version).arg(objectIndex));
+            QVERIFY(!identities.contains(left->effects.at(0)->instanceId));
+            identities.insert(left->effects.at(0)->instanceId);
+        }
+
+        const QString path = directory.filePath(
+            QStringLiteral("migrated-v%1-current.vtype").arg(version));
+        error.clear();
+        QVERIFY2(ProjectSerializer::saveToFile(first, path, &error), qPrintable(error));
+        Document reloaded;
+        error.clear();
+        QVERIFY2(ProjectSerializer::loadFromFile(path, &reloaded, &error), qPrintable(error));
+        QString difference;
+        QVERIFY2(test::semanticallyEqual(first, reloaded, &difference), qPrintable(difference));
+        lastMigrated = std::move(first);
     }
 
     // Versions that introduced the authoritative hierarchy never rename
@@ -569,11 +644,11 @@ void OracleSelfTests::historicalIdentityMigrationIsDeterministic()
         QJsonArray pages = hierarchical.value(QStringLiteral("pages")).toArray();
         pages.append(pages.at(0));
         hierarchical.insert(QStringLiteral("pages"), pages);
-        const QString before = test::semanticFingerprint(first);
+        const QString before = test::semanticFingerprint(lastMigrated);
         error.clear();
-        QVERIFY(!ProjectSerializer::fromJson(QJsonDocument(hierarchical), &first, &error));
+        QVERIFY(!ProjectSerializer::fromJson(QJsonDocument(hierarchical), &lastMigrated, &error));
         QVERIFY(error.contains(QStringLiteral("missing or duplicate page ID")));
-        QCOMPARE(test::semanticFingerprint(first), before);
+        QCOMPARE(test::semanticFingerprint(lastMigrated), before);
     }
 }
 
@@ -591,6 +666,18 @@ void OracleSelfTests::serializedResourceBudgetsHaveExactBoundaries()
         production.maximumClipboardInputBytes, &error));
     QVERIFY(!ProjectSerializer::validateClipboardInputSize(
         production.maximumClipboardInputBytes + 1, &error));
+
+    QCOMPARE(ProjectSerializer::saturatedEstimatedObjectWork(3, 2), qint64(9));
+    QCOMPARE(ProjectSerializer::saturatedEstimatedObjectWork(7, 0), qint64(7));
+    QCOMPARE(ProjectSerializer::saturatedEstimatedObjectWork(-1, 20), qint64(0));
+    QCOMPARE(ProjectSerializer::saturatedEstimatedObjectWork(7, -20), qint64(7));
+    const qint64 qint64Maximum = std::numeric_limits<qint64>::max();
+    QCOMPARE(ProjectSerializer::saturatedEstimatedObjectWork(qint64Maximum, 0),
+             qint64Maximum);
+    QCOMPARE(ProjectSerializer::saturatedEstimatedObjectWork(qint64Maximum, 1),
+             qint64Maximum);
+    QCOMPARE(ProjectSerializer::saturatedEstimatedObjectWork(qint64Maximum, qint64Maximum),
+             qint64Maximum);
 
     ProjectResourceLimits limits;
     limits.maximumPages = 100;
@@ -741,6 +828,51 @@ void OracleSelfTests::serializedResourceBudgetsHaveExactBoundaries()
     QVERIFY(accepted(budgetProject(1, 1, 1, budgetObject(1, 1, 1, 7)), candidate,
                      QStringLiteral("estimated geometry work")));
 
+    // One composite hierarchy exercises every aggregate across page, layer,
+    // object and nested-effect boundaries. All local counts remain legal.
+    const QJsonDocument composite = budgetProject(
+        2, 2, 2, budgetObject(2, 2, 2, 2, 2, 2));
+    ProjectResourceLimits compositeLimits = limits;
+    compositeLimits.maximumPages = 2;
+    compositeLimits.maximumLayersPerPage = 2;
+    compositeLimits.maximumLayers = 4;
+    compositeLimits.maximumObjectsPerLayer = 2;
+    compositeLimits.maximumObjects = 8;
+    compositeLimits.maximumEffectsPerObject = 2;
+    compositeLimits.maximumEffects = 16;
+    compositeLimits.maximumSourceUtf16PerObject = 2;
+    compositeLimits.maximumSourceUtf16 = 16;
+    compositeLimits.maximumMaskStrokesPerEffect = 2;
+    compositeLimits.maximumMaskStrokes = 32;
+    compositeLimits.maximumMaskPointsPerStroke = 2;
+    compositeLimits.maximumMaskPoints = 64;
+    compositeLimits.maximumDeformationStrokesPerObject = 2;
+    compositeLimits.maximumDeformationStrokes = 16;
+    compositeLimits.maximumDeformationSamplesPerStroke = 2;
+    compositeLimits.maximumDeformationSamples = 32;
+    compositeLimits.maximumEstimatedWork = 240;
+    QVERIFY(accepted(composite, compositeLimits));
+
+    const QVector<QPair<qint64 ProjectResourceLimits::*, QString>> aggregateLimits = {
+        {&ProjectResourceLimits::maximumLayers, QStringLiteral("aggregate layers")},
+        {&ProjectResourceLimits::maximumObjects, QStringLiteral("aggregate objects")},
+        {&ProjectResourceLimits::maximumEffects, QStringLiteral("aggregate effects")},
+        {&ProjectResourceLimits::maximumSourceUtf16, QStringLiteral("aggregate UTF-16")},
+        {&ProjectResourceLimits::maximumMaskStrokes, QStringLiteral("aggregate mask strokes")},
+        {&ProjectResourceLimits::maximumMaskPoints, QStringLiteral("aggregate mask points")},
+        {&ProjectResourceLimits::maximumDeformationStrokes,
+         QStringLiteral("aggregate deformation strokes")},
+        {&ProjectResourceLimits::maximumDeformationSamples,
+         QStringLiteral("aggregate deformation samples")},
+        {&ProjectResourceLimits::maximumEstimatedWork,
+         QStringLiteral("estimated geometry work")},
+    };
+    for (const auto& [member, diagnostic] : aggregateLimits) {
+        ProjectResourceLimits oneUnder = compositeLimits;
+        --(oneUnder.*member);
+        QVERIFY2(accepted(composite, oneUnder, diagnostic), qPrintable(diagnostic));
+    }
+
     // Production loader gate: every child remains under its local limit, but
     // the composed text x mask workload is one aggregate operation too large.
     QJsonObject adversarial = ProjectSerializer::toJson(semanticDocumentFixture()).object();
@@ -790,6 +922,26 @@ void OracleSelfTests::serializedResourceBudgetsHaveExactBoundaries()
     QVERIFY(!ProjectSerializer::validateResourceBudget(
         QJsonDocument(QJsonArray{transientObject}), production, &error));
     QVERIFY(error.contains(QStringLiteral("cannot be persisted")));
+
+    Document transientDocument = semanticDocumentFixture();
+    QVERIFY(!transientDocument.primaryTextObject().deformation.strokes.isEmpty());
+    transientDocument.primaryTextObject().deformation.strokes.front().coordinateSpace =
+        DeformationCoordinateSpace::PageInput;
+    QTemporaryDir saveDirectory;
+    QVERIFY(saveDirectory.isValid());
+    const QString transientPath = saveDirectory.filePath(QStringLiteral("page-input.vtype"));
+    const QByteArray sentinel("previous-valid-project");
+    {
+        QFile file(transientPath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write(sentinel), qint64(sentinel.size()));
+    }
+    error.clear();
+    QVERIFY(!ProjectSerializer::saveToFile(transientDocument, transientPath, &error));
+    QVERIFY(error.contains(QStringLiteral("cannot be persisted")));
+    QFile unchanged(transientPath);
+    QVERIFY(unchanged.open(QIODevice::ReadOnly));
+    QCOMPARE(unchanged.readAll(), sentinel);
 }
 
 void OracleSelfTests::frameRoundTripIsStableForStaticSnapshots()
@@ -832,9 +984,13 @@ void OracleSelfTests::workloadBuildersAreDeterministicAndInspectable()
 
         QElapsedTimer timer;
         timer.start();
-        const SceneGeometry scene = SceneEvaluator::evaluate(*first.currentPage());
+        const WorkControl work = WorkControl::withBudget();
+        const SceneGeometry scene = SceneEvaluator::evaluate(*first.currentPage(), 0, work);
         const qint64 elapsed = timer.elapsed();
+        QCOMPARE(scene.evaluationStatus, EvaluationStatus::Complete);
         QCOMPARE(scene.objects.size(), parameters.objectCount);
+        QVERIFY(work.unitsConsumed() > 0);
+        QVERIFY(work.unitsConsumed() <= work.maximumUnits());
         qInfo().noquote() << QStringLiteral(
             "workload objects=%1 maskSegments/object=%2 deformationSamples/object=%3 generatorCopies=%4 elapsedMs=%5")
             .arg(parameters.objectCount).arg(parameters.maskSegmentsPerObject)

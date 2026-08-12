@@ -38,6 +38,10 @@ public:
     [[nodiscard]] static ProjectResourceLimits resourceLimits();
     [[nodiscard]] static bool validateProjectInputSize(qint64 bytes, QString* error = nullptr);
     [[nodiscard]] static bool validateClipboardInputSize(qint64 bytes, QString* error = nullptr);
+    // Saturating object-work estimate shared by schema admission and boundary
+    // tests. Inputs are semantic counts, so negative values are treated as 0.
+    [[nodiscard]] static qint64 saturatedEstimatedObjectWork(
+        qint64 sourceUnits, qint64 nestedUnits);
     [[nodiscard]] static QJsonDocument toJson(const Document& document);
     [[nodiscard]] static QJsonObject textObjectToJson(const TextObject& object);
     [[nodiscard]] static bool textObjectFromJson(const QJsonObject& json,
