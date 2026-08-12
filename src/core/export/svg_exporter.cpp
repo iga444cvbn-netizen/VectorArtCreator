@@ -85,12 +85,7 @@ bool SvgExporter::exportGeometry(const Document& document,
     xml.writeAttribute(QStringLiteral("width"), number(viewBounds.width()));
     xml.writeAttribute(QStringLiteral("height"), number(viewBounds.height()));
 
-    xml.writeStartElement(QStringLiteral("path"));
-    xml.writeAttribute(QStringLiteral("d"), pathData(geometry.combinedPath()));
-    xml.writeAttribute(QStringLiteral("fill"), textObject.fill.name(QColor::HexRgb));
-    xml.writeAttribute(QStringLiteral("fill-opacity"), number(textObject.fill.alphaF()));
-    xml.writeAttribute(QStringLiteral("fill-rule"), QStringLiteral("nonzero"));
-    xml.writeEndElement();
+    for (const GeometryPiece& piece : geometry.pieces) { xml.writeStartElement(QStringLiteral("path")); xml.writeAttribute(QStringLiteral("d"),pathData(piece.path)); xml.writeAttribute(QStringLiteral("fill"),textObject.fill.name(QColor::HexRgb)); xml.writeAttribute(QStringLiteral("fill-opacity"),number(textObject.fill.alphaF()*piece.opacityMultiplier)); xml.writeAttribute(QStringLiteral("fill-rule"),QStringLiteral("nonzero")); xml.writeEndElement(); }
 
     xml.writeEndElement();
     xml.writeEndDocument();
@@ -142,13 +137,7 @@ bool SvgExporter::exportScene(const Document& document,
         if (!object.visible || !object.geometry.hasVisibleGeometry()) {
             continue;
         }
-        xml.writeStartElement(QStringLiteral("path"));
-        xml.writeAttribute(QStringLiteral("id"), object.objectId);
-        xml.writeAttribute(QStringLiteral("d"), pathData(object.geometry.combinedPath()));
-        xml.writeAttribute(QStringLiteral("fill"), object.fill.name(QColor::HexRgb));
-        xml.writeAttribute(QStringLiteral("fill-opacity"), number(object.fill.alphaF()));
-        xml.writeAttribute(QStringLiteral("fill-rule"), QStringLiteral("nonzero"));
-        xml.writeEndElement();
+        for (const GeometryPiece& piece : object.geometry.pieces) { xml.writeStartElement(QStringLiteral("path")); xml.writeAttribute(QStringLiteral("id"), object.objectId); xml.writeAttribute(QStringLiteral("d"),pathData(piece.path)); xml.writeAttribute(QStringLiteral("fill"),object.fill.name(QColor::HexRgb)); xml.writeAttribute(QStringLiteral("fill-opacity"),number(object.fill.alphaF()*piece.opacityMultiplier)); xml.writeAttribute(QStringLiteral("fill-rule"),QStringLiteral("nonzero")); xml.writeEndElement(); }
     }
 
     xml.writeEndElement();

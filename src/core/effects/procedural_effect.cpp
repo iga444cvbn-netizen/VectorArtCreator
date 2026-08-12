@@ -124,7 +124,7 @@ void ProceduralEffect::apply(VectorGeometry& geometry, const EffectContext& cont
         const qreal phase = twoPi * (progress * m_frequency);
         const qreal signedRandom = randomUnit(m_seed, glyphIndex, 0x7134ULL) * 2.0 - 1.0;
         const qreal positiveRandom = randomUnit(m_seed, glyphIndex, 0x9411ULL);
-        const qreal amount = m_strength * masterStrength;
+        const qreal amount = m_strength * context.effectiveStrength(*this);
         QPointF translation;
         qreal rotation = 0.0;
         qreal scaleX = 1.0;

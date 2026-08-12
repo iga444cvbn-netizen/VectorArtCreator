@@ -35,6 +35,8 @@ set(CORE_SOURCES
     src/core/effects/glyph_jitter_effect.cpp
     src/core/effects/stretch_effect.cpp
     src/core/effects/procedural_effect.cpp
+    src/core/effects/geometry_warp_effect.cpp
+    src/core/effects/trail_effect.cpp
     src/core/serialization/project_serializer.cpp
     src/core/presets/preset.cpp
     src/core/presets/preset_catalog.cpp

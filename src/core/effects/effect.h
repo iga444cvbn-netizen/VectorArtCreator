@@ -51,6 +51,9 @@ struct EffectMaskStroke {
 struct EffectContext {
     QRectF referenceBounds;
     qreal referenceHeight = 1.0;
+    qreal stackStrength = 1.0;
+
+    [[nodiscard]] qreal effectiveStrength(const class Effect& effect) const;
 };
 
 struct EffectParameter {
@@ -76,6 +79,7 @@ public:
     [[nodiscard]] virtual bool setParameter(const QString& id, double value) = 0;
     [[nodiscard]] virtual QJsonObject parametersToJson() const = 0;
     [[nodiscard]] virtual bool parametersFromJson(const QJsonObject& object, QString* error) = 0;
+    [[nodiscard]] virtual bool generatesGeometry() const { return false; }
 
     QString instanceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     bool enabled = true;
@@ -84,6 +88,11 @@ public:
     QVector<EffectMaskStroke> maskStrokes;
     bool maskInverted = false;
 };
+
+inline qreal EffectContext::effectiveStrength(const Effect& effect) const
+{
+    return qBound<qreal>(0.0, stackStrength, 2.0) * effect.masterStrength;
+}
 
 [[nodiscard]] std::unique_ptr<Effect> createEffect(const QString& typeId);
 [[nodiscard]] QVector<QPair<QString, QString>> availableEffectTypes();

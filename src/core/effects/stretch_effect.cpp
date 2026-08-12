@@ -80,8 +80,8 @@ void StretchEffect::apply(VectorGeometry& geometry, const EffectContext& context
     const QPointF center = geometry.bounds.center();
     // Preserve the parameter's meaning at strength 1 while using exponential
     // amplification.  This is strictly positive for every supported strength.
-    const auto amplified = [this](qreal parameter) {
-        return std::exp(std::log(qMax<qreal>(0.0001, parameter)) * masterStrength);
+    const auto amplified = [this, &context](qreal parameter) {
+        return std::exp(std::log(qMax<qreal>(0.0001, parameter)) * context.effectiveStrength(*this));
     };
     QTransform transform;
     Q_UNUSED(transform.translate(center.x(), center.y()));
