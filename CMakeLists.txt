@@ -186,7 +186,7 @@ target_link_libraries(vector_typography_tests PRIVATE
 vt_enable_first_party_warnings(vector_typography_tests)
 
 add_test(NAME vector_typography_core_tests COMMAND vector_typography_tests)
-set_tests_properties(vector_typography_core_tests PROPERTIES LABELS "core")
+set_tests_properties(vector_typography_core_tests PROPERTIES LABELS "core;serialization;undo;geometry")
 
 add_executable(vector_typography_effect_contract_tests
     tests/integration/effect_contract_tests.cpp
@@ -204,7 +204,7 @@ target_include_directories(vector_typography_oracle_tests PRIVATE ${CMAKE_CURREN
 target_link_libraries(vector_typography_oracle_tests PRIVATE vector_typography_test_support Qt6::Core Qt6::Gui Qt6::Test)
 vt_enable_first_party_warnings(vector_typography_oracle_tests)
 add_test(NAME vector_typography_oracle_tests COMMAND vector_typography_oracle_tests)
-set_tests_properties(vector_typography_oracle_tests PROPERTIES LABELS "core;integration;oracle")
+set_tests_properties(vector_typography_oracle_tests PROPERTIES LABELS "core;integration;oracle;serialization")
 
 add_executable(vector_typography_integration_tests
     tests/integration/workflow_integration_tests.cpp
@@ -214,7 +214,7 @@ target_include_directories(vector_typography_integration_tests PRIVATE ${CMAKE_C
 target_link_libraries(vector_typography_integration_tests PRIVATE vector_typography_test_support Qt6::Core Qt6::Gui Qt6::Test Qt6::Concurrent)
 vt_enable_first_party_warnings(vector_typography_integration_tests)
 add_test(NAME vector_typography_integration_tests COMMAND vector_typography_integration_tests)
-set_tests_properties(vector_typography_integration_tests PROPERTIES LABELS "integration;undo;serialization;async")
+set_tests_properties(vector_typography_integration_tests PROPERTIES LABELS "integration;undo;serialization;async;export")
 
 add_executable(vector_typography_ui_smoke_tests
     tests/ui/smoke_workflow_tests.cpp
@@ -243,13 +243,13 @@ target_link_libraries(vector_typography_ui_tests PRIVATE
 )
 vt_enable_first_party_warnings(vector_typography_ui_tests)
 add_test(NAME vector_typography_ui_tests COMMAND vector_typography_ui_tests)
-set_tests_properties(vector_typography_ui_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "ui;regression")
+set_tests_properties(vector_typography_ui_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "ui;regression;undo")
 
 add_executable(vector_typography_windows_tests tests/platform/windows/clipboard_tests.cpp)
 target_include_directories(vector_typography_windows_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vector_typography_windows_tests PRIVATE vector_typography_core Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 vt_enable_first_party_warnings(vector_typography_windows_tests)
 add_test(NAME vector_typography_windows_tests COMMAND vector_typography_windows_tests)
-set_tests_properties(vector_typography_windows_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "windows;export")
+set_tests_properties(vector_typography_windows_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "windows;export;clipboard")
 
 install(TARGETS vector_typography_editor RUNTIME DESTINATION bin)

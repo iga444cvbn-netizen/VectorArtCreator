@@ -18,25 +18,26 @@ and repaired in `codex/phase-4r-forensic-correctness` (draft PR #11).
 | --- | --- | --- | --- |
 | P1-01 | CLOSED before 4R; re-verified | Value copies preserve `effectStackStrength`. | `semanticCopyContractCoversPersistentInventory`, `semanticFingerprintExcludesOnlyDeclaredTransientState`, `registeredEffectContract` |
 | P1-02 | CLOSED before 4R; re-verified | Canvas and inspector use one live text-edit owner/handoff. | `inspectorEditEndsCanvasSessionWithoutStaleOverwrite` |
-| P1-03 | CLOSED in 4R | A monotonically comparable spatial revision stamps snapshots, scenes, and frames. Persisted page input is normalized only through an authoritative current frame; stale transform commits are rejected. | `staleFrameCannotAuthorizeSpatialMutation` |
-| P1-04 | CLOSED in 4R | Current schemas reject missing/colliding global identities and wrong-hierarchy active IDs transactionally; v1-v3 identities migrate deterministically. | `currentSchemaLoaderRejectsIdentityCorruption`, `historicalIdentityMigrationIsDeterministic`, `serializedResourceBudgetsHaveExactBoundaries` |
-| P1-05 | CLOSED in 4R | Pre-construction aggregate resource limits and shared cooperative semantic work controls bound evaluation and export. Cancelled/over-budget work cannot publish or commit output. | `serializedResourceBudgetsHaveExactBoundaries`, `cooperativeWorkBudgetAndCancellationAreDeterministic`, `cancelledSvgNeverCommitsPartialOutput`, `cancellationStopsBeforeClipboardPublication` |
-| P2-01 | CLOSED in 4R | Cluster spans come from the complete line's sorted unique UTF-16 boundaries across all glyph runs. | `logicalClusterSpansUseWholeLineContext`, `mixedUtf16ShapingUsesGlobalClusterSpans` |
+| P1-03 | CLOSED in 4R | A monotonically comparable spatial revision stamps snapshots, scenes, and frames. Persisted page input is normalized only through an authoritative current frame; stale transform commits are rejected; transient previews are invalidated at every semantic revision boundary. | `staleFrameCannotAuthorizeSpatialMutation`, `transientPreviewNeverBecomesDocumentOrFrameAuthority` |
+| P1-04 | CLOSED in 4R | Current schemas reject missing/colliding global identities and wrong-hierarchy active IDs transactionally; v1-v3 identities migrate deterministically through current-schema save/reload and later undo/redo. | `currentSchemaLoaderRejectsIdentityCorruption`, `historicalIdentityMigrationIsDeterministic`, `legacyV1V2V3MigrationSurvivesSaveReloadAndUndoRedo`, `serializedResourceBudgetsHaveExactBoundaries` |
+| P1-05 | CLOSED in 4R | Pre-construction aggregate resource limits, saturating composite estimates, and shared cooperative semantic work controls bound evaluation and export. Exact terminal boundaries are first-state-wins; cancelled partial stages cannot poison caches, publish, or commit output. | `serializedResourceBudgetsHaveExactBoundaries`, `workControlHasExactSharedTerminalBoundaries`, `evaluationCancellationDoesNotPoisonWorkerCaches`, `cooperativeWorkBudgetAndCancellationAreDeterministic`, `cancelledSvgNeverCommitsPartialOutput`, `cancellationStopsBeforeClipboardPublication` |
+| P2-01 | CLOSED in 4R | Cluster spans come from the complete line's sorted unique UTF-16 boundaries across all glyph runs and retain their range semantics through geometry, persistence, and export. | `logicalClusterSpansUseWholeLineContext`, `mixedUtf16ShapingUsesGlobalClusterSpans`, `mixedUtf16ClustersSurviveEffectsPersistenceAndExport` |
 | P2-02 | CLOSED before 4R; re-verified | Registry capabilities gate mask UI and controller mutations. | `maskAndTextRangeRespectDescriptorClaims`, `unsupportedEffectMaskIsRefusedWithoutMutation`, `unsupportedEffectDisablesMaskUiAcrossRefreshes` |
-| P2-03 | CLOSED in 4R | Filled-path containment and bounded contour-segment distance replace AABB/proxy authorization. | `contourMaskDistanceRejectsHolesAndConcavities` |
+| P2-03 | CLOSED in 4R | Filled-path containment and bounded contour-segment distance replace AABB/proxy authorization; invalid inputs and cancellation yield no partial influence. | `contourMaskDistanceRejectsHolesAndConcavities`, `contourMaskDistanceHandlesAdversarialGeometryAndCancellation` |
 | P2-04 | CLOSED before 4R; re-verified | Page duplication freshens the complete page/layer/object/effect identity hierarchy. | `duplicatePageFreshensEntireIdentityHierarchy` |
 | P2-05 | CLOSED before 4R; re-verified | Net-zero merged commands become obsolete and restore the authoritative undo clean index. | `mergeableCommandReturningToStartRestoresClean` |
-| P2-06 | CLOSED in 4R | Style Intensity pushes a mergeable undo command on first movement; no persisted slider mutation occurs outside `QUndoStack`. | `styleIntensityGestureHasImmediateDirtyTruthAndOneUndoStep` |
+| P2-06 | CLOSED in 4R | Style Intensity pushes a mergeable undo command on first movement; tokens isolate physical gestures, object switches, and save/clean boundaries; no persisted slider mutation occurs outside `QUndoStack`. | `styleIntensityGestureHasImmediateDirtyTruthAndOneUndoStep` |
 | P2-07 | CLOSED before 4R; re-verified | Marquee bounds are broad phase followed by transformed ink narrow phase. | `rotatedMarqueeUsesInkAsNarrowPhase` |
 | P2-08 | CLOSED before 4R; re-verified | Ordered export records preserve equal-text object multiplicity. | `exportPlainTextPreservesEqualObjectMultiplicity` |
-| P2-09 | CLOSED in 4R | Windows publication reports Complete, Partial, Cancelled, or Failure; injected Win32 operations prove cleanup and ownership transfer. | `publicationResultClassification`, `injectedOperationsClassifyFailuresAndOwnership`, `cancellationStopsBeforeClipboardPublication`, `copyForWordPublishesPortableFormats` |
+| P2-09 | CLOSED in 4R | Windows publication reports Complete, Partial, Cancelled, or Failure; the injected Win32 matrix proves registration/allocation/lock/publication, retry/empty/close, cleanup, and ownership transfer for EMF/SVG/PNG/Unicode. | `publicationResultClassification`, `injectedOperationsClassifyFailuresAndOwnership`, `cancellationStopsBeforeClipboardPublication`, `copyForWordPublishesPortableFormats` |
 
 Unresolved forensic P1/P2 findings: **none**. Remaining platform/manual and
 telemetry limits are listed explicitly in `docs/TEST_FORTRESS_GAPS.md`; they do
 not weaken the repaired contracts. The release gate is a same-head-SHA Windows
 GitHub Actions configure/build/labelled-CTest/package run. Draft PR #11 records
 the exact final run and artifact, which are necessarily generated after this
-versioned report is committed.
+versioned report is committed. The gate also compiles all first-party targets
+with MSVC `/W4 /WX` while treating dependency headers as external.
 
 ---
 

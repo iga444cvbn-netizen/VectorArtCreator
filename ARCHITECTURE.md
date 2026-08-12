@@ -108,7 +108,10 @@ Before persistence, the controller obtains an exact-current published frame or
 synchronously evaluates one from the current value object, then converts the
 input to object-local space. Preview scenes never authorize persistence. A
 transform gesture whose captured revision is obsolete is rejected rather than
-silently applying coordinates from another frame.
+silently applying coordinates from another frame. Deformation and effect-mask
+previews belong to one exact persisted snapshot: any semantic command, undo/
+redo, page change, New, or Open clears their values and IDs before scheduling
+the next revision, so a transient flag cannot leak into later committed scenes.
 
 ## Manual deformation model
 
@@ -191,7 +194,9 @@ with a JSON path. The serializer validates project/clipboard bytes and aggregate
 page, layer, object, text, effect, mask-point, deformation-sample, and estimated
 work limits before constructing or replacing a document. Save applies the same
 authoritative hierarchy/resource contract before its atomic commit. Transient
-page-input coordinates are never a legal persisted deformation value.
+page-input coordinates are never a legal persisted deformation value. Estimated
+object work uses saturating `qint64` arithmetic over source units times combined
+effect/mask/deformation units, so overflow is rejection rather than wraparound.
 
 Presets are version 2 JSON with a generated UUID `id`, Unicode `name`, and an
 independent effect stack. New storage paths are `<uuid>.json`; human names never
@@ -232,14 +237,21 @@ and a spatial revision; only one page evaluation is active and only the newest
 pending snapshot is retained. A new request cancels the running shared work
 control. Stale, cancelled, and budget-exhausted results are discarded before
 publication. A preview stroke is evaluated only on a marked transient snapshot
-and is never serialized or used as an authoritative frame.
+and is never serialized or used as an authoritative frame. Shaping/base cache
+entries and effect/deformation stage keys become reusable only after that stage
+finishes while the shared work control is still running; interrupted partial
+geometry cannot poison the next same-thread evaluation.
 
 `WorkControl` supplies deterministic semantic work units rather than wall-clock
 deadlines. The same copyable control reaches text shaping and glyph paths,
 effects/generators, mask contour traversal, deformation, scene enumeration and
 copies, export payload/SVG, and Windows PNG/EMF/clipboard rendering. The default
 evaluation/export budget is 8,000,000 units; a cancelled or exhausted scene is
-transactional and contains no publishable objects.
+transactional and contains no publishable objects. The maximum is inclusive:
+consuming exactly the budget remains Running, the first unit beyond it selects
+BudgetExceeded, and cancellation versus exhaustion uses a first-terminal-state-
+wins rule shared by every copy of the control. Accounting uses subtraction-based
+checks so the `qint64` maximum cannot overflow.
 
 Independent text objects can evaluate in parallel. A single very complex text
 object still applies its ordered effect and deformation pipeline mostly
@@ -262,7 +274,9 @@ change.
 Typing, numeric effect parameters, font size, tracking, Style Intensity, and
 deformation overall strength merge through command IDs. Style Intensity pushes
 its first persisted value immediately and uses a gesture token to merge only
-that held interaction. A completed canvas drag is one
+that held interaction. Selection changes and successful save end the token;
+subsequent values cannot merge across object ownership or the clean index. A
+completed canvas drag is one
 `AddDeformationStrokeCommand`, regardless of the number of pointer events used to
 construct its resampled samples.
 
@@ -278,7 +292,11 @@ runner, enables x64 MSVC through `ilammy/msvc-dev-cmd@v1`, installs Qt 6.8.3
 Release, builds, and runs `ctest --output-on-failure -VV` with Qt's offscreen
 platform plugin. Only after CTest succeeds does it call `windeployqt` and upload
 `VectorTypographyEditor-windows-x64.zip`. The artifact is a deployed test build,
-not an installer.
+not an installer. Every first-party library and executable is compiled with
+MSVC `/W4 /WX`; angle-bracket dependency headers are marked external at `/W0`,
+so warnings in repository-owned production, test, generated integration, and UI
+translation units fail the build without turning Qt diagnostics into project
+failures.
 
 ## Future platform boundary
 
