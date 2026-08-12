@@ -13,12 +13,30 @@ namespace vt {
 
 namespace {
 
-void applyObjectTransform(VectorGeometry* geometry, const ObjectFrame& frame)
+bool applyObjectTransform(VectorGeometry* geometry,
+                          const ObjectFrame& frame,
+                          const WorkControl& work)
 {
     if (!geometry) {
-        return;
+        return false;
     }
-    geometry->transformAll(frame.localToPage);
+    for (int index = 0; index < geometry->pieces.size(); ++index) {
+        if (!work.consume(qMax(1, geometry->pieces.at(index).path.elementCount()))) {
+            return false;
+        }
+        geometry->transformPiece(index, frame.localToPage);
+    }
+    geometry->recomputeBounds();
+    return true;
+}
+
+qint64 geometryWorkUnits(const VectorGeometry& geometry)
+{
+    qint64 units = 1;
+    for (const GeometryPiece& piece : geometry.pieces) {
+        units += qMax(1, piece.path.elementCount());
+    }
+    return units;
 }
 
 struct CachedObjectStages {
@@ -101,9 +119,12 @@ QByteArray deformationKey(const TextObject& object)
 SceneObjectGeometry evaluateObjectTask(const QString& pageId,
                                        const QString& layerId,
                                        const TextObject& object,
-                                       bool locked)
+                                       bool locked,
+                                       quint64 spatialRevision,
+                                       const WorkControl& work)
 {
     SceneObjectGeometry evaluated;
+    evaluated.spatialRevision = spatialRevision;
     evaluated.objectId = object.id;
     evaluated.pageId = pageId;
     evaluated.layerId = layerId;
@@ -112,6 +133,9 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
     evaluated.fill = object.fill;
     evaluated.visible = object.visible;
     evaluated.locked = locked;
+    if (!work.consume()) {
+        return evaluated;
+    }
 
     const quint64 fontEpoch = globalFontEpoch.load(std::memory_order_acquire);
     if (workerFontEpoch != fontEpoch) {
@@ -125,7 +149,11 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
     CachedObjectStages& cache = workerCache[object.id];
     const QByteArray currentShapingKey = SceneEvaluator::shapingCacheKey(object);
     if (cache.shapingKey != currentShapingKey) {
-        cache.shaped = workerTextEngine.shape(object);
+        ShapedText shaped = workerTextEngine.shape(object, work);
+        if (!work.isRunning()) {
+            return evaluated;
+        }
+        cache.shaped = std::move(shaped);
         cache.shapingKey = currentShapingKey;
         cache.baseKey.clear();
         cache.effectKey.clear();
@@ -137,10 +165,16 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
     const QByteArray currentBaseKey = hashKey(currentShapingKey
                                                + QByteArray::number(object.typography.fontSize));
     if (cache.baseKey != currentBaseKey) {
-        cache.baseGeometry = GlyphGeometryBuilder::build(cache.shaped,
-                                                          object.typography.fontSize,
-                                                          object.font.underline,
-                                                          object.font.strikeOut);
+        VectorGeometry baseGeometry = GlyphGeometryBuilder::build(
+            cache.shaped,
+            object.typography.fontSize,
+            object.font.underline,
+            object.font.strikeOut,
+            work);
+        if (!work.isRunning()) {
+            return evaluated;
+        }
+        cache.baseGeometry = std::move(baseGeometry);
         cache.baseKey = currentBaseKey;
         cache.effectKey.clear();
         cache.deformationKey.clear();
@@ -148,16 +182,30 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
 
     const QByteArray currentEffectKey = hashKey(cache.baseKey + effectsKey(object));
     if (cache.effectKey != currentEffectKey) {
+        if (!work.consume(geometryWorkUnits(cache.baseGeometry))) {
+            return evaluated;
+        }
         cache.effectGeometry = cache.baseGeometry;
-        object.effects.apply(cache.effectGeometry, object.effectStackStrength);
+        object.effects.apply(cache.effectGeometry, object.effectStackStrength, work);
+        if (!work.isRunning()) {
+            cache.effectKey.clear();
+            return evaluated;
+        }
         cache.effectKey = currentEffectKey;
         cache.deformationKey.clear();
     }
 
     const QByteArray currentDeformationKey = hashKey(cache.effectKey + deformationKey(object));
     if (cache.deformationKey != currentDeformationKey) {
+        if (!work.consume(geometryWorkUnits(cache.effectGeometry))) {
+            return evaluated;
+        }
         cache.deformationGeometry = cache.effectGeometry;
-        object.deformation.apply(cache.deformationGeometry);
+        object.deformation.apply(cache.deformationGeometry, work);
+        if (!work.isRunning()) {
+            cache.deformationKey.clear();
+            return evaluated;
+        }
         cache.deformationKey = currentDeformationKey;
     }
 
@@ -174,8 +222,17 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
     evaluated.frame = ObjectFrame::fromTransform(object.transform,
                                                   baseBounds,
                                                   cache.deformationGeometry.bounds);
+    evaluated.frame.spatialRevision = spatialRevision;
+    if (!work.consume(geometryWorkUnits(cache.deformationGeometry))) {
+        evaluated.frame.spatialRevision = 0;
+        return evaluated;
+    }
     evaluated.geometry = cache.deformationGeometry;
-    applyObjectTransform(&evaluated.geometry, evaluated.frame);
+    if (!applyObjectTransform(&evaluated.geometry, evaluated.frame, work)) {
+        evaluated.geometry = {};
+        evaluated.frame.spatialRevision = 0;
+        return evaluated;
+    }
     evaluated.visualBounds = evaluated.frame.pageAabb();
     return evaluated;
 }
@@ -197,42 +254,44 @@ quint64 SceneEvaluator::fontCacheEpoch()
     return globalFontEpoch.load(std::memory_order_acquire);
 }
 
-VectorGeometry SceneEvaluator::evaluateObject(const TextObject& object,
-                                               QString* warning,
-                                               QString* error)
+ObjectFrame SceneEvaluator::evaluateObjectFrame(const TextObject& object,
+                                                quint64 spatialRevision,
+                                                const WorkControl& work)
 {
-    const SceneObjectGeometry evaluated = evaluateObjectTask({}, {}, object, false);
-    if (warning) {
-        *warning = evaluated.warning;
-    }
-    if (error) {
-        *error = evaluated.error;
-    }
-    return evaluated.geometry;
+    return evaluateObjectTask({}, {}, object, false, spatialRevision, work).frame;
 }
 
-SceneGeometry SceneEvaluator::evaluate(const Page& page)
+SceneGeometry SceneEvaluator::evaluate(const Page& page,
+                                       quint64 spatialRevision,
+                                       const WorkControl& work)
 {
     SceneGeometry result;
+    result.spatialRevision = spatialRevision;
     result.pageId = page.id;
     result.pageSize = page.size;
     result.pageBackground = page.background;
 
     struct Task {
         QString layerId;
-        TextObject object;
+        const TextObject* object = nullptr;
         bool locked = false;
     };
     QVector<Task> tasks;
     for (const auto& layer : page.layers) {
+        if (!work.consume()) {
+            break;
+        }
         if (!layer || !layer->visible) {
             continue;
         }
         for (const auto& object : layer->objects) {
+            if (!work.consume()) {
+                break;
+            }
             if (!object || !object->visible) {
                 continue;
             }
-            tasks.push_back({layer->id, *object, layer->locked});
+            tasks.push_back({layer->id, object.get(), layer->locked});
         }
     }
     // EditorController schedules a complete page evaluation.  Do not queue
@@ -240,7 +299,31 @@ SceneGeometry SceneEvaluator::evaluate(const Page& page)
     // constrained pool can otherwise starve itself.  Object evaluation stays
     // ordered and sequential within that outer worker.
     for (const Task& task : tasks) {
-        result.objects.push_back(evaluateObjectTask(page.id, task.layerId, task.object, task.locked));
+        if (!work.consume() || !task.object) {
+            break;
+        }
+        result.objects.push_back(evaluateObjectTask(
+            page.id, task.layerId, *task.object, task.locked, spatialRevision, work));
+        if (!work.isRunning()) {
+            break;
+        }
+    }
+    if (!work.isRunning()) {
+        result.objects.clear();
+        result.bounds = {};
+        result.evaluationStatus = work.status() == WorkControlStatus::Cancelled
+            ? EvaluationStatus::Cancelled
+            : EvaluationStatus::BudgetExceeded;
+        result.evaluationMessage = work.interruptionMessage();
+        return result;
+    }
+    if (!work.consume(qMax(1, result.objects.size()))) {
+        result.objects.clear();
+        result.evaluationStatus = work.status() == WorkControlStatus::Cancelled
+            ? EvaluationStatus::Cancelled
+            : EvaluationStatus::BudgetExceeded;
+        result.evaluationMessage = work.interruptionMessage();
+        return result;
     }
     result.recomputeBounds();
     return result;

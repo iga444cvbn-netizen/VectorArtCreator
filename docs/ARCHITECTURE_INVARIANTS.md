@@ -36,6 +36,9 @@ covered at the lowest useful test layer.
 - Deserialization MUST reject duplicate or ambiguous identities before replacing
   the live document. It MAY repair an absent active ID to a documented default,
   but MUST NOT repair collisions silently.
+- Current-schema IDs MUST be validated exactly as persisted. Historical schemas
+  that did not guarantee IDs MAY receive deterministic path-derived identities;
+  repeated migration of the same bytes MUST produce the same hierarchy.
 - Duplication, paste, preset application, and page cloning MUST state which
   identities are preserved and which are freshened. The rule MUST be consistent
   at every hierarchy depth.
@@ -63,8 +66,9 @@ covered at the lowest useful test layer.
 - An evaluation task MUST capture an immutable, semantically complete value
   snapshot. It MUST NOT capture controller, widget, selection-model, or live
   document pointers.
-- Published results MUST carry a monotonically increasing generation and page ID.
-  Only the current generation for the current page may become visible.
+- Published results MUST carry a monotonically increasing generation, spatial
+  revision, and page ID. Only the current generation and exact current spatial
+  revision for the current page may become visible.
 - At most one newest pending snapshot MAY replace older pending work. Long-running
   current work MUST have a cancellation or bounded-work contract so a newer edit
   cannot wait indefinitely.
@@ -74,6 +78,15 @@ covered at the lowest useful test layer.
   Spatial input MAY use a scene frame only if that frame is proven to match the
   current document revision for that object. Otherwise the gesture MUST be
   deferred/rejected or use a synchronously derived current frame.
+- A preview scene MUST be marked transient and MUST NOT seed the authoritative
+  frame cache. Page-space pointer input is transient; serializers MUST reject it
+  unless it was normalized into the persistent object-local coordinate space.
+- A preview belongs to the exact persisted revision that created it. Any semantic
+  command, undo/redo, page change, New, or Open MUST invalidate deformation and
+  mask previews before evaluating the next revision.
+- A thread-local stage cache MUST publish a reusable value/key pair only after
+  that stage completes while work remains Running. Cancelled or exhausted
+  partial geometry MUST be overwritten before any later cache hit is possible.
 - Async tests MUST compare semantic geometry/cache keys or a geometry signature,
   not a source-text field copied directly from the input snapshot.
 
@@ -134,6 +147,13 @@ covered at the lowest useful test layer.
 - Deformation and mask data MUST have per-item and aggregate limits. Evaluation
   cost MUST be bounded as a function of strokes, samples, pieces, and contour
   points.
+- One shared work-control status MUST distinguish running, cancellation, and
+  budget exhaustion across expensive stages. A stage that observes interruption
+  MUST stop cooperatively; its partial geometry MUST NOT become a completed scene
+  or output artifact.
+- The work budget boundary is inclusive and overflow-safe: the exact maximum MAY
+  complete, the first unit over MUST select BudgetExceeded, and the first
+  terminal state MUST win across repeated cancellation and all copied handles.
 
 ## 8. Serialization and migration
 
@@ -142,6 +162,11 @@ covered at the lowest useful test layer.
   workload checks succeed.
 - All persisted numbers MUST be finite and within documented production bounds.
   All arrays and input byte sizes MUST have per-container and aggregate limits.
+- Bounds MUST cover combined processing cost, not only independent child counts.
+  Project and private-clipboard bytes and aggregate hierarchy/text/effect/mask/
+  deformation products MUST be rejected before constructing the live model.
+  Composite estimates MUST use saturating arithmetic; no count product may wrap
+  into an admissible value.
 - Migrations MUST be deterministic, idempotent at the current schema, and covered
   by fixtures for every supported source version.
 - Unknown forward-compatible data MUST be retained only in the designated future
@@ -176,9 +201,17 @@ covered at the lowest useful test layer.
   still distinct records.
 - SVG remains path-only unless the format contract changes explicitly. No hidden
   dependency on installed fonts may remain in the exported artifact.
-- Clipboard publication MUST distinguish complete success, vector-only success,
-  and failure. Platform resources transfer ownership only after the platform API
-  confirms success.
+- Clipboard publication MUST distinguish complete success, partial/fallback
+  success, cancellation, and complete failure. Platform resources transfer
+  ownership only after the platform API confirms success; untransferred handles
+  remain the producer's cleanup responsibility.
+- Registration, allocation, lock, and publication failures for every fallback
+  format MUST leave each handle in exactly one state: transferred once or freed
+  once. Clipboard open retry/close and `EmptyClipboard` failure follow the same
+  single-owner rule.
+- SVG/file export MUST retain its previous atomic output when interrupted.
+  Clipboard rendering MAY be cancelled only before its short ownership-transfer
+  transaction begins; no cancelled render may be reported as publication success.
 - Platform-specific tests MUST skip only for a proven environmental precondition.
   An arbitrary production failure MUST fail the test.
 
@@ -196,6 +229,11 @@ For every new persisted field or public workflow, add the applicable gates:
 8. real-widget handoff test when multiple controls edit the same state;
 9. export/clipboard contract test when output is affected; and
 10. invariant check after duplicate, paste, delete, page/layer move, undo, and redo.
+11. deterministic semantic-work cancellation when the workflow can be expensive.
+
+All first-party MSVC targets MUST build warning-clean under `/W4 /WX`. External
+dependency headers MAY be demoted through the compiler's external-header policy;
+repository-owned warnings MUST NOT be globally suppressed.
 
 The invariant checker itself is production-adjacent specification code. It MUST
 verify locality as well as global existence, include every persisted semantic

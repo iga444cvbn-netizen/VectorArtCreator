@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/evaluation/work_control.h"
 #include "core/geometry/vector_geometry.h"
 
 #include <QJsonObject>
@@ -28,6 +29,9 @@ enum class BrushTarget {
 enum class DeformationCoordinateSpace {
     ObjectLocal,
     LegacyPageAmbiguous,
+    // Transient controller input only. It must be converted through an
+    // authoritative current ObjectFrame before entering Document state.
+    PageInput,
 };
 
 struct BrushSample {
@@ -66,7 +70,8 @@ public:
     qreal strength = 1.0;
     QVector<DeformationStroke> strokes;
 
-    void apply(VectorGeometry& geometry) const;
+    void apply(VectorGeometry& geometry,
+               const WorkControl& work = WorkControl::unlimited()) const;
 
     [[nodiscard]] QJsonObject toJson() const;
     [[nodiscard]] static bool fromJson(const QJsonObject& object,

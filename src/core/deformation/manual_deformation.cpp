@@ -196,9 +196,9 @@ QVector<BrushSample> resampleBrushStroke(const QVector<QPointF>& positions,
     return samples;
 }
 
-void ManualDeformation::apply(VectorGeometry& geometry) const
+void ManualDeformation::apply(VectorGeometry& geometry, const WorkControl& work) const
 {
-    DeformationEvaluator::apply(*this, geometry);
+    DeformationEvaluator::apply(*this, geometry, work);
 }
 
 QJsonObject ManualDeformation::toJson() const
@@ -211,10 +211,15 @@ QJsonObject ManualDeformation::toJson() const
         serializedStroke.insert(QStringLiteral("radius"), stroke.radius);
         serializedStroke.insert(QStringLiteral("strength"), stroke.strength);
         serializedStroke.insert(QStringLiteral("hardness"), stroke.hardness);
-        serializedStroke.insert(QStringLiteral("coordinateSpace"),
-                                stroke.coordinateSpace == DeformationCoordinateSpace::ObjectLocal
-                                    ? QStringLiteral("objectLocal")
-                                    : QStringLiteral("legacyPageAmbiguous"));
+        QString coordinateSpace = QStringLiteral("legacyPageAmbiguous");
+        if (stroke.coordinateSpace == DeformationCoordinateSpace::ObjectLocal) {
+            coordinateSpace = QStringLiteral("objectLocal");
+        } else if (stroke.coordinateSpace == DeformationCoordinateSpace::PageInput) {
+            // This value is a diagnostic poison pill: production controller
+            // boundaries must normalize PageInput before it can be saved.
+            coordinateSpace = QStringLiteral("pageInput");
+        }
+        serializedStroke.insert(QStringLiteral("coordinateSpace"), coordinateSpace);
 
         QJsonArray serializedSamples;
         for (const BrushSample& sample : stroke.samples) {
@@ -302,6 +307,14 @@ bool ManualDeformation::fromJson(const QJsonObject& object,
         stroke.strength = serializedStroke.value(QStringLiteral("strength")).toDouble(stroke.strength);
         stroke.hardness = serializedStroke.value(QStringLiteral("hardness")).toDouble(stroke.hardness);
         const QString coordinateSpace = serializedStroke.value(QStringLiteral("coordinateSpace")).toString();
+        if (coordinateSpace == QStringLiteral("pageInput")) {
+            if (error) {
+                *error = QStringLiteral(
+                    "Deformation stroke %1 contains transient page-input coordinates.")
+                             .arg(strokeIndex);
+            }
+            return false;
+        }
         stroke.coordinateSpace = coordinateSpace == QStringLiteral("objectLocal")
             ? DeformationCoordinateSpace::ObjectLocal
             : DeformationCoordinateSpace::LegacyPageAmbiguous;

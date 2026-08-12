@@ -12,7 +12,15 @@
 
 namespace vt {
 
+enum class EvaluationStatus {
+    Complete,
+    Cancelled,
+    BudgetExceeded,
+    Failed,
+};
+
 struct SceneObjectGeometry {
+    quint64 spatialRevision = 0;
     QString objectId;
     QString pageId;
     QString layerId;
@@ -32,6 +40,10 @@ struct SceneObjectGeometry {
 
 class SceneGeometry {
 public:
+    EvaluationStatus evaluationStatus = EvaluationStatus::Complete;
+    QString evaluationMessage;
+    bool containsTransientPreview = false;
+    quint64 spatialRevision = 0;
     QString pageId;
     QSizeF pageSize;
     QColor pageBackground;

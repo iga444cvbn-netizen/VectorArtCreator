@@ -84,6 +84,9 @@ void WaveEffect::apply(VectorGeometry& geometry, const EffectContext& context) c
     constexpr qreal twoPi = 6.28318530717958647692;
 
     for (int index = 0; index < geometry.pieces.size(); ++index) {
+        if (!context.work.consume(qMax(1, geometry.pieces.at(index).path.elementCount()))) {
+            break;
+        }
         const GeometryPiece& piece = geometry.pieces[index];
         const qreal progress = qBound<qreal>(
             0.0,

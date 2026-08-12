@@ -1,7 +1,9 @@
 #include "core/document/document.h"
 #include "core/deformation/contour_sampler.h"
 #include "core/deformation/manual_deformation.h"
+#include "core/evaluation/work_control.h"
 #include "core/effects/glyph_jitter_effect.h"
+#include "core/effects/effect_mask_distance.h"
 #include "core/effects/effect_registry.h"
 #include "core/effects/text_range_rebaser.h"
 #include "core/effects/procedural_effect.h"
@@ -21,6 +23,7 @@
 #include "ui/editor_controller.h"
 #include "ui/selection_model.h"
 #include "ui/shortcut_manager.h"
+#include "tests/support/semantic_geometry.h"
 
 #include <QAction>
 #include <QCoreApplication>
@@ -33,6 +36,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPainterPath>
+#include <QPolygonF>
 #include <QSet>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -210,6 +214,9 @@ private slots:
     void documentHierarchyHasStableIds();
     void legacyFlatProjectMigratesToPageAndLayer();
     void multilineShapingPreservesLinesAndClusters();
+    void logicalClusterSpansUseWholeLineContext();
+    void mixedUtf16ShapingUsesGlobalClusterSpans();
+    void mixedUtf16ClustersSurviveEffectsPersistenceAndExport();
     void scopedEffectsOnlyTouchSelectedClusters();
     void proceduralEffectsAreDeterministicAndAvailable();
     void selectionModelSupportsSingleAndRangeSelection();
@@ -234,6 +241,10 @@ private slots:
     void fontDescriptorTraitsAndExactStylesRemainConsistent();
     void transformScaleDomainAndPivotRoundTrip();
     void maskUsesPieceGeometryWhenAnchorIsOutsideBrush();
+    void contourMaskDistanceRejectsHolesAndConcavities();
+    void contourMaskDistanceHandlesAdversarialGeometryAndCancellation();
+    void workControlHasExactSharedTerminalBoundaries();
+    void evaluationCancellationDoesNotPoisonWorkerCaches();
     void fontCacheEpochInvalidatesWorkerShapingKeys();
     void effectRegistryDescriptorsAgreeWithFactories();
     void builtInPresetCatalogParses();
@@ -1471,6 +1482,210 @@ void CoreTests::multilineShapingPreservesLinesAndClusters()
     QVERIFY(geometry.hasVisibleGeometry());
 }
 
+void CoreTests::logicalClusterSpansUseWholeLineContext()
+{
+    // UTF-16 layout: Latin [0], Cyrillic [1], base+combining mark [2,4),
+    // surrogate pair [4,6), ligature-capable "fi" [6,8), Latin [8]. The
+    // starts are intentionally split and out of logical order across two
+    // simulated physical-font/bidi runs.
+    const QVector<LogicalClusterSpan> spans = TextEngine::logicalClusterSpans(
+        9, {{0, 2, 6, 8}, {4, 1, 2}});
+    const QVector<LogicalClusterSpan> expected = {
+        {0, 1}, {1, 1}, {2, 2}, {4, 2}, {6, 2}, {8, 1}};
+    QCOMPARE(spans.size(), expected.size());
+    for (int index = 0; index < expected.size(); ++index) {
+        QCOMPARE(spans.at(index).start, expected.at(index).start);
+        QCOMPARE(spans.at(index).length, expected.at(index).length);
+    }
+
+    // The last glyph in either run must stop at the next logical boundary,
+    // never claim the remainder of the line merely because its run ended.
+    QCOMPARE(spans.at(1).length, 1);
+    QCOMPARE(spans.at(3).length, 2);
+    EffectScope range;
+    range.kind = EffectScopeKind::TextRange;
+    range.start = 4;
+    range.end = 6;
+    QVERIFY(range.includes(spans.at(3).start, spans.at(3).length));
+    QVERIFY(!range.includes(spans.at(2).start, spans.at(2).length));
+    QVERIFY(!range.includes(spans.at(4).start, spans.at(4).length));
+
+    const QVector<LogicalClusterSpan> filtered = TextEngine::logicalClusterSpans(
+        5, {{4, 0, 0, -1, 5, 99}, {2, 4, 2}});
+    const QVector<LogicalClusterSpan> filteredExpected = {{0, 2}, {2, 2}, {4, 1}};
+    QCOMPARE(filtered.size(), filteredExpected.size());
+    for (int index = 0; index < filteredExpected.size(); ++index) {
+        QCOMPARE(filtered.at(index).start, filteredExpected.at(index).start);
+        QCOMPARE(filtered.at(index).length, filteredExpected.at(index).length);
+    }
+    const QVector<LogicalClusterSpan> finalOnly =
+        TextEngine::logicalClusterSpans(7, {{3, 3, 3}});
+    QCOMPARE(finalOnly.size(), 1);
+    QCOMPARE(finalOnly.front().start, 3);
+    QCOMPARE(finalOnly.front().length, 4);
+    QVERIFY(TextEngine::logicalClusterSpans(0, {{0, 1}}).isEmpty());
+    QVERIFY(TextEngine::logicalClusterSpans(-4, {{0}}).isEmpty());
+    QVERIFY(TextEngine::logicalClusterSpans(8, {}).isEmpty());
+
+    TextObject emptyLines = configuredText(QStringLiteral("\nA\n\n"));
+    TextEngine engine;
+    const ShapedText emptyLineShaping = engine.shape(emptyLines);
+    QVERIFY2(emptyLineShaping.error.isEmpty(), qPrintable(emptyLineShaping.error));
+    QCOMPARE(emptyLineShaping.lineCount, 4);
+    QCOMPARE(emptyLineShaping.lineBounds.size(), 4);
+    QVERIFY(std::any_of(emptyLineShaping.glyphs.cbegin(), emptyLineShaping.glyphs.cend(),
+                        [](const ShapedGlyph& glyph) {
+                            return glyph.lineIndex == 1 && glyph.clusterStart == 1;
+                        }));
+}
+
+void CoreTests::mixedUtf16ShapingUsesGlobalClusterSpans()
+{
+    const QString source = QStringLiteral("A\u0416e\u0301\U0001F600fi\u05D0\u05D1Z");
+    TextObject object = configuredText(source);
+    TextEngine engine;
+    const ShapedText shaped = engine.shape(object);
+    QVERIFY2(shaped.error.isEmpty(), qPrintable(shaped.error));
+    QVERIFY(!shaped.glyphs.isEmpty());
+
+    QVector<int> starts;
+    for (const ShapedGlyph& glyph : shaped.glyphs) {
+        if (glyph.lineIndex == 0 && glyph.clusterStart >= 0) starts.push_back(glyph.clusterStart);
+    }
+    std::sort(starts.begin(), starts.end());
+    starts.erase(std::unique(starts.begin(), starts.end()), starts.end());
+    QVERIFY(starts.size() >= 5);
+    for (const ShapedGlyph& glyph : shaped.glyphs) {
+        if (glyph.lineIndex != 0 || glyph.clusterStart < 0) continue;
+        const auto position = std::lower_bound(starts.cbegin(), starts.cend(), glyph.clusterStart);
+        QVERIFY(position != starts.cend() && *position == glyph.clusterStart);
+        const int index = static_cast<int>(position - starts.cbegin());
+        const int next = index + 1 < starts.size() ? starts.at(index + 1) : source.size();
+        QCOMPARE(glyph.clusterLength, next - glyph.clusterStart);
+    }
+
+    const VectorGeometry geometry = GlyphGeometryBuilder::build(
+        shaped, object.typography.fontSize);
+    for (const GeometryPiece& piece : geometry.pieces) {
+        if (piece.sourceGlyphIndex < 0 || piece.sourceGlyphIndex >= shaped.glyphs.size()) continue;
+        const ShapedGlyph& glyph = shaped.glyphs.at(piece.sourceGlyphIndex);
+        QCOMPARE(piece.sourceClusterStart, glyph.clusterStart);
+        QCOMPARE(piece.sourceClusterLength, glyph.clusterLength);
+    }
+}
+
+void CoreTests::mixedUtf16ClustersSurviveEffectsPersistenceAndExport()
+{
+    const QString source = QStringLiteral("Ae\u0301\U0001F600fi\u05D0\u05D1Z");
+    TextObject object = configuredText(source);
+    object.id = QStringLiteral("mixed-utf16-pipeline");
+    TextEngine engine;
+    const ShapedText shaped = engine.shape(object);
+    QVERIFY2(shaped.error.isEmpty(), qPrintable(shaped.error));
+    QVERIFY(!shaped.glyphs.isEmpty());
+
+    bool combiningOwnedByBaseCluster = false;
+    bool surrogatePairOwnedAsOneCluster = false;
+    for (const ShapedGlyph& glyph : shaped.glyphs) {
+        if (glyph.clusterStart < 0) continue;
+        QVERIFY(glyph.clusterLength > 0);
+        QVERIFY(glyph.clusterStart + glyph.clusterLength <= source.size());
+        QVERIFY(glyph.clusterStart != 2); // combining mark is not a new cluster
+        QVERIFY(glyph.clusterStart != 4); // low surrogate is not a new cluster
+        if (glyph.clusterStart <= 1
+            && glyph.clusterStart + glyph.clusterLength > 2) {
+            combiningOwnedByBaseCluster = true;
+        }
+        if (glyph.clusterStart <= 3
+            && glyph.clusterStart + glyph.clusterLength >= 5) {
+            surrogatePairOwnedAsOneCluster = true;
+        }
+    }
+    QVERIFY(combiningOwnedByBaseCluster);
+    QVERIFY(surrogatePairOwnedAsOneCluster);
+
+    const VectorGeometry unscoped = GlyphGeometryBuilder::build(
+        shaped, object.typography.fontSize);
+    QVERIFY(unscoped.hasVisibleGeometry());
+    for (const GeometryPiece& piece : unscoped.pieces) {
+        if (piece.sourceGlyphIndex < 0 || piece.sourceGlyphIndex >= shaped.glyphs.size()) continue;
+        const ShapedGlyph& glyph = shaped.glyphs.at(piece.sourceGlyphIndex);
+        QCOMPARE(piece.sourceClusterStart, glyph.clusterStart);
+        QCOMPARE(piece.sourceClusterLength, glyph.clusterLength);
+    }
+
+    auto stretch = std::make_unique<StretchEffect>();
+    stretch->instanceId = QStringLiteral("mixed-utf16-range-effect");
+    stretch->horizontal = 1.8;
+    stretch->vertical = 0.7;
+    stretch->scope = {EffectScopeKind::TextRange, 1, 3};
+    object.effects.append(std::move(stretch));
+
+    VectorGeometry scoped = unscoped;
+    object.effects.apply(scoped);
+    bool targetedPieceChanged = false;
+    for (int index = 0; index < scoped.pieces.size(); ++index) {
+        const GeometryPiece& before = unscoped.pieces.at(index);
+        const GeometryPiece& after = scoped.pieces.at(index);
+        const bool targeted = object.effects.at(0)->scope.includes(
+            before.sourceClusterStart, before.sourceClusterLength);
+        if (targeted) {
+            targetedPieceChanged = targetedPieceChanged || before.path != after.path;
+        } else {
+            QVERIFY(before.path == after.path);
+            QCOMPARE(before.anchor, after.anchor);
+        }
+        QCOMPARE(after.sourceClusterStart, before.sourceClusterStart);
+        QCOMPARE(after.sourceClusterLength, before.sourceClusterLength);
+    }
+    QVERIFY(targetedPieceChanged);
+
+    Document document;
+    document.primaryTextObject() = object;
+    document.activeObjectId = object.id;
+    const SceneGeometry beforeSave = SceneEvaluator::evaluate(*document.currentPage(), 501);
+    QCOMPARE(beforeSave.evaluationStatus, EvaluationStatus::Complete);
+    const SceneObjectGeometry* beforeObject = beforeSave.objectById(object.id);
+    QVERIFY(beforeObject);
+
+    Document restored;
+    QString error;
+    QVERIFY2(ProjectSerializer::fromJson(ProjectSerializer::toJson(document),
+                                         &restored, &error), qPrintable(error));
+    const TextObject* restoredObject = restored.objectById(object.id);
+    QVERIFY(restoredObject);
+    QCOMPARE(restoredObject->sourceText, source);
+    QCOMPARE(restoredObject->effects.at(0)->scope.kind, EffectScopeKind::TextRange);
+    QCOMPARE(restoredObject->effects.at(0)->scope.start, 1);
+    QCOMPARE(restoredObject->effects.at(0)->scope.end, 3);
+    const SceneGeometry afterLoad = SceneEvaluator::evaluate(*restored.currentPage(), 501);
+    const SceneObjectGeometry* afterObject = afterLoad.objectById(object.id);
+    QVERIFY(afterObject);
+    QString difference;
+    QVERIFY2(test::compareGeometry(test::geometrySignature(beforeObject->geometry),
+                                   test::geometrySignature(afterObject->geometry),
+                                   &difference), qPrintable(difference));
+
+    VectorExportPayload payload;
+    QVERIFY2(ExportPayloadBuilder::build(restored, *restored.currentPage(), afterLoad,
+                                         ExportScope::CurrentPage, {}, &payload, &error),
+             qPrintable(error));
+    QCOMPARE(payload.plainText, source);
+    qsizetype recordIndex = 0;
+    for (const GeometryPiece& piece : afterObject->geometry.pieces) {
+        if (piece.path.isEmpty() || !piece.path.boundingRect().isValid()
+            || piece.path.boundingRect().isEmpty()) {
+            continue;
+        }
+        QVERIFY(recordIndex < payload.records.size());
+        const VectorExportRecord& record = payload.records.at(recordIndex++);
+        QCOMPARE(record.sourceObjectId, object.id);
+        QCOMPARE(record.sourceText, source);
+        QVERIFY(record.path == piece.path);
+    }
+    QCOMPARE(recordIndex, payload.records.size());
+}
+
 void CoreTests::scopedEffectsOnlyTouchSelectedClusters()
 {
     VectorGeometry original = rectangleGeometry();
@@ -2029,6 +2244,226 @@ void CoreTests::maskUsesPieceGeometryWhenAnchorIsOutsideBrush()
     stack.append(effect.clone());
     stack.apply(geometry);
     QVERIFY(geometry.pieces.at(0).anchor.y() > 10.0);
+}
+
+void CoreTests::contourMaskDistanceRejectsHolesAndConcavities()
+{
+    QPainterPath donut;
+    donut.setFillRule(Qt::OddEvenFill);
+    donut.addRect(QRectF(0.0, 0.0, 100.0, 100.0));
+    donut.addRect(QRectF(20.0, 20.0, 60.0, 60.0));
+
+    // This brush stays wholly inside the counter. Its AABB overlaps the glyph,
+    // but it remains far from both actual contours.
+    const QVector<QPointF> throughHole = {QPointF(40.0, 50.0), QPointF(60.0, 50.0)};
+    QCOMPARE(EffectMaskDistance::strokeInfluence(
+                 donut, throughHole, 8.0, 0.5, 1.0), 0.0);
+    QVERIFY(EffectMaskDistance::strokeInfluence(
+                donut, {QPointF(20.0, 35.0), QPointF(20.0, 65.0)}, 8.0, 0.5, 1.0) > 0.99);
+    QVERIFY(EffectMaskDistance::strokeInfluence(
+                donut, {QPointF(10.0, 50.0)}, 2.0, 0.5, 1.0) > 0.99);
+
+    QPainterPath concave;
+    QPolygonF lShape;
+    lShape << QPointF(0.0, 0.0) << QPointF(100.0, 0.0)
+           << QPointF(100.0, 20.0) << QPointF(20.0, 20.0)
+           << QPointF(20.0, 100.0) << QPointF(0.0, 100.0);
+    concave.addPolygon(lShape);
+    concave.closeSubpath();
+    QCOMPARE(EffectMaskDistance::strokeInfluence(
+                 concave, {QPointF(70.0, 70.0)}, 10.0, 0.4, 1.0), 0.0);
+    QVERIFY(EffectMaskDistance::strokeInfluence(
+                concave, {QPointF(20.0, 70.0)}, 10.0, 0.4, 1.0) > 0.99);
+
+    const qreal near = EffectMaskDistance::strokeInfluence(
+        concave, {QPointF(23.0, 70.0)}, 12.0, 0.0, 1.0);
+    const qreal farther = EffectMaskDistance::strokeInfluence(
+        concave, {QPointF(28.0, 70.0)}, 12.0, 0.0, 1.0);
+    QVERIFY(near >= farther);
+    QVERIFY(near >= 0.0 && near <= 1.0);
+    QVERIFY(farther >= 0.0 && farther <= 1.0);
+}
+
+void CoreTests::contourMaskDistanceHandlesAdversarialGeometryAndCancellation()
+{
+    QPainterPath rectangle;
+    rectangle.addRect(QRectF(0.0, 0.0, 100.0, 100.0));
+
+    // Neither endpoint is in the fill, but the painted segment crosses it.
+    QVERIFY(EffectMaskDistance::strokeInfluence(
+                rectangle, {QPointF(-20.0, 50.0), QPointF(120.0, 50.0)},
+                1.0, 1.0, 1.0) > 0.99);
+    // The radius boundary is deliberately exclusive: zero remaining falloff
+    // cannot authorize an effect.
+    QCOMPARE(EffectMaskDistance::strokeInfluence(
+                 rectangle, {QPointF(105.0, 50.0)}, 5.0, 0.0, 1.0), 0.0);
+
+    QPainterPath open;
+    open.moveTo(0.0, 0.0);
+    open.lineTo(100.0, 0.0);
+    QVERIFY(EffectMaskDistance::strokeInfluence(
+                open, {QPointF(50.0, 1.0)}, 3.0, 0.5, 1.0) > 0.0);
+
+    QPainterPath multiple;
+    multiple.addRect(QRectF(0.0, 0.0, 10.0, 10.0));
+    multiple.moveTo(40.0, 0.0);
+    multiple.lineTo(60.0, 0.0);
+    QVERIFY(EffectMaskDistance::strokeInfluence(
+                multiple, {QPointF(50.0, 0.0), QPointF(50.0, 0.0)},
+                2.0, 0.5, 1.0) > 0.99);
+
+    QPainterPath nested;
+    nested.addRect(QRectF(0.0, 0.0, 100.0, 100.0));
+    nested.addRect(QRectF(20.0, 20.0, 60.0, 60.0));
+    nested.setFillRule(Qt::WindingFill);
+    QVERIFY(EffectMaskDistance::strokeInfluence(
+                nested, {QPointF(50.0, 50.0)}, 2.0, 0.5, 1.0) > 0.99);
+    nested.setFillRule(Qt::OddEvenFill);
+    QCOMPARE(EffectMaskDistance::strokeInfluence(
+                 nested, {QPointF(50.0, 50.0)}, 10.0, 0.5, 1.0), 0.0);
+
+    QPainterPath ellipse;
+    ellipse.addEllipse(QRectF(0.0, 0.0, 100.0, 100.0));
+    QVERIFY(EffectMaskDistance::strokeInfluence(
+                ellipse, {QPointF(100.5, 50.0)}, 2.0, 0.0, 1.0) > 0.0);
+
+    QCOMPARE(EffectMaskDistance::strokeInfluence(
+                 rectangle, {QPointF(0.0, 0.0)}, 0.0, 0.5, 1.0), 0.0);
+    QCOMPARE(EffectMaskDistance::strokeInfluence(
+                 rectangle, {QPointF(0.0, 0.0)},
+                 std::numeric_limits<qreal>::quiet_NaN(), 0.5, 1.0), 0.0);
+    QCOMPARE(EffectMaskDistance::strokeInfluence(
+                 rectangle, {QPointF(0.0, 0.0)}, 2.0,
+                 std::numeric_limits<qreal>::quiet_NaN(), 1.0), 0.0);
+    QCOMPARE(EffectMaskDistance::strokeInfluence(
+                 rectangle, {QPointF(0.0, 0.0)}, 2.0, 0.5,
+                 std::numeric_limits<qreal>::quiet_NaN()), 0.0);
+    QCOMPARE(EffectMaskDistance::strokeInfluence(
+                 rectangle,
+                 {QPointF(std::numeric_limits<qreal>::quiet_NaN(), 0.0)},
+                 2.0, 0.5, 1.0), 0.0);
+
+    const WorkControl cancelled = WorkControl::withBudget();
+    cancelled.setCheckpointCallback([&cancelled](qint64) { cancelled.cancel(); });
+    QCOMPARE(EffectMaskDistance::strokeInfluence(
+                 ellipse, {QPointF(101.0, 50.0)}, 4.0, 0.5, 1.0, cancelled), 0.0);
+    QCOMPARE(cancelled.status(), WorkControlStatus::Cancelled);
+    QVERIFY(std::isinf(EffectMaskDistance::minimumContourDistance(
+        ellipse, {QPointF(101.0, 50.0)}, 0.25, cancelled)));
+}
+
+void CoreTests::workControlHasExactSharedTerminalBoundaries()
+{
+    const WorkControl exact = WorkControl::withBudget(5);
+    const WorkControl copy = exact;
+    QVERIFY(exact.consume(2));
+    QVERIFY(copy.consume(3));
+    QCOMPARE(exact.unitsConsumed(), qint64(5));
+    QCOMPARE(copy.unitsConsumed(), qint64(5));
+    QCOMPARE(exact.status(), WorkControlStatus::Running);
+    QVERIFY(!copy.consume(1));
+    QCOMPARE(exact.unitsConsumed(), qint64(5));
+    QCOMPARE(exact.status(), WorkControlStatus::BudgetExceeded);
+    exact.cancel();
+    exact.cancel();
+    QCOMPARE(copy.status(), WorkControlStatus::BudgetExceeded);
+
+    const WorkControl cancelledFirst = WorkControl::withBudget(1);
+    cancelledFirst.cancel();
+    cancelledFirst.cancel();
+    QVERIFY(!cancelledFirst.consume(1));
+    QCOMPARE(cancelledFirst.unitsConsumed(), qint64(0));
+    QCOMPARE(cancelledFirst.status(), WorkControlStatus::Cancelled);
+
+    const WorkControl callback = WorkControl::withBudget(10);
+    const WorkControl callbackCopy = callback;
+    callbackCopy.setCheckpointCallback(
+        [&callback](qint64 consumed) {
+            if (consumed == 3) callback.cancel();
+        });
+    QVERIFY(!callback.consume(3));
+    QCOMPARE(callback.unitsConsumed(), qint64(3));
+    QCOMPARE(callbackCopy.status(), WorkControlStatus::Cancelled);
+
+    const qint64 maximum = std::numeric_limits<qint64>::max();
+    const WorkControl wide = WorkControl::withBudget(maximum);
+    QVERIFY(wide.consume(maximum - 1));
+    QVERIFY(wide.consume(1));
+    QCOMPARE(wide.unitsConsumed(), maximum);
+    QVERIFY(!wide.consume(1));
+    QCOMPARE(wide.unitsConsumed(), maximum);
+    QCOMPARE(wide.status(), WorkControlStatus::BudgetExceeded);
+
+    const WorkControl noOp = WorkControl::withBudget(2);
+    QVERIFY(noOp.consume(0));
+    QVERIFY(noOp.consume(-1));
+    QCOMPARE(noOp.unitsConsumed(), qint64(0));
+}
+
+void CoreTests::evaluationCancellationDoesNotPoisonWorkerCaches()
+{
+    TextObject fixture = configuredText(QString(96, QLatin1Char('W')));
+    fixture.id = QStringLiteral("cache-baseline-object");
+    std::unique_ptr<Effect> wave = EffectRegistry::instance().create(QStringLiteral("wave"));
+    QVERIFY(wave);
+    QVERIFY(wave->setParameter(QStringLiteral("amplitude"), 0.75));
+    EffectMaskStroke mask;
+    mask.points = {QPointF(-20.0, 0.0), QPointF(300.0, 40.0), QPointF(600.0, 0.0)};
+    mask.radius = 80.0;
+    wave->maskStrokes.push_back(mask);
+    fixture.effects.append(std::move(wave));
+    fixture.deformation.strokes.push_back(pushStroke());
+
+    auto pageFor = [](const TextObject& source) {
+        Page page;
+        page.id = QStringLiteral("cache-page");
+        page.layers.front()->id = QStringLiteral("cache-layer");
+        page.layers.front()->objects.push_back(std::make_unique<TextObject>(source));
+        return page;
+    };
+
+    SceneEvaluator::invalidateFontCaches();
+    const WorkControl baselineWork = WorkControl::unlimited();
+    const SceneGeometry baseline = SceneEvaluator::evaluate(pageFor(fixture), 71, baselineWork);
+    QCOMPARE(baseline.evaluationStatus, EvaluationStatus::Complete);
+    QCOMPARE(baseline.objects.size(), 1);
+    QVERIFY(baselineWork.unitsConsumed() > 8);
+    const test::GeometrySignature expected = test::geometrySignature(
+        baseline.objects.front().geometry);
+
+    fixture.id = QStringLiteral("cache-poison-object");
+    QVector<qint64> checkpoints = {
+        1,
+        qMax<qint64>(2, baselineWork.unitsConsumed() / 4),
+        qMax<qint64>(3, baselineWork.unitsConsumed() / 2),
+        qMax<qint64>(4, baselineWork.unitsConsumed() * 3 / 4),
+        qMax<qint64>(5, baselineWork.unitsConsumed() - 1),
+    };
+    std::sort(checkpoints.begin(), checkpoints.end());
+    checkpoints.erase(std::unique(checkpoints.begin(), checkpoints.end()), checkpoints.end());
+
+    for (const qint64 checkpoint : checkpoints) {
+        SceneEvaluator::invalidateFontCaches();
+        const WorkControl interrupted = WorkControl::withBudget();
+        interrupted.setCheckpointCallback(
+            [&interrupted, checkpoint](qint64 consumed) {
+                if (consumed >= checkpoint) interrupted.cancel();
+            });
+        const SceneGeometry partial = SceneEvaluator::evaluate(pageFor(fixture), 72, interrupted);
+        QCOMPARE(partial.evaluationStatus, EvaluationStatus::Cancelled);
+        QVERIFY(partial.objects.isEmpty());
+
+        const WorkControl recoveredWork = WorkControl::unlimited();
+        const SceneGeometry recovered = SceneEvaluator::evaluate(pageFor(fixture), 73, recoveredWork);
+        QCOMPARE(recovered.evaluationStatus, EvaluationStatus::Complete);
+        QCOMPARE(recovered.objects.size(), 1);
+        QString difference;
+        QVERIFY2(test::compareGeometry(
+                     expected, test::geometrySignature(recovered.objects.front().geometry),
+                     &difference),
+                 qPrintable(QStringLiteral("cache recovery after checkpoint %1: %2")
+                                .arg(checkpoint).arg(difference)));
+    }
 }
 
 void CoreTests::fontCacheEpochInvalidatesWorkerShapingKeys()

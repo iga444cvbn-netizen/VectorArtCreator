@@ -15,6 +15,7 @@
 
 #include <QColor>
 #include <QFutureWatcher>
+#include <QHash>
 #include <QObject>
 #include <QStringList>
 #include <QSizeF>
@@ -30,6 +31,7 @@ class EditorController final : public QObject {
 
 public:
     explicit EditorController(QObject* parent = nullptr);
+    ~EditorController() override;
 
     [[nodiscard]] Document& document();
     [[nodiscard]] const Document& document() const;
@@ -39,6 +41,7 @@ public:
     [[nodiscard]] const SelectionModel* selectionModel() const;
     [[nodiscard]] QUndoStack* undoStack();
     [[nodiscard]] bool isModified() const;
+    [[nodiscard]] quint64 spatialRevision() const { return m_spatialRevision; }
     [[nodiscard]] QStringList fontFamilies() const;
     [[nodiscard]] QStringList fontStyles(const QString& family) const;
     [[nodiscard]] QStringList presetNames(QString* error = nullptr) const;
@@ -92,6 +95,9 @@ public:
     void moveObjects(const QStringList& objectIds, const QPointF& delta);
     void nudgeSelectedObjects(const QPointF& delta);
     void setObjectTransform(const QString& objectId, const ObjectTransform& transform);
+    void setObjectTransform(const QString& objectId,
+                            const ObjectTransform& transform,
+                            quint64 inputSpatialRevision);
 
     void addPage();
     void duplicateCurrentPage();
@@ -121,15 +127,29 @@ public:
     void addEffectMaskStroke(const QString& objectId,
                              const QString& effectId,
                              const EffectMaskStroke& stroke);
+    void addEffectMaskStroke(const QString& objectId,
+                             const QString& effectId,
+                             const EffectMaskStroke& stroke,
+                             quint64 inputSpatialRevision);
     void setEffectMaskPreview(const QString& objectId,
                               const QString& effectId,
                               const EffectMaskStroke& stroke);
+    void setEffectMaskPreview(const QString& objectId,
+                              const QString& effectId,
+                              const EffectMaskStroke& stroke,
+                              quint64 inputSpatialRevision);
     void clearEffectMaskPreview();
 
     void addDeformationStroke(const DeformationStroke& stroke);
     void addDeformationStroke(const QString& objectId, const DeformationStroke& stroke);
+    void addDeformationStroke(const QString& objectId,
+                              const DeformationStroke& stroke,
+                              quint64 inputSpatialRevision);
     void setDeformationPreview(const DeformationStroke& stroke);
     void setDeformationPreview(const QString& objectId, const DeformationStroke& stroke);
+    void setDeformationPreview(const QString& objectId,
+                               const DeformationStroke& stroke,
+                               quint64 inputSpatialRevision);
     void clearDeformationPreview();
     void clearDeformation();
     void setDeformationEnabled(bool enabled);
@@ -174,16 +194,37 @@ signals:
 
 private:
     void onCommandChanged();
+    void resetTransientPreviews();
     void rebuildScene();
-    void publishSceneResult(SceneGeometry scene, quint64 generation);
-    void startEvaluation(Page snapshot, quint64 generation);
+    void publishSceneResult(SceneGeometry scene,
+                            quint64 generation,
+                            quint64 spatialRevision);
+    void startEvaluation(Page snapshot,
+                         quint64 generation,
+                         quint64 spatialRevision,
+                         bool containsTransientPreview);
     void synchronizeSelectionWithDocument();
     void publishError(const QString& message);
     [[nodiscard]] TextObject* editableActiveObject();
     [[nodiscard]] const TextObject* editableActiveObject() const;
     [[nodiscard]] bool buildExportPayload(ExportScope scope,
                                           VectorExportPayload* payload,
-                                          QString* error) const;
+                                          QString* error,
+                                          const WorkControl& work) const;
+    [[nodiscard]] std::optional<ObjectFrame> authoritativeObjectFrame(
+        const QString& objectId);
+    [[nodiscard]] bool normalizeDeformationInput(
+        const QString& objectId,
+        const DeformationStroke& input,
+        quint64 inputSpatialRevision,
+        DeformationStroke* normalized);
+
+    struct PendingEvaluation {
+        Page snapshot;
+        quint64 generation = 0;
+        quint64 spatialRevision = 0;
+        bool containsTransientPreview = false;
+    };
 
     Document m_document;
     TextEngine m_textEngine;
@@ -200,6 +241,7 @@ private:
     bool m_maskRestore = false;
     QString m_selectedEffectId;
     quint64 m_evaluationGeneration = 0;
+    quint64 m_spatialRevision = 1;
     PresetManager m_presetManager;
     PresetCatalog m_presetCatalog;
     SvgExporter m_svgExporter;
@@ -210,10 +252,14 @@ private:
     QString m_previewEffectMaskObjectId;
     QString m_previewEffectMaskEffectId;
     QFutureWatcher<SceneGeometry>* m_evaluationWatcher = nullptr;
-    std::optional<Page> m_pendingEvaluation;
+    WorkControl m_activeEvaluationWork = WorkControl::unlimited();
+    std::optional<PendingEvaluation> m_pendingEvaluation;
+    QHash<QString, ObjectFrame> m_authoritativeFrameCache;
+    quint64 m_authoritativeFrameCacheRevision = 0;
     bool m_effectStackStrengthGestureActive = false;
     QString m_effectStackStrengthGestureObjectId;
-    qreal m_effectStackStrengthGestureStart = 1.0;
+    quint64 m_effectStackStrengthGestureSerial = 0;
+    quint64 m_effectStackStrengthGestureToken = 0;
 };
 
 } // namespace vt

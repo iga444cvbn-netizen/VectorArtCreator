@@ -85,15 +85,22 @@ QPointF radialDisplacement(BrushMode mode,
 
 void applyGlyphStroke(const DeformationStroke& stroke,
                       qreal globalStrength,
-                      VectorGeometry& geometry)
+                      VectorGeometry& geometry,
+                      const WorkControl& work)
 {
     if (stroke.mode == BrushMode::Smooth || stroke.samples.isEmpty()) {
         return;
     }
 
     for (GeometryPiece& piece : geometry.pieces) {
+        if (!work.consume(qMax(1, piece.path.elementCount()))) {
+            return;
+        }
         QPointF totalDisplacement;
         for (const BrushSample& sample : stroke.samples) {
+            if (!work.consume()) {
+                return;
+            }
             const qreal factor = sampleFactor(
                 stroke, sample, globalStrength, distance(piece.anchor, sample.position));
             if (factor <= 0.0) {
@@ -127,27 +134,40 @@ void applyGlyphStroke(const DeformationStroke& stroke,
 void applyShapeStroke(const DeformationStroke& stroke,
                       qreal globalStrength,
                       qreal samplingTolerance,
-                      VectorGeometry& geometry)
+                      VectorGeometry& geometry,
+                      const WorkControl& work)
 {
     if (stroke.samples.isEmpty()) {
         return;
     }
 
     for (GeometryPiece& piece : geometry.pieces) {
+        if (!work.consume()) {
+            return;
+        }
         QVector<SampledContour> contours = ContourSampler::samplePath(
-            piece.path, samplingTolerance, 8192);
+            piece.path, samplingTolerance, 8192, work);
         if (contours.isEmpty()) {
             continue;
         }
 
         for (const BrushSample& sample : stroke.samples) {
+            if (!work.consume()) {
+                return;
+            }
             for (SampledContour& contour : contours) {
+                if (!work.consume()) {
+                    return;
+                }
                 if (contour.points.isEmpty()) {
                     continue;
                 }
                 const QVector<QPointF> beforeSmooth = contour.points;
                 const int pointCount = contour.points.size();
                 for (int pointIndex = 0; pointIndex < pointCount; ++pointIndex) {
+                    if (!work.consume()) {
+                        return;
+                    }
                     QPointF& point = contour.points[pointIndex];
                     const qreal factor = sampleFactor(
                         stroke, sample, globalStrength, distance(point, sample.position));
@@ -190,13 +210,15 @@ void applyShapeStroke(const DeformationStroke& stroke,
         }
 
         piece.path = ContourSampler::reconstructPath(
-            contours, piece.path.fillRule(), samplingTolerance * 0.35);
+            contours, piece.path.fillRule(), samplingTolerance * 0.35, work);
     }
 }
 
 } // namespace
 
-void DeformationEvaluator::apply(const ManualDeformation& deformation, VectorGeometry& geometry)
+void DeformationEvaluator::apply(const ManualDeformation& deformation,
+                                 VectorGeometry& geometry,
+                                 const WorkControl& work)
 {
     if (!deformation.enabled || deformation.strokes.isEmpty()) {
         return;
@@ -208,15 +230,21 @@ void DeformationEvaluator::apply(const ManualDeformation& deformation, VectorGeo
 
     const qreal samplingTolerance = qBound<qreal>(0.05, geometry.referenceHeight * 0.0025, 1.0);
     for (const DeformationStroke& stroke : deformation.strokes) {
+        if (!work.consume()) {
+            break;
+        }
         // Pre-object-frame projects did not record the transform present when
         // page-space samples were painted.  Their coordinates cannot be
         // reconstructed safely, so preserve them in serialization but never
         // pretend they are current object-local deformation data.
-        if (stroke.coordinateSpace == DeformationCoordinateSpace::LegacyPageAmbiguous) {
+        if (stroke.coordinateSpace != DeformationCoordinateSpace::ObjectLocal) {
             continue;
         }
         if (stroke.samples.isEmpty() || !std::isfinite(stroke.radius) || stroke.radius <= 0.0) {
             continue;
+        }
+        if (!work.consume(stroke.samples.size())) {
+            break;
         }
         const qreal boundedRadius = qBound<qreal>(0.01, stroke.radius, 100000.0);
         DeformationStroke boundedStroke = stroke;
@@ -230,9 +258,12 @@ void DeformationEvaluator::apply(const ManualDeformation& deformation, VectorGeo
             boundedStroke.target = BrushTarget::Shape;
         }
         if (boundedStroke.target == BrushTarget::Glyphs) {
-            applyGlyphStroke(boundedStroke, globalStrength, geometry);
+            applyGlyphStroke(boundedStroke, globalStrength, geometry, work);
         } else {
-            applyShapeStroke(boundedStroke, globalStrength, samplingTolerance, geometry);
+            applyShapeStroke(boundedStroke, globalStrength, samplingTolerance, geometry, work);
+        }
+        if (!work.isRunning()) {
+            break;
         }
         geometry.recomputeBounds();
     }

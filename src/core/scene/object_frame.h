@@ -14,6 +14,7 @@ namespace vt {
 // and scale.  Keeping that matrix preserves existing project appearance.
 class ObjectFrame {
 public:
+    quint64 spatialRevision = 0;
     QRectF baseLocalBounds;
     QRectF currentLocalBounds;
     QPointF pivotLocal;

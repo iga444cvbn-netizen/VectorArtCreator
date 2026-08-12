@@ -13,6 +13,7 @@ constexpr int LineSpacingCommandId = 106;
 constexpr int EffectParameterCommandId = 103;
 constexpr int DeformationStrengthCommandId = 104;
 constexpr int EffectMasterStrengthCommandId = 105;
+constexpr int EffectStackStrengthCommandId = 107;
 
 } // namespace
 
@@ -582,9 +583,11 @@ SetEffectStackStrengthCommand::SetEffectStackStrengthCommand(Document& document,
                                                              QString objectId,
                                                              qreal oldValue,
                                                              qreal newValue,
+                                                             quint64 mergeToken,
                                                              DocumentChangeCallback onChanged)
     : QUndoCommand(QStringLiteral("Change style intensity"))
     , m_oldValue(oldValue), m_newValue(newValue)
+    , m_mergeToken(mergeToken)
     , m_document(document), m_objectId(std::move(objectId)), m_onChanged(std::move(onChanged))
 {
 }
@@ -605,6 +608,25 @@ void SetEffectStackStrengthCommand::redo()
         m_document.touchModified();
         if (m_onChanged) m_onChanged();
     }
+}
+
+int SetEffectStackStrengthCommand::id() const
+{
+    // Non-gesture edits remain independent. A nonzero token belongs to one
+    // explicit slider transaction and cannot merge with a later gesture.
+    return m_mergeToken == 0 ? -1 : EffectStackStrengthCommandId;
+}
+
+bool SetEffectStackStrengthCommand::mergeWith(const QUndoCommand* other)
+{
+    const auto* command = dynamic_cast<const SetEffectStackStrengthCommand*>(other);
+    if (!command || m_mergeToken == 0 || command->m_mergeToken != m_mergeToken
+        || command->m_objectId != m_objectId) {
+        return false;
+    }
+    m_newValue = command->m_newValue;
+    setObsolete(m_newValue == m_oldValue);
+    return true;
 }
 
 SetEffectScopeCommand::SetEffectScopeCommand(Document& document,

@@ -71,7 +71,6 @@ bool StretchEffect::parametersFromJson(const QJsonObject& object, QString* error
 
 void StretchEffect::apply(VectorGeometry& geometry, const EffectContext& context) const
 {
-    Q_UNUSED(context);
     if (geometry.pieces.isEmpty()) {
         return;
     }
@@ -87,7 +86,12 @@ void StretchEffect::apply(VectorGeometry& geometry, const EffectContext& context
     Q_UNUSED(transform.translate(center.x(), center.y()));
     Q_UNUSED(transform.scale(amplified(horizontal), amplified(vertical)));
     Q_UNUSED(transform.translate(-center.x(), -center.y()));
-    geometry.transformAll(transform);
+    for (int index = 0; index < geometry.pieces.size(); ++index) {
+        const GeometryPiece& piece = geometry.pieces.at(index);
+        if (!context.work.consume(qMax(1, piece.path.elementCount()))) return;
+        geometry.transformPiece(index, transform);
+    }
+    geometry.recomputeBounds();
 }
 
 } // namespace vt

@@ -159,6 +159,7 @@ SceneObjectSignature sceneObjectSignature(const SceneObjectGeometry& object, qre
 {
     SceneObjectSignature signature;
     signature.quantum = quantum;
+    signature.spatialRevision = object.spatialRevision;
     signature.objectId = object.objectId;
     signature.pageId = object.pageId;
     signature.layerId = object.layerId;
@@ -168,7 +169,8 @@ SceneObjectSignature sceneObjectSignature(const SceneObjectGeometry& object, qre
                            point(object.transform.scale, quantum),
                            point(object.transform.pivotLocal, quantum),
                            object.transform.hasPivot};
-    signature.frame = {rect(object.frame.baseLocalBounds, quantum),
+    signature.frame = {object.frame.spatialRevision,
+                       rect(object.frame.baseLocalBounds, quantum),
                        rect(object.frame.currentLocalBounds, quantum),
                        rect(object.frame.pageAabb(), quantum),
                        point(object.frame.pivotLocal, quantum),
@@ -237,6 +239,7 @@ bool compareSceneObject(const SceneObjectSignature& expected, const SceneObjectS
 #define COMPARE_SCENE_VALUE(field) \
     if (!compareValue(expected.field, actual.field, QStringLiteral(#field), difference)) return false
     COMPARE_SCENE_VALUE(objectId);
+    COMPARE_SCENE_VALUE(spatialRevision);
     COMPARE_SCENE_VALUE(pageId);
     COMPARE_SCENE_VALUE(layerId);
     COMPARE_SCENE_VALUE(sourceText);
@@ -244,6 +247,8 @@ bool compareSceneObject(const SceneObjectSignature& expected, const SceneObjectS
     COMPARE_SCENE_VALUE(visible);
     COMPARE_SCENE_VALUE(locked);
 #undef COMPARE_SCENE_VALUE
+    if (!compareValue(expected.frame.spatialRevision, actual.frame.spatialRevision,
+                      QStringLiteral("frame.spatialRevision"), difference)) return false;
     if (!comparePoint(expected.transform.position, actual.transform.position, quantum,
                       QStringLiteral("transform.position"), difference)) return false;
     if (mismatch(expected.transform.rotation != actual.transform.rotation,

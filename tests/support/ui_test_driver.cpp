@@ -179,7 +179,13 @@ void UiTestDriver::waitForSceneGeneration(const QString& objectId) const
             QTRY_VERIFY_WITH_TIMEOUT(m_controller->sceneGeometry().objectById(objectId)
                                      ->geometry.hasVisibleGeometry(), 5000);
         }
-        const SceneGeometry expected = SceneEvaluator::evaluate(*m_controller->document().currentPage());
+        // This comparison is intentionally a publication/routing oracle: the
+        // synchronous evaluator proves the controller published the newest
+        // complete snapshot. Evaluator correctness itself is independently
+        // covered by core/effect tests and semantic fixtures, so this helper
+        // must not be cited as an independent geometry implementation.
+        const SceneGeometry expected = SceneEvaluator::evaluate(
+            *m_controller->document().currentPage(), m_controller->spatialRevision());
         const SceneObjectGeometry* expectedObject = expected.objectById(objectId);
         QVERIFY(expectedObject);
         const SceneObjectSignature expectedSignature = sceneObjectSignature(*expectedObject);

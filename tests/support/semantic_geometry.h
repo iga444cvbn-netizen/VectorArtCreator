@@ -74,6 +74,7 @@ struct ObjectTransformSignature {
 };
 
 struct ObjectFrameSignature {
+    quint64 spatialRevision = 0;
     QuantizedRect baseLocalBounds;
     QuantizedRect currentLocalBounds;
     QuantizedRect pageAabb;
@@ -85,6 +86,7 @@ struct ObjectFrameSignature {
 
 struct SceneObjectSignature {
     qreal quantum = 1.0e-6;
+    quint64 spatialRevision = 0;
     QString objectId;
     QString pageId;
     QString layerId;

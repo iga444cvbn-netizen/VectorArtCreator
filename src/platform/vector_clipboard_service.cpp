@@ -31,10 +31,17 @@ ClipboardPublicationResult ClipboardPublicationResult::fromFormats(
 }
 
 ClipboardPublicationResult VectorClipboardService::copyForOfficeResult(
-    const VectorExportPayload& payload)
+    const VectorExportPayload& payload,
+    const WorkControl& work)
 {
+    if (!work.isRunning()) {
+        return {work.status() == WorkControlStatus::Cancelled
+                    ? ClipboardPublicationStatus::Cancelled
+                    : ClipboardPublicationStatus::Failure,
+                work.interruptionMessage()};
+    }
 #ifdef Q_OS_WIN
-    return WindowsVectorClipboardService::copyForOffice(payload);
+    return WindowsVectorClipboardService::copyForOffice(payload, work);
 #else
     Q_UNUSED(payload);
     return {ClipboardPublicationStatus::Failure,
@@ -44,7 +51,8 @@ ClipboardPublicationResult VectorClipboardService::copyForOfficeResult(
 
 bool VectorClipboardService::copyForOffice(const VectorExportPayload& payload, QString* error)
 {
-    const ClipboardPublicationResult result = copyForOfficeResult(payload);
+    const ClipboardPublicationResult result = copyForOfficeResult(
+        payload, WorkControl::withBudget());
     if (error) *error = result.message;
     return result.succeeded();
 }

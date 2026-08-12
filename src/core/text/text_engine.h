@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/evaluation/work_control.h"
 #include "core/geometry/vector_geometry.h"
 
 #include <QGlyphRun>
@@ -23,6 +24,13 @@ struct ShapedGlyph {
     int clusterLength = 1;
     int lineIndex = 0;
     bool usesFallback = false;
+};
+
+struct LogicalClusterSpan {
+    int start = 0;
+    int length = 0;
+
+    friend bool operator==(const LogicalClusterSpan&, const LogicalClusterSpan&) = default;
 };
 
 enum class FontResolutionStatus {
@@ -58,7 +66,14 @@ struct ShapedText {
 
 class TextEngine {
 public:
-    [[nodiscard]] ShapedText shape(const TextObject& object);
+    [[nodiscard]] ShapedText shape(
+        const TextObject& object,
+        const WorkControl& work = WorkControl::unlimited());
+    // Deterministic seam for the logical-cluster contract. Each inner vector
+    // represents indexes reported by one physical-font/bidi run; spans come
+    // from their complete line-wide union.
+    [[nodiscard]] static QVector<LogicalClusterSpan> logicalClusterSpans(
+        int lineLength, const QVector<QVector<int>>& runStringIndexes);
     void clearCache();
 
 private:
@@ -73,7 +88,8 @@ public:
     [[nodiscard]] static VectorGeometry build(const ShapedText& shaped,
                                               qreal fallbackReferenceHeight,
                                               bool underline = false,
-                                              bool strikeOut = false);
+                                              bool strikeOut = false,
+                                              const WorkControl& work = WorkControl::unlimited());
 };
 
 } // namespace vt

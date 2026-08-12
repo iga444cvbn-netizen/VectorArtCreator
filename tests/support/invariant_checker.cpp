@@ -100,7 +100,8 @@ InvariantReport checkInvariants(const Document& document, const SceneGeometry* s
                         && stroke.strength >= 0.0 && stroke.strength <= 4.0
                         && std::isfinite(stroke.hardness)
                         && stroke.hardness >= 0.0 && stroke.hardness <= 1.0
-                        && !stroke.samples.isEmpty() && stroke.samples.size() <= 4096;
+                        && !stroke.samples.isEmpty() && stroke.samples.size() <= 4096
+                        && stroke.coordinateSpace != DeformationCoordinateSpace::PageInput;
                     for (const BrushSample& sample : stroke.samples) {
                         validStroke = validStroke && isFinite(sample.position) && isFinite(sample.delta)
                             && std::isfinite(sample.pressure)
@@ -212,6 +213,11 @@ InvariantReport checkInvariants(const Document& document, const SceneGeometry* s
                 report.failures << QStringLiteral("duplicate scene object %1").arg(object.objectId);
             }
             sceneObjectIds.insert(object.objectId);
+            if (object.spatialRevision != scene->spatialRevision
+                || object.frame.spatialRevision != scene->spatialRevision) {
+                report.failures << QStringLiteral("scene/frame revision mismatch on %1")
+                                       .arg(object.objectId);
+            }
             if (!source || pageForObject.value(object.objectId) != scene->pageId) {
                 report.failures << QStringLiteral("scene object missing from current document page");
             } else {

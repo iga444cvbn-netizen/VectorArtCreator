@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/evaluation/work_control.h"
 #include "core/geometry/vector_geometry.h"
 
 #include <QJsonObject>
@@ -52,6 +53,7 @@ struct EffectContext {
     QRectF referenceBounds;
     qreal referenceHeight = 1.0;
     qreal stackStrength = 1.0;
+    WorkControl work = WorkControl::unlimited();
 
     [[nodiscard]] qreal effectiveStrength(const class Effect& effect) const;
 };

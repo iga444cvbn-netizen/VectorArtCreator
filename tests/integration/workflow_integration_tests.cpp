@@ -6,21 +6,31 @@
 
 #include "core/effects/effect_registry.h"
 #include "core/export/export_payload_builder.h"
+#include "core/export/svg_exporter.h"
 #include "core/scene/scene_evaluator.h"
 #include "core/serialization/project_serializer.h"
 #include "ui/editor_controller.h"
 
 #include <QCoreApplication>
+#include <QClipboard>
 #include <QFile>
 #include <QFont>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QHash>
 #include <QJsonArray>
+#include <QLineF>
+#include <QMimeData>
 #include <QRandomGenerator>
 #include <QSet>
+#include <QSemaphore>
 #include <QThreadPool>
 #include <QTest>
 #include <QTemporaryDir>
+#include <QtConcurrentRun>
+
+#include <atomic>
+#include <cmath>
 
 using namespace vt;
 
@@ -31,6 +41,11 @@ private slots:
     void semanticSaveLoadAndUndoRedoEquivalence();
     void latestAsyncTextGenerationWins();
     void latestAsyncSemanticSnapshotWins();
+    void mixedRapidMutationsPublishOnlyFinalSemanticScene();
+    void staleFrameCannotAuthorizeSpatialMutation();
+    void transientPreviewNeverBecomesDocumentOrFrameAuthority();
+    void cooperativeWorkBudgetAndCancellationAreDeterministic();
+    void cancelledSvgNeverCommitsPartialOutput();
     void pageSwitchRejectsLatePreviousPage();
     void deletedObjectCannotBeRepublished();
     void controllerDestructionWithQueuedEvaluationIsSafe();
@@ -43,6 +58,8 @@ private slots:
     void unsupportedEffectMaskIsRefusedWithoutMutation();
     void duplicatePasteAndPresetFreshenEffectIdentities();
     void effectReorderDeleteUndoRestoresSemanticOrder();
+    void legacyV1V2V3MigrationSurvivesSaveReloadAndUndoRedo();
+    void malformedOrOversizedClipboardPasteIsTransactional();
     void seededValidWorkflows_data();
     void seededValidWorkflows();
 };
@@ -118,7 +135,8 @@ void WorkflowIntegrationTests::latestAsyncSemanticSnapshotWins()
     controller.setDeformationStrength(1.35);
     controller.setObjectTransform(id, transformB);
 
-    const SceneGeometry expectedScene = SceneEvaluator::evaluate(*controller.document().currentPage());
+    const SceneGeometry expectedScene = SceneEvaluator::evaluate(
+        *controller.document().currentPage(), controller.spatialRevision());
     const SceneObjectGeometry* expectedObject = expectedScene.objectById(id);
     QVERIFY(expectedObject);
     const test::SceneObjectSignature expected = test::sceneObjectSignature(*expectedObject);
@@ -139,6 +157,373 @@ void WorkflowIntegrationTests::latestAsyncSemanticSnapshotWins()
     QVERIFY2(report.ok(), qPrintable(report.summary()));
 }
 
+void WorkflowIntegrationTests::mixedRapidMutationsPublishOnlyFinalSemanticScene()
+{
+    EditorController controller;
+    const QString pageA = controller.document().currentPageId;
+    const QString objectA = controller.createTextObject(
+        QPointF(30.0, 40.0), QStringLiteral("page A initial"));
+    QTRY_VERIFY_WITH_TIMEOUT(controller.sceneGeometry().objectById(objectA) != nullptr, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.sceneGeometry().spatialRevision,
+                              controller.spatialRevision(), 5000);
+
+    test::AsyncEvaluationGate gate;
+    QVERIFY2(gate.waitUntilHolding(), "Could not hold the deterministic latest-wins queue");
+
+    controller.setText(QStringLiteral("page A superseded text"));
+    controller.setFontSize(118.0);
+    controller.addEffect(QStringLiteral("wave"));
+    controller.setEffectParameter(0, QStringLiteral("amplitude"), 0.72);
+    ObjectTransform transformA = controller.document().objectById(objectA)->transform;
+    transformA.position = QPointF(250.0, 160.0);
+    transformA.rotation = -28.0;
+    transformA.scale = QPointF(-0.8, 1.25);
+    controller.setObjectTransform(objectA, transformA);
+    DeformationStroke deformationA;
+    deformationA.coordinateSpace = DeformationCoordinateSpace::ObjectLocal;
+    deformationA.mode = BrushMode::Pull;
+    deformationA.target = BrushTarget::Shape;
+    deformationA.radius = 80.0;
+    deformationA.samples = {{QPointF(40.0, 20.0), QPointF(3.0, -5.0), 1.0}};
+    controller.addDeformationStroke(objectA, deformationA);
+
+    controller.addPage();
+    const QString pageB = controller.document().currentPageId;
+    QVERIFY(pageB != pageA);
+    const QString finalObject = controller.createTextObject(
+        QPointF(140.0, 120.0), QStringLiteral("page B intermediate"));
+    controller.setText(QStringLiteral("page B FINAL \U0001F600"));
+    controller.setFontSize(91.0);
+    controller.setTracking(-0.045);
+    controller.addEffect(QStringLiteral("wave"));
+    controller.setEffectParameter(0, QStringLiteral("amplitude"), 0.63);
+    controller.setEffectStackStrength(1.42);
+    const QString finalEffectId =
+        controller.document().objectById(finalObject)->effects.at(0)->instanceId;
+    EffectMaskStroke finalMask;
+    finalMask.points = {QPointF(160.0, 135.0), QPointF(260.0, 155.0)};
+    finalMask.radius = 36.0;
+    finalMask.opacity = 0.68;
+    finalMask.hardness = 0.42;
+    controller.addEffectMaskStroke(finalObject, finalEffectId, finalMask,
+                                   controller.spatialRevision());
+    ObjectTransform transformB = controller.document().objectById(finalObject)->transform;
+    transformB.position = QPointF(390.0, 245.0);
+    transformB.rotation = 37.0;
+    transformB.scale = QPointF(1.18, 0.74);
+    transformB.pivotLocal = QPointF(20.0, 12.0);
+    transformB.hasPivot = true;
+    controller.setObjectTransform(finalObject, transformB);
+    DeformationStroke finalDeformation;
+    finalDeformation.coordinateSpace = DeformationCoordinateSpace::ObjectLocal;
+    finalDeformation.mode = BrushMode::Push;
+    finalDeformation.target = BrushTarget::Shape;
+    finalDeformation.radius = 65.0;
+    finalDeformation.samples = {
+        {QPointF(30.0, 12.0), QPointF(), 1.0},
+        {QPointF(48.0, 18.0), QPointF(9.0, 6.0), 0.9},
+    };
+    controller.addDeformationStroke(finalObject, finalDeformation);
+
+    const QString deletedObject = controller.createTextObject(
+        QPointF(700.0, 500.0), QStringLiteral("must never publish"));
+    controller.addEffect(QStringLiteral("echo"));
+    controller.deleteObject(deletedObject);
+    QVERIFY(!controller.document().objectById(deletedObject));
+
+    controller.switchPage(pageA);
+    controller.selectObject(objectA);
+    controller.setText(QStringLiteral("page A final but non-current"));
+    controller.switchPage(pageB);
+    controller.selectObject(finalObject);
+    controller.setLineSpacing(1.31);
+    controller.setFontItalic(true);
+
+    const quint64 finalRevision = controller.spatialRevision();
+    const SceneGeometry expectedScene = SceneEvaluator::evaluate(
+        *controller.document().currentPage(), finalRevision);
+    QCOMPARE(expectedScene.evaluationStatus, EvaluationStatus::Complete);
+    const SceneObjectGeometry* expectedObject = expectedScene.objectById(finalObject);
+    QVERIFY(expectedObject);
+    const test::SceneObjectSignature expected = test::sceneObjectSignature(*expectedObject);
+
+    gate.release();
+    QTRY_COMPARE_WITH_TIMEOUT(controller.sceneGeometry().spatialRevision,
+                              finalRevision, 10000);
+    QCOMPARE(controller.sceneGeometry().evaluationStatus, EvaluationStatus::Complete);
+    QVERIFY(!controller.sceneGeometry().containsTransientPreview);
+    QCOMPARE(controller.sceneGeometry().pageId, pageB);
+    QCOMPARE(controller.sceneGeometry().objects.size(), 1);
+    QVERIFY(!controller.sceneGeometry().objectById(objectA));
+    QVERIFY(!controller.sceneGeometry().objectById(deletedObject));
+    const SceneObjectGeometry* published = controller.sceneGeometry().objectById(finalObject);
+    QVERIFY(published);
+    QString difference;
+    QVERIFY2(test::compareSceneObject(expected, test::sceneObjectSignature(*published),
+                                      &difference),
+             qPrintable(QStringLiteral("mixed latest-wins mismatch: %1").arg(difference)));
+    const auto report = test::checkInvariants(
+        controller.document(), &controller.sceneGeometry(), controller.selectedObjectIds(),
+        controller.selectionModel()->activeObjectId());
+    QVERIFY2(report.ok(), qPrintable(report.summary()));
+}
+
+void WorkflowIntegrationTests::staleFrameCannotAuthorizeSpatialMutation()
+{
+    EditorController controller;
+    const QString id = controller.createTextObject(
+        QPointF(80.0, 60.0), QStringLiteral("revision mapped"));
+    controller.addEffect(QStringLiteral("wave"));
+    QTRY_VERIFY_WITH_TIMEOUT(controller.sceneGeometry().objectById(id) != nullptr, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.sceneGeometry().spatialRevision,
+                              controller.spatialRevision(), 5000);
+    const SceneObjectGeometry* publishedN = controller.sceneGeometry().objectById(id);
+    QVERIFY(publishedN);
+    const ObjectFrame frameN = publishedN->frame;
+    const quint64 revisionN = controller.sceneGeometry().spatialRevision;
+    QCOMPARE(frameN.spatialRevision, revisionN);
+    QCOMPARE(revisionN, controller.spatialRevision());
+
+    test::AsyncEvaluationGate gate;
+    QVERIFY2(gate.waitUntilHolding(), "Could not hold publication at revision N");
+
+    ObjectTransform transform = controller.document().objectById(id)->transform;
+    transform.position = QPointF(310.0, 175.0);
+    transform.rotation = 31.0;
+    transform.scale = QPointF(-0.72, 1.45);
+    transform.pivotLocal = frameN.pivotLocal;
+    transform.hasPivot = true;
+    controller.setObjectTransform(id, transform);
+    QVERIFY(controller.spatialRevision() > revisionN);
+    QCOMPARE(controller.sceneGeometry().spatialRevision, revisionN);
+
+    const QString effectId = controller.document().objectById(id)->effects.at(0)->instanceId;
+    const QPointF intendedMaskPoint(424.0, 289.0);
+    EffectMaskStroke pageMask;
+    pageMask.points = {intendedMaskPoint};
+    pageMask.radius = 22.0;
+    pageMask.opacity = 0.7;
+    pageMask.hardness = 0.3;
+    controller.addEffectMaskStroke(id, effectId, pageMask, revisionN);
+    const EffectMaskStroke& storedMask =
+        controller.document().objectById(id)->effects.at(0)->maskStrokes.back();
+    const ObjectFrame maskFrame = SceneEvaluator::evaluateObjectFrame(
+        *controller.document().objectById(id), controller.spatialRevision());
+    QVERIFY(QLineF(maskFrame.localPointToPage(storedMask.points.front()),
+                   intendedMaskPoint).length() < 1.0e-6);
+    QVERIFY2(QLineF(frameN.localPointToPage(storedMask.points.front()),
+                    intendedMaskPoint).length() > 10.0,
+             "obsolete revision N frame authorized the stored mask mutation");
+
+    const QPointF intendedPageStart(445.0, 318.0);
+    const QPointF intendedPageEnd(471.0, 337.0);
+    DeformationStroke pageInput;
+    pageInput.coordinateSpace = DeformationCoordinateSpace::PageInput;
+    pageInput.mode = BrushMode::Push;
+    pageInput.target = BrushTarget::Shape;
+    pageInput.radius = 28.0;
+    pageInput.samples = {
+        {intendedPageStart, QPointF(), 1.0},
+        {intendedPageEnd, intendedPageEnd - intendedPageStart, 1.0},
+    };
+    controller.addDeformationStroke(id, pageInput, revisionN);
+
+    const TextObject* storedObject = controller.document().objectById(id);
+    QVERIFY(storedObject);
+    QVERIFY(!storedObject->deformation.strokes.isEmpty());
+    const DeformationStroke& stored = storedObject->deformation.strokes.back();
+    QCOMPARE(stored.coordinateSpace, DeformationCoordinateSpace::ObjectLocal);
+    const ObjectFrame currentFrame = SceneEvaluator::evaluateObjectFrame(
+        *storedObject, controller.spatialRevision());
+    QVERIFY(QLineF(currentFrame.localPointToPage(stored.samples.at(0).position),
+                   intendedPageStart).length() < 1.0e-6);
+    QVERIFY(QLineF(currentFrame.localPointToPage(stored.samples.at(1).position),
+                   intendedPageEnd).length() < 1.0e-6);
+    QVERIFY2(QLineF(frameN.localPointToPage(stored.samples.at(0).position),
+                    intendedPageStart).length() > 10.0,
+             "obsolete revision N frame authorized the stored local mutation");
+
+    const ObjectTransform beforeRejectedGesture = storedObject->transform;
+    const QString beforeRejectedFingerprint = test::semanticFingerprint(controller.document());
+    const int beforeRejectedCount = controller.undoStack()->count();
+    const int beforeRejectedIndex = controller.undoStack()->index();
+    ObjectTransform staleTransform = beforeRejectedGesture;
+    staleTransform.rotation += 45.0;
+    controller.setObjectTransform(id, staleTransform, revisionN);
+    QCOMPARE(controller.document().objectById(id)->transform.toJson(),
+             beforeRejectedGesture.toJson());
+    QCOMPARE(test::semanticFingerprint(controller.document()), beforeRejectedFingerprint);
+    QCOMPARE(controller.undoStack()->count(), beforeRejectedCount);
+    QCOMPARE(controller.undoStack()->index(), beforeRejectedIndex);
+
+    gate.release();
+    QTRY_COMPARE_WITH_TIMEOUT(controller.sceneGeometry().spatialRevision,
+                              controller.spatialRevision(), 8000);
+    QCOMPARE(controller.sceneGeometry().objectById(id)->frame.spatialRevision,
+             controller.spatialRevision());
+}
+
+void WorkflowIntegrationTests::transientPreviewNeverBecomesDocumentOrFrameAuthority()
+{
+    EditorController controller;
+    const QString id = controller.createTextObject(
+        QPointF(90.0, 70.0), QStringLiteral("preview is not authority"));
+    controller.addEffect(QStringLiteral("wave"));
+    QTRY_VERIFY_WITH_TIMEOUT(controller.sceneGeometry().objectById(id) != nullptr, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.sceneGeometry().spatialRevision,
+                              controller.spatialRevision(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!controller.sceneGeometry().containsTransientPreview, 5000);
+
+    const QString persistedBefore = test::semanticFingerprint(controller.document());
+    const test::GeometrySignature committedGeometry = test::geometrySignature(
+        controller.sceneGeometry().objectById(id)->geometry);
+    const ObjectFrame committedFrame = controller.sceneGeometry().objectById(id)->frame;
+
+    DeformationStroke preview;
+    preview.coordinateSpace = DeformationCoordinateSpace::ObjectLocal;
+    preview.mode = BrushMode::Push;
+    preview.target = BrushTarget::Shape;
+    preview.radius = qMax<qreal>(80.0, committedFrame.currentLocalBounds.width());
+    const QPointF localCenter = committedFrame.currentLocalBounds.center();
+    preview.samples = {
+        {localCenter - QPointF(8.0, 0.0), QPointF(), 1.0},
+        {localCenter + QPointF(8.0, 0.0), QPointF(24.0, 13.0), 1.0},
+    };
+    controller.setDeformationPreview(id, preview, controller.spatialRevision());
+    QTRY_VERIFY_WITH_TIMEOUT(controller.sceneGeometry().containsTransientPreview, 8000);
+    const SceneObjectGeometry* previewObject = controller.sceneGeometry().objectById(id);
+    QVERIFY(previewObject);
+    QString geometryDifference;
+    QVERIFY2(!test::compareGeometry(
+                 committedGeometry, test::geometrySignature(previewObject->geometry),
+                 &geometryDifference),
+             "the preview fixture did not actually alter evaluated geometry");
+
+    QCOMPARE(test::semanticFingerprint(controller.document()), persistedBefore);
+    const QByteArray serialized = ProjectSerializer::toJson(controller.document())
+                                      .toJson(QJsonDocument::Compact);
+    QVERIFY(!serialized.contains("pageInput"));
+
+    // A semantic command must discard the preview before publishing its newer
+    // revision. This also proves the preview cannot leak into worker caches or
+    // keep future frames marked transient.
+    controller.setTracking(0.03125);
+    QVERIFY(test::semanticFingerprint(controller.document()) != persistedBefore);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.sceneGeometry().spatialRevision,
+                              controller.spatialRevision(), 8000);
+    QVERIFY(!controller.sceneGeometry().containsTransientPreview);
+    QCOMPARE(controller.document().objectById(id)->deformation.strokes.size(), 0);
+
+    const SceneGeometry synchronous = SceneEvaluator::evaluate(
+        *controller.document().currentPage(), controller.spatialRevision());
+    const SceneObjectGeometry* expected = synchronous.objectById(id);
+    const SceneObjectGeometry* actual = controller.sceneGeometry().objectById(id);
+    QVERIFY(expected && actual);
+    QString difference;
+    QVERIFY2(test::compareSceneObject(test::sceneObjectSignature(*expected),
+                                      test::sceneObjectSignature(*actual), &difference),
+             qPrintable(difference));
+}
+
+void WorkflowIntegrationTests::cooperativeWorkBudgetAndCancellationAreDeterministic()
+{
+    Document document;
+    TextObject& object = document.primaryTextObject();
+    object.sourceText = QString(200, QLatin1Char('W'));
+    object.font.family = QFontDatabase::families().value(0);
+    object.font.styleName = QFontDatabase::styles(object.font.family).value(0);
+    object.typography.fontSize = 72.0;
+
+    std::unique_ptr<Effect> wave = EffectRegistry::instance().create(QStringLiteral("wave"));
+    QVERIFY(wave);
+    EffectMaskStroke mask;
+    mask.radius = 60.0;
+    for (int index = 0; index < 64; ++index) {
+        mask.points.push_back(QPointF(index * 5.0, std::sin(index * 0.2) * 20.0));
+    }
+    wave->maskStrokes = {mask};
+    object.effects.append(std::move(wave));
+
+    DeformationStroke deformation;
+    deformation.coordinateSpace = DeformationCoordinateSpace::ObjectLocal;
+    deformation.mode = BrushMode::Push;
+    deformation.target = BrushTarget::Shape;
+    deformation.radius = 80.0;
+    for (int index = 0; index < 64; ++index) {
+        deformation.samples.push_back(
+            {QPointF(index * 4.0, 0.0), QPointF(0.0, 2.0), 1.0});
+    }
+    object.deformation.strokes = {deformation};
+
+    QSemaphore reachedCheckpoint;
+    QSemaphore continueWork;
+    std::atomic_bool paused = false;
+    const WorkControl work = WorkControl::withBudget(1'000'000);
+    constexpr qint64 cancellationUnit = 13'000;
+    work.setCheckpointCallback([&](qint64 consumed) {
+        if (consumed >= cancellationUnit && !paused.exchange(true)) {
+            reachedCheckpoint.release();
+            continueWork.acquire();
+        }
+    });
+    const Page snapshot = *document.currentPage();
+    QFuture<SceneGeometry> future = QtConcurrent::run([snapshot, work] {
+        return SceneEvaluator::evaluate(snapshot, 73, work);
+    });
+    if (!reachedCheckpoint.tryAcquire(1, 5000)) {
+        work.cancel();
+        continueWork.release();
+        future.waitForFinished();
+        QFAIL("Evaluation did not reach the deterministic work-unit checkpoint");
+    }
+    work.cancel();
+    continueWork.release();
+    const SceneGeometry cancelled = future.result();
+    QCOMPARE(cancelled.evaluationStatus, EvaluationStatus::Cancelled);
+    QVERIFY(cancelled.objects.isEmpty());
+    QVERIFY(work.unitsConsumed() >= cancellationUnit);
+    QVERIFY(work.unitsConsumed() < cancellationUnit + 12'000);
+
+    const WorkControl bounded = WorkControl::withBudget(3);
+    const SceneGeometry exceeded = SceneEvaluator::evaluate(snapshot, 74, bounded);
+    QCOMPARE(exceeded.evaluationStatus, EvaluationStatus::BudgetExceeded);
+    QVERIFY(exceeded.objects.isEmpty());
+    QCOMPARE(bounded.unitsConsumed(), qint64(3));
+}
+
+void WorkflowIntegrationTests::cancelledSvgNeverCommitsPartialOutput()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("atomic-cancel.svg"));
+    const QByteArray sentinel("previous-good-output");
+    {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write(sentinel), qint64(sentinel.size()));
+    }
+
+    VectorExportPayload payload;
+    payload.bounds = QRectF(0.0, 0.0, 100.0, 40.0);
+    VectorExportRecord record;
+    record.path.addRect(payload.bounds);
+    record.fill = Qt::black;
+    payload.records = {record};
+
+    const WorkControl work = WorkControl::withBudget(1000);
+    work.setCheckpointCallback([work](qint64 consumed) {
+        if (consumed == 1) work.cancel();
+    });
+    SvgExporter exporter;
+    QString error;
+    QVERIFY(!exporter.exportPayload(payload, path, &error, work));
+    QCOMPARE(work.status(), WorkControlStatus::Cancelled);
+    QVERIFY(error.contains(QStringLiteral("cancelled"), Qt::CaseInsensitive));
+    QFile unchanged(path);
+    QVERIFY(unchanged.open(QIODevice::ReadOnly));
+    QCOMPARE(unchanged.readAll(), sentinel);
+}
+
 void WorkflowIntegrationTests::pageSwitchRejectsLatePreviousPage()
 {
     EditorController controller;
@@ -157,7 +542,8 @@ void WorkflowIntegrationTests::pageSwitchRejectsLatePreviousPage()
     QVERIFY(gate.waitUntilHolding());
     controller.setText(QStringLiteral("late Page A result"));
     controller.switchPage(pageB);
-    const SceneGeometry expected = SceneEvaluator::evaluate(*controller.document().currentPage());
+    const SceneGeometry expected = SceneEvaluator::evaluate(
+        *controller.document().currentPage(), controller.spatialRevision());
     gate.release();
 
     QTRY_COMPARE_WITH_TIMEOUT(controller.sceneGeometry().pageId, pageB, 8000);
@@ -288,7 +674,11 @@ void WorkflowIntegrationTests::mergeableCommandReturningToStartRestoresClean()
 {
     QFETCH(QString, family);
     EditorController controller;
-    controller.createTextObject(QPointF(100, 80), QStringLiteral("clean origin"));
+    const QString objectId =
+        controller.createTextObject(QPointF(100, 80), QStringLiteral("clean origin"));
+    QVERIFY(!objectId.isEmpty());
+    QCOMPARE(controller.document().activeObjectId, objectId);
+    QVERIFY(controller.document().objectById(objectId));
     controller.addEffect(QStringLiteral("wave"));
     controller.undoStack()->setClean();
     const QString saved = test::semanticFingerprint(controller.document());
@@ -607,6 +997,122 @@ void WorkflowIntegrationTests::effectReorderDeleteUndoRestoresSemanticOrder()
     QCOMPARE(object->effects.size(), 2);
     controller.undoStack()->undo();
     QCOMPARE(object->effects.toJson(), originalStack);
+}
+
+void WorkflowIntegrationTests::legacyV1V2V3MigrationSurvivesSaveReloadAndUndoRedo()
+{
+    Document legacy;
+    Layer* layer = legacy.activeLayer();
+    QVERIFY(layer);
+    TextObject& first = legacy.primaryTextObject();
+    first.sourceText = QStringLiteral("legacy first");
+    first.effects.append(EffectRegistry::instance().create(QStringLiteral("wave")));
+    auto second = std::make_unique<TextObject>();
+    second->sourceText = QStringLiteral("legacy second");
+    second->effects.append(EffectRegistry::instance().create(QStringLiteral("echo")));
+    layer->objects.push_back(std::move(second));
+
+    const QJsonObject serializedCurrent = ProjectSerializer::toJson(legacy).object();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    for (int version : {1, 2, 3}) {
+        QJsonObject root = serializedCurrent;
+        root.insert(QStringLiteral("formatVersion"), version);
+        root.remove(QStringLiteral("pages"));
+        root.remove(QStringLiteral("currentPageId"));
+        root.remove(QStringLiteral("activeLayerId"));
+        root.remove(QStringLiteral("activeObjectId"));
+
+        const QString legacyPath = directory.filePath(
+            QStringLiteral("legacy-v%1.vtype").arg(version));
+        QFile file(legacyPath);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        const QByteArray bytes = QJsonDocument(root).toJson(QJsonDocument::Compact);
+        QCOMPARE(file.write(bytes), qint64(bytes.size()));
+        file.close();
+
+        EditorController controller;
+        QString error;
+        QVERIFY2(controller.openProject(legacyPath, &error), qPrintable(error));
+        const auto objects = controller.document().objectsOnCurrentPage();
+        QCOMPARE(objects.size(), 2);
+        QCOMPARE(objects.at(0)->sourceText, QStringLiteral("legacy first"));
+        QCOMPARE(objects.at(1)->sourceText, QStringLiteral("legacy second"));
+        QCOMPARE(objects.at(0)->id,
+                 QStringLiteral("migrated-v%1-page-0-layer-0-object-0").arg(version));
+        QCOMPARE(objects.at(1)->id,
+                 QStringLiteral("migrated-v%1-page-0-layer-0-object-1").arg(version));
+        QCOMPARE(objects.at(0)->effects.at(0)->instanceId,
+                 QStringLiteral("migrated-v%1-page-0-layer-0-object-0-effect-0")
+                     .arg(version));
+        QCOMPARE(objects.at(1)->effects.at(0)->instanceId,
+                 QStringLiteral("migrated-v%1-page-0-layer-0-object-1-effect-0")
+                     .arg(version));
+        QVERIFY2(test::checkInvariants(controller.document()).ok(),
+                 qPrintable(test::checkInvariants(controller.document()).summary()));
+
+        const QString migratedFingerprint = test::semanticFingerprint(controller.document());
+        const QString currentPath = directory.filePath(
+            QStringLiteral("current-from-v%1.vtype").arg(version));
+        error.clear();
+        QVERIFY2(controller.saveProject(currentPath, &error), qPrintable(error));
+        controller.newDocument();
+        error.clear();
+        QVERIFY2(controller.openProject(currentPath, &error), qPrintable(error));
+        QCOMPARE(test::semanticFingerprint(controller.document()), migratedFingerprint);
+        QCOMPARE(controller.document().formatVersion, Document::CurrentFormatVersion);
+
+        controller.selectObject(controller.document().objectsOnCurrentPage().at(1)->id);
+        const QString beforeEdit = test::semanticFingerprint(controller.document());
+        controller.setText(QStringLiteral("legacy second edited"));
+        const QString afterEdit = test::semanticFingerprint(controller.document());
+        QVERIFY(afterEdit != beforeEdit);
+        controller.undoStack()->undo();
+        QCOMPARE(test::semanticFingerprint(controller.document()), beforeEdit);
+        controller.undoStack()->redo();
+        QCOMPARE(test::semanticFingerprint(controller.document()), afterEdit);
+    }
+}
+
+void WorkflowIntegrationTests::malformedOrOversizedClipboardPasteIsTransactional()
+{
+    EditorController controller;
+    const QString existingId = controller.createTextObject(
+        QPointF(40.0, 40.0), QStringLiteral("clipboard sentinel"));
+    QVERIFY(!existingId.isEmpty());
+    controller.undoStack()->setClean();
+    const QString before = test::semanticFingerprint(controller.document());
+    const int beforeCount = controller.undoStack()->count();
+    const int beforeIndex = controller.undoStack()->index();
+
+    auto installEditorClipboard = [](QByteArray bytes) {
+        auto* mimeData = new QMimeData();
+        mimeData->setData(QStringLiteral("application/x-vector-typography-objects"),
+                          std::move(bytes));
+        QGuiApplication::clipboard()->setMimeData(mimeData);
+    };
+    auto assertUnchanged = [&controller, &before, beforeCount, beforeIndex] {
+        QCOMPARE(test::semanticFingerprint(controller.document()), before);
+        QCOMPARE(controller.document().objectsOnCurrentPage().size(), 1);
+        QCOMPARE(controller.undoStack()->count(), beforeCount);
+        QCOMPARE(controller.undoStack()->index(), beforeIndex);
+        QVERIFY(controller.undoStack()->isClean());
+    };
+
+    const QJsonObject valid = ProjectSerializer::textObjectToJson(
+        *controller.document().objectById(existingId));
+    QJsonObject invalidLater = valid;
+    invalidLater.insert(QStringLiteral("type"), QStringLiteral("unsupported-later-entry"));
+    installEditorClipboard(QJsonDocument(QJsonArray{valid, invalidLater})
+                               .toJson(QJsonDocument::Compact));
+    controller.pasteObjects();
+    assertUnchanged();
+
+    const qint64 oversizedBytes =
+        ProjectSerializer::resourceLimits().maximumClipboardInputBytes + 1;
+    installEditorClipboard(QByteArray(static_cast<qsizetype>(oversizedBytes), 'x'));
+    controller.pasteObjects();
+    assertUnchanged();
 }
 
 void WorkflowIntegrationTests::seededValidWorkflows_data()

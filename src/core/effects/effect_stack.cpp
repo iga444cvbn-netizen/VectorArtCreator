@@ -1,6 +1,7 @@
 #include "core/effects/effect_stack.h"
+#include "core/effects/effect_mask_distance.h"
 
-#include <QLineF>
+#include <QPolygonF>
 #include <QSet>
 
 #include <cmath>
@@ -10,72 +11,47 @@ namespace vt {
 
 namespace {
 
-qreal distanceToSegment(const QPointF& point, const QPointF& start, const QPointF& end)
-{
-    const QPointF segment = end - start;
-    const qreal lengthSquared = QPointF::dotProduct(segment, segment);
-    if (qFuzzyIsNull(lengthSquared)) {
-        return QLineF(point, start).length();
-    }
-    const qreal t = qBound<qreal>(0.0, QPointF::dotProduct(point - start, segment) / lengthSquared, 1.0);
-    return QLineF(point, start + segment * t).length();
-}
-
-qreal maskInfluence(const Effect& effect, const QPainterPath& path, const QPointF& anchor)
+qreal maskInfluence(const Effect& effect,
+                    const QPainterPath& path,
+                    const WorkControl& work)
 {
     qreal influence = 1.0;
     for (const EffectMaskStroke& stroke : effect.maskStrokes) {
+        if (!work.consume()) {
+            return influence;
+        }
         if (stroke.points.isEmpty() || stroke.radius <= 0.0) {
             continue;
         }
-        qreal distance = QLineF(anchor, stroke.points.front()).length();
-        for (int index = 1; index < stroke.points.size(); ++index) {
-            distance = qMin(distance,
-                            distanceToSegment(anchor,
-                                              stroke.points.at(index - 1),
-                                              stroke.points.at(index)));
+        if (!work.consume(stroke.points.size())) {
+            return influence;
         }
-        // The anchor is only a layout convenience.  Use actual contour
-        // proximity so a brush crossing a large glyph influences that glyph.
-        const QRectF bounds = path.boundingRect();
-        if (!bounds.isEmpty()) {
-            const QRectF expanded = bounds.adjusted(-stroke.radius, -stroke.radius,
-                                                    stroke.radius, stroke.radius);
-            if (expanded.contains(stroke.points.front())) {
-                distance = 0.0;
-            }
-            for (int index = 1; index < stroke.points.size(); ++index) {
-                const QLineF line(stroke.points.at(index - 1), stroke.points.at(index));
-                if (expanded.intersects(QRectF(line.p1(), line.p2()).normalized())) {
-                    distance = 0.0;
-                    break;
-                }
-            }
-        }
-        if (distance >= stroke.radius) {
+        const QRectF brushBounds = QPolygonF(stroke.points).boundingRect().adjusted(
+            -stroke.radius, -stroke.radius, stroke.radius, stroke.radius);
+        if (!brushBounds.intersects(path.boundingRect())) {
             continue;
         }
-        const qreal innerRadius = stroke.radius * (0.1 + 0.85 * stroke.hardness);
-        const qreal normalized = innerRadius >= stroke.radius
-            ? 1.0
-            : qBound<qreal>(0.0,
-                            (stroke.radius - distance) / (stroke.radius - innerRadius),
-                            1.0);
-        const qreal falloff = normalized * normalized * (3.0 - 2.0 * normalized);
-        const qreal amount = qBound<qreal>(0.0, stroke.opacity, 1.0) * falloff;
+        const qreal amount = EffectMaskDistance::strokeInfluence(
+            path, stroke.points, stroke.radius, stroke.hardness, stroke.opacity, work);
         influence += stroke.restore ? amount : -amount;
     }
     const qreal bounded = qBound<qreal>(0.0, influence, 1.0);
     return effect.maskInverted ? 1.0 - bounded : bounded;
 }
 
-QPainterPath blendPath(const QPainterPath& before, const QPainterPath& after, qreal amount)
+QPainterPath blendPath(const QPainterPath& before,
+                       const QPainterPath& after,
+                       qreal amount,
+                       const WorkControl& work)
 {
     if (before.elementCount() != after.elementCount()) {
         return amount >= 0.5 ? after : before;
     }
     QPainterPath result = before;
     for (int index = 0; index < before.elementCount(); ++index) {
+        if (!work.consume()) {
+            return before;
+        }
         const QPainterPath::Element left = before.elementAt(index);
         const QPainterPath::Element right = after.elementAt(index);
         result.setElementPositionAt(index,
@@ -88,12 +64,13 @@ QPainterPath blendPath(const QPainterPath& before, const QPainterPath& after, qr
 void blendPiece(GeometryPiece* destination,
                 const GeometryPiece& before,
                 const GeometryPiece& after,
-                qreal amount)
+                qreal amount,
+                const WorkControl& work)
 {
     if (!destination) {
         return;
     }
-    destination->path = blendPath(before.path, after.path, amount);
+    destination->path = blendPath(before.path, after.path, amount, work);
     destination->anchor = before.anchor + (after.anchor - before.anchor) * amount;
 }
 
@@ -105,16 +82,27 @@ void applyMaskedEffect(const Effect& effect,
     if (!geometry) {
         return;
     }
+    qint64 copyUnits = 1;
+    for (const GeometryPiece& piece : geometry->pieces) {
+        copyUnits += qMax(1, piece.path.elementCount());
+    }
+    if (!context.work.consume(copyUnits * 2)) {
+        return;
+    }
     VectorGeometry before = *geometry;
     VectorGeometry after = *geometry;
     effect.apply(after, context);
     for (int index : selectedIndices) {
+        if (!context.work.consume()) {
+            return;
+        }
         if (index < 0 || index >= geometry->pieces.size() || index >= after.pieces.size()) {
             continue;
         }
-        const qreal influence = maskInfluence(effect, before.pieces.at(index).path,
-                                              before.pieces.at(index).anchor);
-        blendPiece(&geometry->pieces[index], before.pieces.at(index), after.pieces.at(index), influence);
+        const qreal influence = maskInfluence(
+            effect, before.pieces.at(index).path, context.work);
+        blendPiece(&geometry->pieces[index], before.pieces.at(index),
+                   after.pieces.at(index), influence, context.work);
     }
 }
 
@@ -251,12 +239,17 @@ bool EffectStack::hasUniqueInstanceIds() const
     return true;
 }
 
-void EffectStack::apply(VectorGeometry& geometry, qreal stackStrength) const
+void EffectStack::apply(VectorGeometry& geometry,
+                        qreal stackStrength,
+                        const WorkControl& work) const
 {
     geometry.recomputeBounds();
     const EffectContext context{geometry.referenceBounds, geometry.referenceHeight,
-                                qBound<qreal>(0.0, stackStrength, 2.0)};
+                                qBound<qreal>(0.0, stackStrength, 2.0), work};
     for (const auto& effect : m_effects) {
+        if (!work.consume()) {
+            break;
+        }
         if (!effect || !effect->enabled) {
             continue;
         }
@@ -272,6 +265,7 @@ void EffectStack::apply(VectorGeometry& geometry, qreal stackStrength) const
         scopedGeometry.referenceHeight = geometry.referenceHeight;
         for (int index = 0; index < geometry.pieces.size(); ++index) {
             const GeometryPiece& piece = geometry.pieces.at(index);
+            if (!work.consume(qMax(1, piece.path.elementCount()))) break;
             if (effect->scope.includes(piece.sourceClusterStart, piece.sourceClusterLength)) {
                 selectedIndices.push_back(index);
                 scopedGeometry.pieces.push_back(piece);
@@ -285,6 +279,10 @@ void EffectStack::apply(VectorGeometry& geometry, qreal stackStrength) const
             effect->apply(scopedGeometry, context);
             for (int index = 0; index < selectedIndices.size()
                  && index < scopedGeometry.pieces.size(); ++index) {
+                if (!work.consume(qMax(
+                        1, scopedGeometry.pieces.at(index).path.elementCount()))) {
+                    break;
+                }
                 geometry.pieces[selectedIndices.at(index)] = scopedGeometry.pieces.at(index);
             }
             continue;
@@ -300,6 +298,10 @@ void EffectStack::apply(VectorGeometry& geometry, qreal stackStrength) const
                           }());
         for (int index = 0; index < selectedIndices.size()
              && index < scopedGeometry.pieces.size(); ++index) {
+            if (!work.consume(qMax(
+                    1, scopedGeometry.pieces.at(index).path.elementCount()))) {
+                break;
+            }
             geometry.pieces[selectedIndices.at(index)] = scopedGeometry.pieces.at(index);
         }
     }

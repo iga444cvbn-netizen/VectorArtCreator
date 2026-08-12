@@ -1,33 +1,39 @@
 # Testing the Vector Typography Editor
 
-Phase 4T treats a green test run as evidence of usable editor workflows, not
-just of isolated helper functions.  A green core suite alone does **not**
-validate an interactive feature.
+Phase 4T established the fortress; Phase 4R uses it as a corrective release
+gate. A green run is evidence of usable editor workflows and repaired semantic
+contracts, not just isolated helper functions. A green core suite alone does
+**not** validate an interactive feature.
 
 ## Test architecture
 
-- `vector_typography_core_tests` (`core`) keeps deterministic model,
-  geometry, serializer, cache and command contracts.
+- `vector_typography_core_tests` (`core;serialization;undo;geometry`) keeps
+  deterministic model, geometry, serializer, cache and command contracts.
 - `vector_typography_effect_contract_tests` (`core;integration;effects`)
   validates every public `EffectRegistry` descriptor and every built-in preset.
   It now proves exact zero/disabled identity, descriptor claims, deterministic
   replay, range/mask targeting, generator metadata, magnitude and order—not
   only finite output. The explicit `contractTypes()` gate forces a contributor
   to add coverage for a newly registered effect.
-- `vector_typography_oracle_tests` (`core;integration;oracle`) self-validates
+- `vector_typography_oracle_tests`
+  (`core;integration;oracle;serialization`) self-validates
   the semantic guards: structured geometry signatures, persistent-field copy
   equality, fingerprints, hierarchy invariants, frame round trips, identity-
-  corrupt project rejection, and deterministic workload builders.
-- `vector_typography_integration_tests` (`integration;undo;serialization;async`)
+  corrupt project rejection, exact/one-over resource budgets, deterministic
+  legacy identity migration, and deterministic workload builders.
+- `vector_typography_integration_tests`
+  (`integration;undo;serialization;async;export`)
   checks real-file save/open/new/failure/migration behavior, exact undo/redo
-  equivalence, deterministic async races, duplication identity, export text
-  multiplicity, descriptor refusal paths, and ten seeded 200-action workflows.
+  equivalence, deterministic async and spatial-revision races, cooperative
+  work cancellation, atomic cancelled export, duplication identity, export
+  text multiplicity, descriptor refusal paths, and ten seeded 200-action
+  workflows.
 - `vector_typography_ui_smoke_tests` (`ui;smoke`) drives a visible
   `MainWindow` through real widgets.  It is the fast first-five-minutes canary.
-- `vector_typography_ui_tests` (`ui;regression`) retains focused UI regression
+- `vector_typography_ui_tests` (`ui;regression;undo`) retains focused UI regression
   cases such as outside click/wheel routing, focused native text edit, trait
   mode and scale preservation.
-- `vector_typography_windows_tests` (`windows;export`) validates the actual
+- `vector_typography_windows_tests` (`windows;export;clipboard`) validates the actual
   Windows Copy for Word clipboard boundary.
 
 Shared helpers live in `tests/support`:
@@ -35,6 +41,10 @@ Shared helpers live in `tests/support`:
 - `UiTestDriver` creates a `MainWindow`, clicks stable object-named controls,
   types into its native `QPlainTextEdit`, waits for publication, and captures a
   window PNG under `test-artifacts/` when requested by a scenario.
+  Its synchronous `SceneEvaluator` comparison is deliberately a latest-
+  publication/routing oracle, not an independent evaluator implementation;
+  core fixtures and effect-contract tests provide the independent geometry
+  expectations.
 - `geometry_assertions` rejects NaN/Inf geometry and checks the editor proxy
   against the object frame projected through the active canvas transform.
 - `semantic_geometry` quantizes coordinates at an explicit tolerance and
@@ -54,6 +64,12 @@ Shared helpers live in `tests/support`:
   workflows.
 - `AsyncEvaluationGate` occupies the global evaluation pool with a semaphore,
   creating reproducible A/B races without sleeps.
+- `WorkControl` counts semantic checkpoints and exposes a callback seam, so a
+  test can stop shaping/effects/masks/deformation/export after a known unit
+  without wall-clock assertions.
+- `ProjectSerializer::resourceLimits()` and its explicit byte/resource
+  validation seams allow exact-boundary and one-over fixtures without allocating
+  production-sized hostile documents.
 - `workload_builder` creates inspectable 1/10/100-object mask, deformation and
   generator matrices and prints coarse timings without brittle thresholds.
 
@@ -68,9 +84,23 @@ ctest --test-dir build -L smoke --output-on-failure -VV
 ctest --test-dir build -L "core|integration|ui|windows" --output-on-failure -VV
 ```
 
-The UI targets intentionally use `QT_QPA_PLATFORM=offscreen` in CTest.  Use a
+On MSVC every repository-owned library and executable compiles with `/W4 /WX`.
+Qt and other angle-bracket headers use MSVC's external-header policy at `/W0`;
+do not disable warning-as-error globally or suppress a first-party diagnostic to
+make CI green. Fix the warning or narrow a suppression to a documented external
+boundary.
+
+The UI targets intentionally use `QT_QPA_PLATFORM=offscreen` in CTest. Use a
 native Windows desktop run as a complementary manual acceptance pass for
 Office interoperability and subjective visual quality.
+
+The authoritative Phase 4R gate is the `Windows Qt CI` pull-request workflow:
+configure with MSVC/Qt 6.8.3, build Release, run every
+`core|integration|ui|windows` CTest label, then package and upload
+`VectorTypographyEditor-windows-x64`. A package is never produced after a build
+or test failure. The final Phase 4R evidence must come from one run whose head
+SHA exactly matches the draft PR head; all seven CTest executables must pass and
+the complete compiler log must contain no first-party warning.
 
 ## Regression and feature policy
 
@@ -141,16 +171,20 @@ The permanent checks are intentionally mapped to the user-visible bug class:
 | Object duplicate/paste/preset clone identity collisions | `duplicatePasteAndPresetFreshenEffectIdentities` |
 | Effect reorder/delete/undo loses order or identity | `effectReorderDeleteUndoRestoresSemanticOrder` |
 | Net-zero merged edit remains dirty (P2-05) | `mergeableCommandReturningToStartRestoresClean` rows for text, font size, tracking, line spacing, effect parameter/master, deformation strength and move |
-| Held Style Intensity mutates while “clean” (P2-06) | `styleIntensityGestureHasImmediateDirtyTruthAndOneUndoStep` |
+| Held Style Intensity mutates while “clean” (P2-06) | `styleIntensityGestureHasImmediateDirtyTruthAndOneUndoStep`, including multi-value gesture merge, separate gestures, selection handoff, save/clean boundary, and fingerprint undo/redo |
 | Rotated marquee selects empty AABB corners (P2-07) | `rotatedMarqueeUsesInkAsNarrowPhase` |
 | Equal-value objects deduplicated from plain text (P2-08) | `exportPlainTextPreservesEqualObjectMultiplicity` |
-| Clipboard partial publication reported as complete (P2-09) | `publicationResultClassification`, `copyForWordPublishesPortableFormats` |
+| Stale scene frame authorizes page-space mutation (P1-03) | `staleFrameCannotAuthorizeSpatialMutation` holds revision N, maps mask/deformation through N+1, and proves stale-transform fingerprint/undo neutrality; `transientPreviewNeverBecomesDocumentOrFrameAuthority` proves preview geometry differs without becoming document/frame/cache authority |
+| Aggregate hostile workload / noncancellable work (P1-05) | `serializedResourceBudgetsHaveExactBoundaries` including saturating overflow/composite limits, `workControlHasExactSharedTerminalBoundaries`, `evaluationCancellationDoesNotPoisonWorkerCaches`, `cooperativeWorkBudgetAndCancellationAreDeterministic`, `cancelledSvgNeverCommitsPartialOutput`, Windows `cancellationStopsBeforeClipboardPublication` |
+| Per-run UTF-16 cluster span consumes the rest of a line (P2-01) | deterministic `logicalClusterSpansUseWholeLineContext`; real `mixedUtf16ShapingUsesGlobalClusterSpans`; downstream `mixedUtf16ClustersSurviveEffectsPersistenceAndExport` |
+| Mask AABB leaks into counters and concavities (P2-03) | `contourMaskDistanceRejectsHolesAndConcavities`, `contourMaskDistanceHandlesAdversarialGeometryAndCancellation` |
+| Clipboard partial publication reported as complete (P2-09) | `publicationResultClassification`, exhaustive `injectedOperationsClassifyFailuresAndOwnership`, `cancellationStopsBeforeClipboardPublication`, `copyForWordPublishesPortableFormats` |
 | Clipboard failure hidden behind broad skip | `busyClipboardIsAProductionFailure`, `oversizedRasterFallbackIsAProductionFailure`; complete publication must pass on Windows CI |
-| Loader duplicate/missing/nonlocal identities (P1-04) | `currentSchemaLoaderRejectsIdentityCorruption`, `invariantCheckerRejectsSyntheticCorruption` |
+| Load/save duplicate, missing, or nonlocal identities (P1-04) | `currentSchemaLoaderRejectsIdentityCorruption` covers same/cross-page collisions and transactional save; `historicalIdentityMigrationIsDeterministic`, `legacyV1V2V3MigrationSurvivesSaveReloadAndUndoRedo`, `malformedOrOversizedClipboardPasteIsTransactional`, `invariantCheckerRejectsSyntheticCorruption` |
 | Object-row visibility/lock uses missing metadata | `objectRowLayerButtonsOperateOnParentLayer` |
 | Capped brush resampler terminal delta points from replaced sample | `deformationResamplingIsBoundedAndDeterministic` delta-chain assertions |
 | Undo/save-load semantic identity | `semanticSaveLoadAndUndoRedoEquivalence`, `realFileLifecyclePreservesComplexSemantics` |
-| Latest async text but stale effects/transform/frame | `latestAsyncSemanticSnapshotWins`, `pageSwitchRejectsLatePreviousPage`, `deletedObjectCannotBeRepublished`, `controllerDestructionWithQueuedEvaluationIsSafe` |
+| Latest async text but stale effects/transform/frame | `latestAsyncSemanticSnapshotWins`, `mixedRapidMutationsPublishOnlyFinalSemanticScene`, `pageSwitchRejectsLatePreviousPage`, `deletedObjectCannotBeRepublished`, `controllerDestructionWithQueuedEvaluationIsSafe` |
 | Longer valid state changes | `seededValidWorkflows` ten fixed seeds × 200 actions |
 
 As new historical bugs arise, extend this table and add their user-path

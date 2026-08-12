@@ -70,9 +70,13 @@ public slots:
 
 signals:
     void zoomChanged(qreal zoom);
-    void deformationPreviewChanged(const QString& objectId, const DeformationStroke& stroke);
+    void deformationPreviewChanged(const QString& objectId,
+                                   const DeformationStroke& stroke,
+                                   quint64 spatialRevision);
     void deformationPreviewCleared();
-    void deformationStrokeReady(const QString& objectId, const DeformationStroke& stroke);
+    void deformationStrokeReady(const QString& objectId,
+                                const DeformationStroke& stroke,
+                                quint64 spatialRevision);
     void objectClicked(const QString& objectId, bool additive);
     void marqueeSelectionRequested(const QRectF& rect, bool additive);
     void moveCommitted(const QStringList& objectIds, const QPointF& delta);
@@ -82,11 +86,15 @@ signals:
     void textRangeChanged(const QString& objectId, int start, int end);
     void textEditingChanged(bool editing);
     void effectMaskStrokeReady(const QString& objectId, const QString& effectId,
-                               const EffectMaskStroke& stroke);
+                               const EffectMaskStroke& stroke,
+                               quint64 spatialRevision);
     void effectMaskPreviewChanged(const QString& objectId, const QString& effectId,
-                                  const EffectMaskStroke& stroke);
+                                  const EffectMaskStroke& stroke,
+                                  quint64 spatialRevision);
     void effectMaskPreviewCleared();
-    void objectTransformCommitted(const QString& objectId, const ObjectTransform& transform);
+    void objectTransformCommitted(const QString& objectId,
+                                  const ObjectTransform& transform,
+                                  quint64 spatialRevision);
     void nudgeRequested(const QPointF& delta);
     void deleteRequested();
     void duplicateRequested();
@@ -193,6 +201,8 @@ private:
     bool m_maskEnabled = false;
     QString m_brushTargetId;
     QString m_brushEffectId;
+    quint64 m_brushSpatialRevision = 0;
+    quint64 m_transformSpatialRevision = 0;
     int m_textRangeStart = -1;
     int m_textRangeEnd = -1;
     QString m_navigationMode = QStringLiteral("middleSpace");

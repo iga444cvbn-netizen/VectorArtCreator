@@ -265,8 +265,10 @@ MainWindow::MainWindow(QWidget* parent)
                 m_controller->moveObjects(objectIds, delta);
             });
     connect(m_canvas, &EditorCanvas::objectTransformCommitted, this,
-            [this](const QString& objectId, const ObjectTransform& transform) {
-                m_controller->setObjectTransform(objectId, transform);
+            [this](const QString& objectId,
+                   const ObjectTransform& transform,
+                   quint64 spatialRevision) {
+                m_controller->setObjectTransform(objectId, transform, spatialRevision);
             });
     connect(m_canvas, &EditorCanvas::nudgeRequested,
             m_controller, &EditorController::nudgeSelectedObjects);
@@ -320,17 +322,25 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_canvas, &EditorCanvas::textEditingChanged,
             this, &MainWindow::handleTextEditingChanged);
     connect(m_canvas, &EditorCanvas::effectMaskStrokeReady, this,
-            [this](const QString& objectId, const QString& effectId, const EffectMaskStroke& stroke) {
+            [this](const QString& objectId,
+                   const QString& effectId,
+                   const EffectMaskStroke& stroke,
+                   quint64 spatialRevision) {
                 if (effectId.isEmpty()) {
                     setStatus(QStringLiteral("Select an effect before painting its mask."));
                     return;
                 }
-                m_controller->addEffectMaskStroke(objectId, effectId, stroke);
+                m_controller->addEffectMaskStroke(
+                    objectId, effectId, stroke, spatialRevision);
             });
     connect(m_canvas, &EditorCanvas::effectMaskPreviewChanged, this,
-            [this](const QString& objectId, const QString& effectId, const EffectMaskStroke& stroke) {
+            [this](const QString& objectId,
+                   const QString& effectId,
+                   const EffectMaskStroke& stroke,
+                   quint64 spatialRevision) {
                 if (!effectId.isEmpty()) {
-                    m_controller->setEffectMaskPreview(objectId, effectId, stroke);
+                    m_controller->setEffectMaskPreview(
+                        objectId, effectId, stroke, spatialRevision);
                 }
             });
     connect(m_canvas, &EditorCanvas::effectMaskPreviewCleared,
@@ -483,12 +493,20 @@ MainWindow::MainWindow(QWidget* parent)
             m_controller, &EditorController::clearDeformation);
     connect(m_canvas, &EditorCanvas::deformationPreviewChanged,
             m_controller,
-            qOverload<const QString&, const DeformationStroke&>(&EditorController::setDeformationPreview));
+            [this](const QString& objectId,
+                   const DeformationStroke& stroke,
+                   quint64 spatialRevision) {
+                m_controller->setDeformationPreview(objectId, stroke, spatialRevision);
+            });
     connect(m_canvas, &EditorCanvas::deformationPreviewCleared,
             m_controller, &EditorController::clearDeformationPreview);
     connect(m_canvas, &EditorCanvas::deformationStrokeReady,
             m_controller,
-            qOverload<const QString&, const DeformationStroke&>(&EditorController::addDeformationStroke));
+            [this](const QString& objectId,
+                   const DeformationStroke& stroke,
+                   quint64 spatialRevision) {
+                m_controller->addDeformationStroke(objectId, stroke, spatialRevision);
+            });
 
     connect(m_layersPanel, &LayersPanel::layerSelected,
             m_controller, &EditorController::switchLayer);

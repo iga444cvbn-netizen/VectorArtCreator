@@ -44,9 +44,10 @@ TextEngine -> ShapedText -> GlyphGeometryBuilder -> VectorGeometry
 * `EditorController` owns the document, selection, undo stack, scene result,
   evaluation generation, and non-persistent preview stroke. It copies the
   current `Page` before dispatching evaluation to `QtConcurrent`; a watcher
-  publishes a result only if its generation is still current. `EditorCanvas`
-  only handles viewport/input, hit testing, selection/move previews, and stroke
-  previews or completed strokes.
+  publishes a result only if its generation and spatial revision are still
+  current and evaluation completed successfully. `EditorCanvas` only handles
+  viewport/input, hit testing, selection/move previews, and stroke previews or
+  completed strokes.
 * `IExportBackend` keeps SVG and future platform exporters separate. `SvgExporter`
   writes only final path geometry.
 
@@ -78,8 +79,9 @@ which are evaluated as nondestructive geometric attenuation and are undoable.
 1. `TextObject` retains editable source text and typography values.
 2. `TextEngine` lays out explicit source paragraphs with `QTextLayout`, including
    line spacing, kerning, ligatures, combining marks, bidirectional text, and
-   Qt fallback behavior. Each `QGlyphRun` is requested with string indexes so
-   glyphs retain source-cluster and line metadata.
+   Qt fallback behavior. Each `QGlyphRun` is requested with string indexes; all
+   runs in a line first contribute to one sorted UTF-16 cluster-boundary map, so
+   fallback and bidi run boundaries cannot consume or truncate another cluster.
 3. `GlyphGeometryBuilder` creates positioned `GeometryPiece` paths from physical
    glyph outlines. A source glyph may produce zero, one, or multiple pieces.
 4. `EffectStack` applies enabled procedural effects in explicit user order and
@@ -92,12 +94,24 @@ which are evaluated as nondestructive geometric attenuation and are undoable.
 matrix is `T(position) * T(pivotLocal) * R(rotation) * S(scale) *
 T(-pivotLocal)`, where `pivotLocal` is the immutable base-local-bounds centre.
 Scene results retain base/current local bounds, both affine matrices, an oriented
-page quad, and a page AABB; the AABB is broad-phase only.  Effects and manual
+page quad, a page AABB, and the document spatial revision from which the frame
+was evaluated; the AABB is broad-phase only. Effects and manual
 deformation run in object-local coordinates before this matrix is applied.
 Canvas points cross screen -> page -> object-local before persistence.  Deltas
 use the inverse linear matrix (translation is removed), and brush radii are
 stored as an explicitly documented local equivalent-area circle.  Consequently
 their footprint is an ellipse in page space under non-uniform scale.
+
+The canvas may emit transient page-space brush/mask input together with the
+revision it observed, but that revision is diagnostic rather than authority.
+Before persistence, the controller obtains an exact-current published frame or
+synchronously evaluates one from the current value object, then converts the
+input to object-local space. Preview scenes never authorize persistence. A
+transform gesture whose captured revision is obsolete is rejected rather than
+silently applying coordinates from another frame. Deformation and effect-mask
+previews belong to one exact persisted snapshot: any semantic command, undo/
+redo, page change, New, or Open clears their values and IDs before scheduling
+the next revision, so a transient flag cannot leak into later committed scenes.
 
 ## Manual deformation model
 
@@ -167,11 +181,22 @@ enabled for a useful preview.
 
 Projects are versioned JSON. The current project format is version 6. Version 1
 tracking is migrated to `trackingEm`; versions 1-3 flat object arrays migrate to
-one page and one layer while preserving object order. Version 2/3 projects that
+one page and one layer while preserving object order and assigning deterministic
+path-derived page/layer/object/effect IDs. Version 2/3 projects that
 have no `deformation` object receive the default enabled deformation model with
 no strokes. The next save writes version 6 with pages, layers, stable IDs, object
 transforms, and active IDs. Deformation JSON is validated for finite coordinates,
 bounded sample/stroke counts, and bounded radius/strength/hardness/pressure.
+
+Current v4-v6 files must supply globally unique page/layer/object/effect IDs and
+hierarchically local active IDs; malformed input is rejected transactionally
+with a JSON path. The serializer validates project/clipboard bytes and aggregate
+page, layer, object, text, effect, mask-point, deformation-sample, and estimated
+work limits before constructing or replacing a document. Save applies the same
+authoritative hierarchy/resource contract before its atomic commit. Transient
+page-input coordinates are never a legal persisted deformation value. Estimated
+object work uses saturating `qint64` arithmetic over source units times combined
+effect/mask/deformation units, so overflow is rejection rather than wraparound.
 
 Presets are version 2 JSON with a generated UUID `id`, Unicode `name`, and an
 independent effect stack. New storage paths are `<uuid>.json`; human names never
@@ -187,12 +212,17 @@ opacity, object ID and Unicode source text. It is portable and contains no Win32
 types. Selection records are tightly bounded and translated to `(0,0)`; Current
 Page retains its physical page rectangle. `SvgExporter` consumes the same payload
 through an atomic UTF-8 write, preserving nonzero winding and one record per
-fill/opacity item.
+fill/opacity item. Synchronous export owns a bounded `WorkControl`; interruption
+before `QSaveFile::commit()` leaves the previous output untouched.
 
 `VectorClipboardService` is a small platform façade. On Windows its implementation
 in `src/platform/windows` records GDI+ EMF+ Dual through an RAII process service,
 then uses a bounded clipboard transaction to transfer CF_ENHMETAFILE, SVG, PNG,
-and CF_UNICODETEXT. No Win32 or GDI+ headers cross that directory boundary.
+and CF_UNICODETEXT. It reports Complete, Partial, Cancelled, or Failure and uses
+an injectable operations boundary to make allocation, lock, registration, and
+ownership-transfer failures testable. Cancellation is accepted through rendering
+and stops before the short noninterruptible clipboard ownership transaction. No
+Win32 or GDI+ headers cross that directory boundary.
 The editor's private object clipboard remains independent, so native text editing
 and Ctrl+C keep their existing behavior.
 
@@ -203,9 +233,25 @@ font size, line spacing, and `trackingEm`. The scene evaluator receives a copied
 `Page` snapshot, evaluates visible objects as bounded per-object tasks on
 `QThreadPool` workers, and keeps shaping/base/effect/deformation stages in a
 thread-local per-object cache. Each controller request carries a generation;
-only one page evaluation is active and only the newest pending snapshot is
-retained. Stale generations are discarded before publication. A preview stroke
-is evaluated only on the final scene copy and is never serialized.
+and a spatial revision; only one page evaluation is active and only the newest
+pending snapshot is retained. A new request cancels the running shared work
+control. Stale, cancelled, and budget-exhausted results are discarded before
+publication. A preview stroke is evaluated only on a marked transient snapshot
+and is never serialized or used as an authoritative frame. Shaping/base cache
+entries and effect/deformation stage keys become reusable only after that stage
+finishes while the shared work control is still running; interrupted partial
+geometry cannot poison the next same-thread evaluation.
+
+`WorkControl` supplies deterministic semantic work units rather than wall-clock
+deadlines. The same copyable control reaches text shaping and glyph paths,
+effects/generators, mask contour traversal, deformation, scene enumeration and
+copies, export payload/SVG, and Windows PNG/EMF/clipboard rendering. The default
+evaluation/export budget is 8,000,000 units; a cancelled or exhausted scene is
+transactional and contains no publishable objects. The maximum is inclusive:
+consuming exactly the budget remains Running, the first unit beyond it selects
+BudgetExceeded, and cancellation versus exhaustion uses a first-terminal-state-
+wins rule shared by every copy of the control. Accounting uses subtraction-based
+checks so the `qint64` maximum cannot overflow.
 
 Independent text objects can evaluate in parallel. A single very complex text
 object still applies its ordered effect and deformation pipeline mostly
@@ -225,8 +271,12 @@ current page are all represented by relevant old/new values or affected objects
 only. No ordinary edit serializes the complete `Document` merely to detect a
 change.
 
-Typing, numeric effect parameters, font size, tracking, and deformation overall
-strength merge through command IDs. A completed canvas drag is one
+Typing, numeric effect parameters, font size, tracking, Style Intensity, and
+deformation overall strength merge through command IDs. Style Intensity pushes
+its first persisted value immediately and uses a gesture token to merge only
+that held interaction. Selection changes and successful save end the token;
+subsequent values cannot merge across object ownership or the clean index. A
+completed canvas drag is one
 `AddDeformationStrokeCommand`, regardless of the number of pointer events used to
 construct its resampled samples.
 
@@ -242,7 +292,11 @@ runner, enables x64 MSVC through `ilammy/msvc-dev-cmd@v1`, installs Qt 6.8.3
 Release, builds, and runs `ctest --output-on-failure -VV` with Qt's offscreen
 platform plugin. Only after CTest succeeds does it call `windeployqt` and upload
 `VectorTypographyEditor-windows-x64.zip`. The artifact is a deployed test build,
-not an installer.
+not an installer. Every first-party library and executable is compiled with
+MSVC `/W4 /WX`; angle-bracket dependency headers are marked external at `/W0`,
+so warnings in repository-owned production, test, generated integration, and UI
+translation units fail the build without turning Qt diagnostics into project
+failures.
 
 ## Future platform boundary
 
