@@ -66,7 +66,10 @@ void EditorCanvas::setScene(const SceneGeometry& scene,
     if (active && active->fill.isValid()) {
         m_fill = active->fill;
     }
-    if (!m_pathEditObjectId.isEmpty()) {
+    // A path drag owns the frame and revision captured at press time.  Do not
+    // replace either while the pointer is down; the capability refresh will
+    // cancel the editor when a newer scene arrives.
+    if (!m_pathEditing && !m_pathEditObjectId.isEmpty()) {
         const SceneObjectGeometry* editing =
             m_sceneGeometry.objectById(m_pathEditObjectId);
         if (editing && editing->visible && !editing->locked

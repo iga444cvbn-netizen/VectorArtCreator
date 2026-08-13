@@ -996,6 +996,38 @@ void EffectsPanelUiTests::pathTypographyControlsAndAnchorGesture()
         controller->document().objectById(objectId)->path->nodes.front().anchor != oldAnchor,
         5000);
 
+    // A newer authoritative frame must not silently retarget an in-flight
+    // path gesture.  This follows the same canvas delivery/capability refresh
+    // seam used by MainWindow when asynchronous scene evaluation completes.
+    QTRY_VERIFY_WITH_TIMEOUT(
+        controller->sceneGeometry().spatialRevision == controller->spatialRevision(),
+        5000);
+    object = controller->document().objectById(objectId);
+    sceneObject = controller->sceneGeometry().objectById(objectId);
+    QVERIFY(object && object->path.has_value() && sceneObject);
+    const PathGeometry pathBeforeStaleGesture = *object->path;
+    const QPoint stalePress = canvas->mapDocumentToViewport(
+        sceneObject->frame.localPointToPage(object->path->nodes.front().anchor)).toPoint();
+    QSignalSpy stalePathCommit(canvas, &EditorCanvas::pathGeometryCommitted);
+    QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, stalePress);
+    QTest::mouseMove(canvas, stalePress + QPoint(20, 12), 20);
+
+    SceneGeometry newerScene = controller->sceneGeometry();
+    const quint64 newerRevision = controller->spatialRevision() + 1;
+    newerScene.spatialRevision = newerRevision;
+    SceneObjectGeometry* newerObject = newerScene.objectById(objectId);
+    QVERIFY(newerObject);
+    newerObject->spatialRevision = newerRevision;
+    newerObject->frame.spatialRevision = newerRevision;
+    canvas->setScene(newerScene, controller->selectedObjectIds(), objectId);
+    canvas->setPathEditor(objectId, &*object->path, newerObject->frame,
+                          newerRevision, true);
+    QTest::mouseMove(canvas, stalePress + QPoint(40, 24), 20);
+    QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier,
+                        stalePress + QPoint(40, 24));
+    QCOMPARE(stalePathCommit.count(), 0);
+    QCOMPARE(*controller->document().objectById(objectId)->path, pathBeforeStaleGesture);
+
     startOffset->spinBox()->setValue(18.0);
     QTRY_VERIFY_WITH_TIMEOUT(
         std::abs(controller->document().objectById(objectId)->pathLayout.startOffset - 18.0) < 0.01,
