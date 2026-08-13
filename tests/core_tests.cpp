@@ -476,8 +476,10 @@ void CoreTests::pathClosedSeamTransformAndSideSemantics()
     const PathPosition wrappedBackward = table->positionAt(-10.0, true);
     QVERIFY(wrappedForward.valid);
     QVERIFY(wrappedBackward.valid);
-    QVERIFY(std::abs(wrappedForward.point.x() - 10.0) < 1.0e-6);
-    QVERIFY(std::abs(wrappedBackward.point.x() - 90.0) < 1.0e-6);
+    // A closed two-node path contains the forward segment and its explicit
+    // closing segment, so its perimeter is 200 rather than 100.
+    QVERIFY(std::abs(wrappedForward.point.x() - 90.0) < 1.0e-6);
+    QVERIFY(std::abs(wrappedBackward.point.x() - 10.0) < 1.0e-6);
 
     PathGeometry reversed = closed;
     reversed.reverseDirection();

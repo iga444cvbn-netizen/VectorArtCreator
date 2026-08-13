@@ -60,6 +60,7 @@ private slots:
     void effectReorderDeleteUndoRestoresSemanticOrder();
     void legacyV1V2V3MigrationSurvivesSaveReloadAndUndoRedo();
     void malformedOrOversizedClipboardPasteIsTransactional();
+    void pathTypographySeededWorkflow();
     void seededValidWorkflows_data();
     void seededValidWorkflows();
 };
@@ -1152,6 +1153,78 @@ void WorkflowIntegrationTests::malformedOrOversizedClipboardPasteIsTransactional
     assertUnchanged();
 }
 
+void WorkflowIntegrationTests::pathTypographySeededWorkflow()
+{
+    EditorController controller;
+    const QString objectId = controller.createTextObject(
+        QPointF(120.0, 90.0), QStringLiteral("seeded path workflow"));
+    QVERIFY(!objectId.isEmpty());
+    controller.setPathLayoutEnabled(true);
+    QVERIFY(controller.document().objectById(objectId)->path.has_value());
+
+    QRandomGenerator random(20260813u);
+    const auto context = [&controller](int step) {
+        return QStringLiteral("path step=%1 object=%2")
+            .arg(step)
+            .arg(controller.document().activeObjectId);
+    };
+
+    for (int step = 0; step < 48; ++step) {
+        TextObject* object = controller.document().objectById(objectId);
+        QVERIFY(object && object->path.has_value());
+        switch (random.bounded(6)) {
+        case 0:
+            controller.setPathLayoutEnabled(!object->pathLayout.enabled);
+            break;
+        case 1:
+            controller.setPathStartOffset(-90.0 + random.generateDouble() * 180.0);
+            controller.setPathBaselineOffset(-30.0 + random.generateDouble() * 60.0);
+            controller.setPathFlip(step % 2 == 0);
+            break;
+        case 2:
+            controller.reversePath();
+            break;
+        case 3:
+            controller.setPathClosed(!object->path->closed);
+            break;
+        case 4: {
+            PathGeometry candidate = *object->path;
+            candidate.nodes.front().anchor += QPointF(
+                -5.0 + random.generateDouble() * 10.0,
+                -5.0 + random.generateDouble() * 10.0);
+            controller.setPathGeometry(objectId, candidate, controller.spatialRevision());
+            break;
+        }
+        case 5:
+            controller.removePathLayout();
+            controller.setPathLayoutEnabled(true);
+            break;
+        default:
+            Q_UNREACHABLE();
+        }
+
+        QCoreApplication::processEvents();
+        const auto report = test::checkInvariants(controller.document(), nullptr,
+                                                   controller.selectedObjectIds(),
+                                                   controller.selectionModel()->activeObjectId());
+        QVERIFY2(report.ok(), qPrintable(context(step) + QLatin1Char('\n') + report.summary()));
+
+        if (step % 8 == 7 && controller.undoStack()->canUndo()) {
+            const QString beforeUndo = test::semanticFingerprint(controller.document());
+            controller.undoStack()->undo();
+            const auto undoReport = test::checkInvariants(
+                controller.document(), nullptr, controller.selectedObjectIds(),
+                controller.selectionModel()->activeObjectId());
+            QVERIFY2(undoReport.ok(), qPrintable(context(step) + QLatin1Char('\n')
+                                                   + undoReport.summary()));
+            controller.undoStack()->redo();
+            QVERIFY2(test::semanticFingerprint(controller.document()) == beforeUndo,
+                     qPrintable(context(step)
+                                + QStringLiteral("\npath undo/redo did not restore the document")));
+        }
+    }
+}
+
 void WorkflowIntegrationTests::seededValidWorkflows_data()
 {
     QTest::addColumn<quint32>("seed");
@@ -1204,7 +1277,10 @@ void WorkflowIntegrationTests::seededValidWorkflows()
     };
 
     for (int step = 0; step < steps; ++step) {
-        const int action = random.bounded(36);
+        // Keep the long-lived seeded workflow stream stable. Path-specific
+        // fuzzing lives in its own deterministic path workflow below so that
+        // adding a new action cannot reshuffle unrelated page/layer coverage.
+        const int action = random.bounded(31);
         if (action == 0 || currentObjects().isEmpty()) {
             const QString id = controller.createTextObject(QPointF(random.bounded(500), random.bounded(300)),
                                                            QStringLiteral("Seed %1 step %2").arg(seed).arg(step));
@@ -1432,29 +1508,6 @@ void WorkflowIntegrationTests::seededValidWorkflows()
                 } else {
                     history << "ExportUnavailable";
                 }
-            } else if (action == 31 && active) {
-                controller.setPathLayoutEnabled(!active->pathLayout.enabled);
-                history << (active->pathLayout.enabled ? "PathEnable" : "PathDisable");
-            } else if (action == 32 && active && active->path.has_value()) {
-                controller.setPathStartOffset(-80.0 + random.generateDouble() * 160.0);
-                controller.setPathBaselineOffset(-24.0 + random.generateDouble() * 48.0);
-                controller.setPathFlip(step % 2 == 0);
-                history << "PathOffsetsFlip";
-            } else if (action == 33 && active && active->path.has_value()) {
-                controller.reversePath();
-                controller.setPathClosed(!active->path->closed);
-                history << "PathReverseClose";
-            } else if (action == 34 && active && active->path.has_value()) {
-                PathGeometry candidate = *active->path;
-                candidate.nodes.front().anchor += QPointF(
-                    -4.0 + random.generateDouble() * 8.0,
-                    -4.0 + random.generateDouble() * 8.0);
-                controller.setPathGeometry(active->id, candidate, controller.spatialRevision());
-                history << "PathNode";
-            } else if (action == 35 && active && active->path.has_value()) {
-                controller.removePathLayout();
-                controller.setPathLayoutEnabled(true);
-                history << "PathRecreate";
             }
         }
         QCoreApplication::processEvents();

@@ -980,6 +980,7 @@ void EffectsPanelUiTests::pathTypographyControlsAndAnchorGesture()
     QTRY_COMPARE(static_cast<int>(controller->tool()), static_cast<int>(EditorTool::PathEdit));
     QTRY_VERIFY_WITH_TIMEOUT(
         controller->sceneGeometry().spatialRevision == controller->spatialRevision(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(canvas->pathEditorObjectId() == objectId, 5000);
 
     const TextObject* object = controller->document().objectById(objectId);
     const SceneObjectGeometry* sceneObject = controller->sceneGeometry().objectById(objectId);
@@ -987,9 +988,11 @@ void EffectsPanelUiTests::pathTypographyControlsAndAnchorGesture()
     const QPointF oldAnchor = object->path->nodes.front().anchor;
     const QPoint press = canvas->mapDocumentToViewport(
         sceneObject->frame.localPointToPage(oldAnchor)).toPoint();
+    QSignalSpy pathCommit(canvas, &EditorCanvas::pathGeometryCommitted);
     QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, press);
     QTest::mouseMove(canvas, press + QPoint(20, 12), 20);
     QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, press + QPoint(20, 12));
+    QTRY_VERIFY_WITH_TIMEOUT(pathCommit.count() > 0, 5000);
     QTRY_VERIFY_WITH_TIMEOUT(
         controller->document().objectById(objectId)->path->nodes.front().anchor != oldAnchor,
         5000);
