@@ -579,6 +579,9 @@ void EditorCanvas::wheelEvent(QWheelEvent* event)
 void EditorCanvas::mousePressEvent(QMouseEvent* event)
 {
     setFocus(Qt::MouseFocusReason);
+    if (event->button() == Qt::LeftButton) {
+        ++m_pathEditMousePressCount;
+    }
     if (handleCanvasMousePress(event->button(), event->position(), event->modifiers())) {
         event->accept();
         return;
@@ -649,6 +652,7 @@ bool EditorCanvas::handleCanvasMousePress(Qt::MouseButton button,
     }
 
     if (button == Qt::LeftButton && m_tool == EditorTool::PathEdit) {
+        ++m_pathEditPathBranchCount;
         if (m_pathEditObjectId.isEmpty() || m_pathEditGeometry.nodes.isEmpty()) {
             return true;
         }

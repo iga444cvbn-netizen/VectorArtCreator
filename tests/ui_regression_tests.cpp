@@ -1002,6 +1002,10 @@ void EffectsPanelUiTests::pathTypographyControlsAndAnchorGesture()
                             .arg(canvas->zoom())));
     QSignalSpy pathCommit(canvas, &EditorCanvas::pathGeometryCommitted);
     QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, press);
+    QVERIFY2(canvas->pathEditorMousePressCount() > 0,
+             "EditorCanvas did not receive the path mouse press");
+    QVERIFY2(canvas->pathEditorPathBranchCount() > 0,
+             "EditorCanvas did not enter the PathEdit mouse branch");
     QTRY_VERIFY_WITH_TIMEOUT(canvas->pathEditorGestureActive(), 5000);
     QTest::mouseMove(canvas, press + QPoint(20, 12), 20);
     QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, press + QPoint(20, 12));

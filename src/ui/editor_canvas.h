@@ -73,6 +73,8 @@ public:
         return m_tool == EditorTool::PathEdit;
     }
     [[nodiscard]] bool pathEditorGestureActive() const { return m_pathEditing; }
+    [[nodiscard]] int pathEditorMousePressCount() const { return m_pathEditMousePressCount; }
+    [[nodiscard]] int pathEditorPathBranchCount() const { return m_pathEditPathBranchCount; }
     [[nodiscard]] BrushMode brushMode() const { return m_brushMode; }
     [[nodiscard]] BrushTarget brushTarget() const { return m_brushTarget; }
     [[nodiscard]] bool maskEnabled() const { return m_maskEnabled; }
@@ -243,6 +245,8 @@ private:
     int m_pathEditHandleKind = 0; // 1 anchor, 2 incoming, 3 outgoing
     QPointF m_pathEditStartLocal;
     bool m_pathEditing = false;
+    int m_pathEditMousePressCount = 0;
+    int m_pathEditPathBranchCount = 0;
 };
 
 } // namespace vt
