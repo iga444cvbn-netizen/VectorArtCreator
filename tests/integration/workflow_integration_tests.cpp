@@ -590,6 +590,7 @@ void WorkflowIntegrationTests::duplicatePageFreshensEntireIdentityHierarchy()
 {
     EditorController controller;
     const QString originalObjectId = controller.createTextObject(QPointF(50, 60), QStringLiteral("duplicate semantics"));
+    controller.setPathLayoutEnabled(true);
     controller.addEffect(QStringLiteral("wave"));
     controller.addEffect(QStringLiteral("echo"));
     controller.setEffectStackStrength(1.6);
@@ -601,6 +602,12 @@ void WorkflowIntegrationTests::duplicatePageFreshensEntireIdentityHierarchy()
         originalIds.insert(layer->id);
         for (const auto& object : layer->objects) {
             originalIds.insert(object->id);
+            if (object->path.has_value()) {
+                originalIds.insert(object->path->id);
+                for (const PathNode& node : object->path->nodes) {
+                    originalIds.insert(node.id);
+                }
+            }
             for (int index = 0; index < object->effects.size(); ++index) {
                 originalIds.insert(object->effects.at(index)->instanceId);
             }
@@ -617,6 +624,12 @@ void WorkflowIntegrationTests::duplicatePageFreshensEntireIdentityHierarchy()
         duplicatedIds << layer->id;
         for (const auto& object : layer->objects) {
             duplicatedIds << object->id;
+            if (object->path.has_value()) {
+                duplicatedIds << object->path->id;
+                for (const PathNode& node : object->path->nodes) {
+                    duplicatedIds << node.id;
+                }
+            }
             for (int index = 0; index < object->effects.size(); ++index) {
                 duplicatedIds << object->effects.at(index)->instanceId;
             }
@@ -640,6 +653,15 @@ void WorkflowIntegrationTests::duplicatePageFreshensEntireIdentityHierarchy()
             TextObject& normalizedObject = *normalizedLayer.objects[objectIndex];
             const TextObject& originalObject = *originalLayer.objects[objectIndex];
             normalizedObject.id = originalObject.id;
+            if (normalizedObject.path.has_value() && originalObject.path.has_value()) {
+                normalizedObject.path->id = originalObject.path->id;
+                for (int nodeIndex = 0;
+                     nodeIndex < normalizedObject.path->nodes.size(); ++nodeIndex) {
+                    normalizedObject.path->nodes[nodeIndex].id =
+                        originalObject.path->nodes.at(nodeIndex).id;
+                }
+                normalizedObject.pathLayout.pathId = normalizedObject.path->id;
+            }
             for (int effectIndex = 0; effectIndex < normalizedObject.effects.size(); ++effectIndex) {
                 normalizedObject.effects.at(effectIndex)->instanceId =
                     originalObject.effects.at(effectIndex)->instanceId;
@@ -906,9 +928,11 @@ void WorkflowIntegrationTests::duplicatePasteAndPresetFreshenEffectIdentities()
 {
     EditorController controller;
     const QString originalId = controller.createTextObject(QPointF(100, 100), QStringLiteral("clone matrix"));
+    controller.setPathLayoutEnabled(true);
     controller.addEffect(QStringLiteral("wave"));
     controller.addEffect(QStringLiteral("echo"));
     const TextObject originalSnapshot(*controller.document().objectById(originalId));
+    QVERIFY(originalSnapshot.path.has_value());
 
     controller.duplicateSelectedObjects();
     const auto afterDuplicate = controller.document().objectsOnCurrentPage();
@@ -916,6 +940,10 @@ void WorkflowIntegrationTests::duplicatePasteAndPresetFreshenEffectIdentities()
     TextObject* duplicate = afterDuplicate.at(0)->id == originalId
         ? afterDuplicate.at(1) : afterDuplicate.at(0);
     QVERIFY(duplicate->id != originalId);
+    QVERIFY(duplicate->path.has_value());
+    QVERIFY(duplicate->path->id != originalSnapshot.path->id);
+    QCOMPARE(duplicate->pathLayout.pathId, duplicate->path->id);
+    QVERIFY(duplicate->path->nodes.front().id != originalSnapshot.path->nodes.front().id);
     for (int index = 0; index < duplicate->effects.size(); ++index) {
         QVERIFY(duplicate->effects.at(index)->instanceId
                 != originalSnapshot.effects.at(index)->instanceId);
@@ -938,14 +966,23 @@ void WorkflowIntegrationTests::duplicatePasteAndPresetFreshenEffectIdentities()
     QCOMPARE(afterPaste.size(), 3);
     QSet<QString> objectIds;
     QSet<QString> effectIds;
+    QSet<QString> pathIds;
+    QSet<QString> pathNodeIds;
     for (const TextObject* object : afterPaste) {
         objectIds.insert(object->id);
+        QVERIFY(object->path.has_value());
+        pathIds.insert(object->path->id);
+        for (const PathNode& node : object->path->nodes) {
+            pathNodeIds.insert(node.id);
+        }
         for (int index = 0; index < object->effects.size(); ++index) {
             effectIds.insert(object->effects.at(index)->instanceId);
         }
     }
     QCOMPARE(objectIds.size(), 3);
     QCOMPARE(effectIds.size(), 6);
+    QCOMPARE(pathIds.size(), 3);
+    QCOMPARE(pathNodeIds.size(), 3 * originalSnapshot.path->nodes.size());
     QString error;
     controller.selectObject(originalId);
     QVERIFY2(controller.applyPresetById(QStringLiteral("builtin.whisper.v1"), &error), qPrintable(error));
@@ -1167,7 +1204,7 @@ void WorkflowIntegrationTests::seededValidWorkflows()
     };
 
     for (int step = 0; step < steps; ++step) {
-        const int action = random.bounded(31);
+        const int action = random.bounded(36);
         if (action == 0 || currentObjects().isEmpty()) {
             const QString id = controller.createTextObject(QPointF(random.bounded(500), random.bounded(300)),
                                                            QStringLiteral("Seed %1 step %2").arg(seed).arg(step));
@@ -1395,6 +1432,29 @@ void WorkflowIntegrationTests::seededValidWorkflows()
                 } else {
                     history << "ExportUnavailable";
                 }
+            } else if (action == 31 && active) {
+                controller.setPathLayoutEnabled(!active->pathLayout.enabled);
+                history << (active->pathLayout.enabled ? "PathEnable" : "PathDisable");
+            } else if (action == 32 && active && active->path.has_value()) {
+                controller.setPathStartOffset(-80.0 + random.generateDouble() * 160.0);
+                controller.setPathBaselineOffset(-24.0 + random.generateDouble() * 48.0);
+                controller.setPathFlip(step % 2 == 0);
+                history << "PathOffsetsFlip";
+            } else if (action == 33 && active && active->path.has_value()) {
+                controller.reversePath();
+                controller.setPathClosed(!active->path->closed);
+                history << "PathReverseClose";
+            } else if (action == 34 && active && active->path.has_value()) {
+                PathGeometry candidate = *active->path;
+                candidate.nodes.front().anchor += QPointF(
+                    -4.0 + random.generateDouble() * 8.0,
+                    -4.0 + random.generateDouble() * 8.0);
+                controller.setPathGeometry(active->id, candidate, controller.spatialRevision());
+                history << "PathNode";
+            } else if (action == 35 && active && active->path.has_value()) {
+                controller.removePathLayout();
+                controller.setPathLayoutEnabled(true);
+                history << "PathRecreate";
             }
         }
         QCoreApplication::processEvents();

@@ -32,6 +32,8 @@ find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Test Concurrent)
 set(CORE_SOURCES
     src/core/evaluation/work_control.cpp
     src/core/document/document.cpp
+    src/core/path/path_geometry.cpp
+    src/core/path/path_layout.cpp
     src/core/scene/scene_geometry.cpp
     src/core/scene/object_frame.cpp
     src/core/scene/scene_evaluator.cpp

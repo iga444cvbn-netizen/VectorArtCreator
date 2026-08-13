@@ -57,6 +57,8 @@ public:
     [[nodiscard]] qreal brushHardness() const;
     [[nodiscard]] bool maskRestoreMode() const;
     [[nodiscard]] QString selectedEffectId() const;
+    [[nodiscard]] bool pathLayoutEnabled() const;
+    [[nodiscard]] const PathGeometry* activePath() const;
 
     void refreshFonts();
     void newDocument();
@@ -78,6 +80,19 @@ public:
     void setTracking(qreal tracking);
     void setLineSpacing(qreal lineSpacing);
     void setFillColor(const QColor& color);
+    void setPathLayoutEnabled(bool enabled);
+    void removePathLayout();
+    void setPathStartOffset(qreal offset);
+    void setPathBaselineOffset(qreal offset);
+    void setPathReverse(bool reverse);
+    void setPathFlip(bool flip);
+    void setPathFollowTangent(bool followTangent);
+    void setPathOverflow(PathOverflowMode overflow);
+    void reversePath();
+    void setPathClosed(bool closed);
+    void setPathGeometry(const QString& objectId,
+                         const PathGeometry& path,
+                         quint64 inputSpatialRevision = 0);
     void setEffectStackStrength(qreal strength);
     void beginEffectStackStrengthGesture();
     void endEffectStackStrengthGesture();
@@ -218,6 +233,12 @@ private:
         const DeformationStroke& input,
         quint64 inputSpatialRevision,
         DeformationStroke* normalized);
+    void pushPathState(const QString& objectId,
+                       std::optional<PathGeometry> path,
+                       PathTypographyProperties layout,
+                       const QString& description);
+    [[nodiscard]] bool pathInputRevisionIsCurrent(const QString& objectId,
+                                                  quint64 inputSpatialRevision);
 
     struct PendingEvaluation {
         Page snapshot;

@@ -3,6 +3,7 @@
 #include "core/deformation/manual_deformation.h"
 #include "core/effects/effect.h"
 #include "core/geometry/vector_geometry.h"
+#include "core/path/path_geometry.h"
 #include "core/scene/scene_geometry.h"
 #include "ui/deformation_tool_state.h"
 
@@ -44,6 +45,11 @@ public:
     void setMaskTarget(const QString& objectId);
     void setMaskEnabled(bool enabled);
     void setMaskEffectId(const QString& effectId);
+    void setPathEditor(const QString& objectId,
+                       const PathGeometry* path,
+                       const ObjectFrame& frame,
+                       quint64 spatialRevision,
+                       bool enabled);
     void setNavigationSettings(const QString& mode, bool invertZoom);
     void beginTextEditing(const QString& objectId,
                           const QString& text,
@@ -98,6 +104,10 @@ signals:
     void nudgeRequested(const QPointF& delta);
     void deleteRequested();
     void duplicateRequested();
+    void pathGeometryCommitted(const QString& objectId,
+                               const PathGeometry& path,
+                               quint64 spatialRevision);
+    void pathEditCancelled();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -139,6 +149,12 @@ private:
     [[nodiscard]] bool handleCanvasWheel(const QPoint& angleDelta,
                                          Qt::KeyboardModifiers modifiers);
     [[nodiscard]] bool isOutsideNativeEditor(const QPointF& viewportPosition) const;
+    [[nodiscard]] int pathHandleAt(const QPointF& documentPoint,
+                                   int* nodeIndex,
+                                   int* handleKind) const;
+    [[nodiscard]] QPointF pathPointToPage(const QPointF& localPoint) const;
+    void updatePathEditPreview(const QPointF& documentPoint);
+    void cancelPathEdit();
 
     VectorGeometry m_geometry;
     SceneGeometry m_sceneGeometry;
@@ -207,6 +223,16 @@ private:
     int m_textRangeEnd = -1;
     QString m_navigationMode = QStringLiteral("middleSpace");
     bool m_invertZoom = false;
+    QString m_pathEditObjectId;
+    PathGeometry m_pathEditGeometry;
+    PathGeometry m_pathEditBefore;
+    ObjectFrame m_pathEditFrame;
+    quint64 m_pathEditSpatialRevision = 0;
+    int m_pathEditNodeIndex = -1;
+    QString m_pathEditNodeId;
+    int m_pathEditHandleKind = 0; // 1 anchor, 2 incoming, 3 outgoing
+    QPointF m_pathEditStartLocal;
+    bool m_pathEditing = false;
 };
 
 } // namespace vt

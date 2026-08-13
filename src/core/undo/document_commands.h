@@ -474,4 +474,28 @@ private:
     qreal m_newStrength = 1.0;
 };
 
+class SetPathTypographyCommand final : public DocumentCommand {
+public:
+    SetPathTypographyCommand(Document& document,
+                             QString objectId,
+                             std::optional<PathGeometry> oldPath,
+                             PathTypographyProperties oldLayout,
+                             std::optional<PathGeometry> newPath,
+                             PathTypographyProperties newLayout,
+                             DocumentChangeCallback onChanged,
+                             QString description = QStringLiteral("Change text path"));
+
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(const std::optional<PathGeometry>& path,
+               const PathTypographyProperties& layout);
+
+    std::optional<PathGeometry> m_oldPath;
+    PathTypographyProperties m_oldLayout;
+    std::optional<PathGeometry> m_newPath;
+    PathTypographyProperties m_newLayout;
+};
+
 } // namespace vt

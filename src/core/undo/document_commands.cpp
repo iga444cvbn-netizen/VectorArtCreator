@@ -880,4 +880,44 @@ bool SetDeformationStrengthCommand::mergeWith(const QUndoCommand* other)
     return true;
 }
 
+SetPathTypographyCommand::SetPathTypographyCommand(
+    Document& document,
+    QString objectId,
+    std::optional<PathGeometry> oldPath,
+    PathTypographyProperties oldLayout,
+    std::optional<PathGeometry> newPath,
+    PathTypographyProperties newLayout,
+    DocumentChangeCallback onChanged,
+    QString description)
+    : DocumentCommand(document, std::move(onChanged), description)
+    , m_oldPath(std::move(oldPath))
+    , m_oldLayout(std::move(oldLayout))
+    , m_newPath(std::move(newPath))
+    , m_newLayout(std::move(newLayout))
+{
+    m_objectId = std::move(objectId);
+}
+
+void SetPathTypographyCommand::apply(const std::optional<PathGeometry>& path,
+                                     const PathTypographyProperties& layout)
+{
+    TextObject* object = m_document.objectById(m_objectId);
+    if (!object) {
+        return;
+    }
+    object->path = path;
+    object->pathLayout = layout;
+    notifyChanged();
+}
+
+void SetPathTypographyCommand::undo()
+{
+    apply(m_oldPath, m_oldLayout);
+}
+
+void SetPathTypographyCommand::redo()
+{
+    apply(m_newPath, m_newLayout);
+}
+
 } // namespace vt

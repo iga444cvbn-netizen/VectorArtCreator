@@ -27,6 +27,7 @@ QString toolName(EditorTool tool)
     case EditorTool::Pinch: return QStringLiteral("Pinch");
     case EditorTool::Smooth: return QStringLiteral("Smooth");
     case EditorTool::EffectMask: return QStringLiteral("Effect mask / eraser");
+    case EditorTool::PathEdit: return QStringLiteral("Edit text path");
     }
     return QStringLiteral("Tool");
 }
@@ -43,6 +44,7 @@ QString toolId(EditorTool tool)
     case EditorTool::Pinch: return QStringLiteral("pinch");
     case EditorTool::Smooth: return QStringLiteral("smooth");
     case EditorTool::EffectMask: return QStringLiteral("effect-mask");
+    case EditorTool::PathEdit: return QStringLiteral("path-edit");
     }
     return QStringLiteral("unknown");
 }
@@ -124,6 +126,16 @@ QIcon makeToolIcon(EditorTool tool)
         painter.drawEllipse(r);
         painter.drawLine(6, 22, 22, 6);
         break;
+    case EditorTool::PathEdit:
+        painter.drawLine(4, 18, 10, 10);
+        painter.drawLine(10, 10, 17, 16);
+        painter.drawLine(17, 16, 24, 7);
+        painter.setBrush(QColor(135, 207, 255));
+        painter.drawEllipse(QPointF(4, 18), 2.5, 2.5);
+        painter.drawEllipse(QPointF(10, 10), 2.5, 2.5);
+        painter.drawEllipse(QPointF(17, 16), 2.5, 2.5);
+        painter.drawEllipse(QPointF(24, 7), 2.5, 2.5);
+        break;
     }
     return QIcon(pixmap);
 }
@@ -149,6 +161,7 @@ ToolPalette::ToolPalette(QWidget* parent)
         EditorTool::Pinch,
         EditorTool::Smooth,
         EditorTool::EffectMask,
+        EditorTool::PathEdit,
     };
     for (EditorTool tool : tools) {
         auto* button = new QToolButton(this);

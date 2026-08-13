@@ -320,6 +320,9 @@ ShapedText TextEngine::shape(const TextObject& object, const WorkControl& work)
                 ShapedGlyph glyph;
                 glyph.glyphIndex = glyphIndexes[i];
                 glyph.rawFont = rawFont;
+                const QList<quint32> oneGlyph{glyphIndexes.at(i)};
+                const auto advances = rawFont.advancesForGlyphIndexes(oneGlyph);
+                glyph.advance = qMax<qreal>(0.0, advances.value(0).x());
                 const qreal direction = run.isRightToLeft() ? -1.0 : 1.0;
                 glyph.position = rawPosition
                     + QPointF(direction * trackingDistance * lineOrdinal, lineTop);
@@ -413,6 +416,8 @@ VectorGeometry GlyphGeometryBuilder::build(const ShapedText& shaped,
         piece.sourceLineIndex = glyph.lineIndex;
         piece.anchor = glyph.position;
         piece.originalAnchor = glyph.position;
+        piece.layoutOrigin = glyph.position;
+        piece.layoutAdvance = glyph.advance;
 
         QPainterPath glyphPath = glyph.rawFont.pathForGlyph(glyph.glyphIndex);
         if (!work.consume(qMax(1, glyphPath.elementCount()))) {
@@ -447,6 +452,8 @@ VectorGeometry GlyphGeometryBuilder::build(const ShapedText& shaped,
         piece.sourceLineIndex = lineIndex;
         piece.anchor = decoration.center();
         piece.originalAnchor = piece.anchor;
+        piece.layoutOrigin = QPointF(decoration.left(), decoration.center().y());
+        piece.layoutAdvance = decoration.width();
         piece.path.addRect(decoration);
         geometry.pieces.push_back(piece);
         visibleBounds = hasVisibleBounds ? visibleBounds.united(decoration) : decoration;

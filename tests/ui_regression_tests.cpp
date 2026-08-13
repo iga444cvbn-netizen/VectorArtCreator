@@ -50,6 +50,7 @@ private slots:
     void addTextStartsFocusedAndAlignedBeforeAndAfterScenePublication();
     void textToolStartsFocusedAtCurrentZoom();
     void traitModeIsShownAfterBoldAndItalic();
+    void pathTypographyControlsAndAnchorGesture();
     void scaleControlsPreserveSmallAndMirroredValues();
     void inspectorEditEndsCanvasSessionWithoutStaleOverwrite();
     void styleIntensityGestureHasImmediateDirtyTruthAndOneUndoStep();
@@ -944,6 +945,64 @@ void EffectsPanelUiTests::traitModeIsShownAfterBoldAndItalic()
     QTest::mouseClick(italic, Qt::LeftButton);
     QTest::mouseClick(bold, Qt::LeftButton);
     assertTraitMode();
+}
+
+void EffectsPanelUiTests::pathTypographyControlsAndAnchorGesture()
+{
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    auto* controller = window.findChild<EditorController*>();
+    auto* canvas = window.findChild<EditorCanvas*>();
+    auto* typography = window.findChild<TypographyPanel*>();
+    auto* createPath = window.findChild<QPushButton*>(QStringLiteral("createTextPath"));
+    auto* pathEnabled = window.findChild<QCheckBox*>(QStringLiteral("textOnPathEnabled"));
+    auto* pathTool = window.findChild<QToolButton*>(QStringLiteral("tool/path-edit"));
+    auto* startOffset = window.findChild<SliderSpinBox*>(QStringLiteral("pathStartOffset"));
+    QVERIFY(controller);
+    QVERIFY(canvas);
+    QVERIFY(typography);
+    QVERIFY(createPath);
+    QVERIFY(pathEnabled);
+    QVERIFY(pathTool);
+    QVERIFY(startOffset);
+
+    const QString objectId = controller->createTextObject(
+        QPointF(180.0, 180.0), QStringLiteral("Path UI"));
+    QVERIFY(!objectId.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(createPath->isEnabled(), 5000);
+    QTest::mouseClick(createPath, Qt::LeftButton);
+    QTRY_VERIFY_WITH_TIMEOUT(controller->document().objectById(objectId)->path.has_value(), 5000);
+    QVERIFY(controller->document().objectById(objectId)->pathLayout.enabled);
+    QTRY_VERIFY_WITH_TIMEOUT(pathTool->isEnabled(), 5000);
+    QTest::mouseClick(pathTool, Qt::LeftButton);
+    QTRY_COMPARE(static_cast<int>(controller->tool()), static_cast<int>(EditorTool::PathEdit));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        controller->sceneGeometry().spatialRevision == controller->spatialRevision(), 5000);
+
+    const TextObject* object = controller->document().objectById(objectId);
+    const SceneObjectGeometry* sceneObject = controller->sceneGeometry().objectById(objectId);
+    QVERIFY(object && object->path.has_value() && sceneObject);
+    const QPointF oldAnchor = object->path->nodes.front().anchor;
+    const QPoint press = canvas->mapDocumentToViewport(
+        sceneObject->frame.localPointToPage(oldAnchor)).toPoint();
+    QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, press);
+    QTest::mouseMove(canvas, press + QPoint(20, 12), 20);
+    QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, press + QPoint(20, 12));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        controller->document().objectById(objectId)->path->nodes.front().anchor != oldAnchor,
+        5000);
+
+    startOffset->spinBox()->setValue(18.0);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        std::abs(controller->document().objectById(objectId)->pathLayout.startOffset - 18.0) < 0.01,
+        5000);
+    QTest::mouseClick(pathEnabled, Qt::LeftButton);
+    QTRY_VERIFY(!controller->document().objectById(objectId)->pathLayout.enabled);
+    QVERIFY(controller->document().objectById(objectId)->path.has_value());
+    controller->undoStack()->undo();
+    QTRY_VERIFY(controller->document().objectById(objectId)->pathLayout.enabled);
 }
 
 void EffectsPanelUiTests::scaleControlsPreserveSmallAndMirroredValues()

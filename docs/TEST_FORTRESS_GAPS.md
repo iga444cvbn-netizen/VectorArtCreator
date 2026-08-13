@@ -59,3 +59,28 @@ macOS runner.
 
 Future test: publish vector PDF/SVG/PNG/Unicode formats, validate ownership and
 repeat-copy behavior, and compare payload geometry to the evaluator signature.
+
+## Phase 4D path-typography coverage
+
+Path typography is now covered as a first-class layout stage rather than as a
+rendering-only exception. The permanent core/UI evidence includes:
+
+- independent dense arc-distance and cubic-split spacing checks;
+- closed-seam wrapping, reverse direction, side flip, affine mirror/rotation,
+  and final export geometry checks;
+- bounded degenerate-path behavior with no endpoint pile-up;
+- source cluster metadata preservation through path layout and effects, plus a
+  full path -> masked effect -> geometry warp -> generator -> deformation
+  pipeline check;
+- duplicate path/node identity rejection, aggregate path budgets, and atomic
+  save failure preservation;
+- explicit object-ID path undo targeting, stale spatial-revision rejection,
+  duplicate/paste identity freshening, and seeded path actions;
+- offscreen UI coverage for default path creation, path-tool dispatch, anchor
+  dragging, offsets, disable/undo, and control refresh behavior.
+
+The native-platform limitation remains narrower than the pre-existing text
+editor gap: the offscreen suite verifies the real controller/canvas path seam,
+but does not claim pixel-perfect overlay review under a native Windows display.
+Manual acceptance continues to cover rotated, mirrored, zoomed, and panned
+path editing plus Office paste appearance.

@@ -19,6 +19,7 @@ struct ShapedGlyph {
     quint32 glyphIndex = 0;
     QRawFont rawFont;
     QPointF position;
+    qreal advance = 0.0;
     int ordinal = -1;
     int clusterStart = -1;
     int clusterLength = 1;

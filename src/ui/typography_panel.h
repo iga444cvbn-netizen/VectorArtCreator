@@ -4,6 +4,7 @@
 #include "ui/slider_spin_box.h"
 
 #include <QColor>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QPlainTextEdit>
@@ -35,6 +36,16 @@ signals:
     void trackingChanged(qreal tracking);
     void lineSpacingChanged(qreal lineSpacing);
     void fillColorChanged(const QColor& color);
+    void pathLayoutEnabledChanged(bool enabled);
+    void pathStartOffsetChanged(qreal offset);
+    void pathBaselineOffsetChanged(qreal offset);
+    void pathReverseChanged(bool reverse);
+    void pathFlipChanged(bool flip);
+    void pathFollowTangentChanged(bool followTangent);
+    void createPathRequested();
+    void removePathRequested();
+    void reversePathRequested();
+    void pathClosedChanged(bool closed);
     void refreshFontsRequested();
 
 private slots:
@@ -55,6 +66,16 @@ private:
     SliderSpinBox* m_trackingSlider = nullptr;
     SliderSpinBox* m_lineSpacingSlider = nullptr;
     QPushButton* m_fillButton = nullptr;
+    QCheckBox* m_pathEnabled = nullptr;
+    SliderSpinBox* m_pathStartOffset = nullptr;
+    SliderSpinBox* m_pathBaselineOffset = nullptr;
+    QCheckBox* m_pathReverse = nullptr;
+    QCheckBox* m_pathFlip = nullptr;
+    QCheckBox* m_pathFollowTangent = nullptr;
+    QCheckBox* m_pathClosed = nullptr;
+    QPushButton* m_createPathButton = nullptr;
+    QPushButton* m_removePathButton = nullptr;
+    QPushButton* m_reversePathButton = nullptr;
     QPushButton* m_refreshFontsButton = nullptr;
     QColor m_fill;
 };

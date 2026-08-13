@@ -36,7 +36,7 @@ InvariantReport checkInvariants(const Document& document, const SceneGeometry* s
                                 const QString& activeObjectId, const QString& editingObjectId)
 {
     InvariantReport report;
-    QSet<QString> pages, layers, objects, effects;
+    QSet<QString> pages, layers, objects, effects, paths, pathNodes;
     QHash<QString, QString> pageForLayer;
     QHash<QString, QString> pageForObject;
     QHash<QString, QString> layerForObject;
@@ -91,6 +91,34 @@ InvariantReport checkInvariants(const Document& document, const SceneGeometry* s
                     || object->deformation.strength < 0.0
                     || object->deformation.strength > 4.0) {
                     report.failures << QStringLiteral("invalid deformation strength on %1").arg(object->id);
+                }
+                if (!object->pathLayout.isFinite()) {
+                    report.failures << QStringLiteral("invalid path typography state on %1").arg(object->id);
+                }
+                if (object->path.has_value()) {
+                    QString pathError;
+                    if (!object->path->validate(&pathError)) {
+                        report.failures << QStringLiteral("invalid path on %1: %2")
+                                               .arg(object->id, pathError);
+                    }
+                    if (paths.contains(object->path->id)) {
+                        report.failures << QStringLiteral("duplicate path id on %1").arg(object->id);
+                    }
+                    paths.insert(object->path->id);
+                    for (const PathNode& node : object->path->nodes) {
+                        if (pathNodes.contains(node.id)) {
+                            report.failures << QStringLiteral("duplicate path node id on %1")
+                                                   .arg(object->id);
+                        }
+                        pathNodes.insert(node.id);
+                    }
+                    if (object->pathLayout.pathId != object->path->id) {
+                        report.failures << QStringLiteral("path layout identity mismatch on %1")
+                                               .arg(object->id);
+                    }
+                } else if (object->pathLayout.enabled || !object->pathLayout.pathId.isEmpty()) {
+                    report.failures << QStringLiteral("path layout references missing path on %1")
+                                           .arg(object->id);
                 }
                 for (int strokeIndex = 0; strokeIndex < object->deformation.strokes.size(); ++strokeIndex) {
                     const DeformationStroke& stroke = object->deformation.strokes.at(strokeIndex);

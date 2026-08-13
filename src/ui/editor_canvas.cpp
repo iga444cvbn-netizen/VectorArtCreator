@@ -19,6 +19,7 @@
 #include <QWheelEvent>
 
 #include <cmath>
+#include <limits>
 
 namespace vt {
 
@@ -106,6 +107,9 @@ void EditorCanvas::setTool(EditorTool tool)
         finishTextEditing();
     }
     cancelBrushStroke();
+    if (tool != EditorTool::PathEdit) {
+        cancelPathEdit();
+    }
     m_marqueeSelecting = false;
     m_movingObjects = false;
     m_tool = tool;
@@ -161,6 +165,41 @@ void EditorCanvas::setMaskEnabled(bool enabled)
 void EditorCanvas::setMaskEffectId(const QString& effectId)
 {
     m_maskEffectId = effectId;
+}
+
+void EditorCanvas::setPathEditor(const QString& objectId,
+                                 const PathGeometry* path,
+                                 const ObjectFrame& frame,
+                                 quint64 spatialRevision,
+                                 bool enabled)
+{
+    if (!enabled || objectId.isEmpty() || !path) {
+        cancelPathEdit();
+        m_pathEditObjectId.clear();
+        m_pathEditGeometry = {};
+        m_pathEditSpatialRevision = 0;
+        m_pathEditNodeIndex = -1;
+        m_pathEditNodeId.clear();
+        update();
+        return;
+    }
+    const bool changedTarget = m_pathEditObjectId != objectId
+        || m_pathEditGeometry.id != path->id;
+    if (m_pathEditing && (m_pathEditObjectId != objectId
+                          || m_pathEditSpatialRevision != spatialRevision)) {
+        cancelPathEdit();
+    }
+    if (changedTarget) {
+        m_pathEditNodeIndex = -1;
+        m_pathEditNodeId.clear();
+    }
+    m_pathEditObjectId = objectId;
+    m_pathEditGeometry = *path;
+    m_pathEditFrame = frame;
+    m_pathEditSpatialRevision = spatialRevision;
+    m_pathEditNodeIndex = m_pathEditNodeId.isEmpty()
+        ? -1 : m_pathEditGeometry.indexOfNode(m_pathEditNodeId);
+    update();
 }
 
 void EditorCanvas::setNavigationSettings(const QString& mode, bool invertZoom)
@@ -417,6 +456,41 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
             painter.drawEllipse(rotationCenter, handle * 0.62, handle * 0.62);
         }
     }
+    if (m_tool == EditorTool::PathEdit && !m_pathEditObjectId.isEmpty()
+        && m_pathEditObjectId == m_activeObjectId
+        && m_pathEditSpatialRevision == m_sceneGeometry.spatialRevision) {
+        const QPainterPath path = m_pathEditFrame.localToPage.map(
+            m_pathEditGeometry.toPainterPath());
+        painter.setPen(QPen(QColor(255, 190, 80), 2.0 / qMax<qreal>(0.01, m_zoom),
+                            Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPath(path);
+        const qreal radius = 5.0 / qMax<qreal>(0.01, m_zoom);
+        for (const PathNode& node : m_pathEditGeometry.nodes) {
+            const QPointF anchor = m_pathEditFrame.localPointToPage(node.anchor);
+            if (node.hasIncomingHandle) {
+                const QPointF handle = m_pathEditFrame.localPointToPage(node.incomingHandle);
+                painter.setPen(QPen(QColor(180, 190, 205), 1.0 / qMax<qreal>(0.01, m_zoom),
+                                    Qt::DashLine));
+                painter.drawLine(anchor, handle);
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(QColor(180, 190, 205));
+                painter.drawEllipse(handle, radius * 0.7, radius * 0.7);
+            }
+            if (node.hasOutgoingHandle) {
+                const QPointF handle = m_pathEditFrame.localPointToPage(node.outgoingHandle);
+                painter.setPen(QPen(QColor(180, 190, 205), 1.0 / qMax<qreal>(0.01, m_zoom),
+                                    Qt::DashLine));
+                painter.drawLine(anchor, handle);
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(QColor(180, 190, 205));
+                painter.drawEllipse(handle, radius * 0.7, radius * 0.7);
+            }
+            painter.setPen(QPen(QColor(55, 70, 90), 1.0 / qMax<qreal>(0.01, m_zoom)));
+            painter.setBrush(QColor(255, 190, 80));
+            painter.drawEllipse(anchor, radius, radius);
+        }
+    }
     if (m_marqueeSelecting) {
         painter.setPen(QPen(QColor(85, 160, 255), 1.0 / qMax<qreal>(0.01, m_zoom), Qt::DashLine));
         painter.setBrush(QColor(85, 160, 255, 40));
@@ -430,6 +504,7 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
                      QStringLiteral("Zoom %1%   •   Wheel to zoom   •   Middle-drag to pan")
                          .arg(qRound(m_zoom * 100.0)));
     if (m_tool != EditorTool::Select && m_tool != EditorTool::Move && m_tool != EditorTool::Text
+        && m_tool != EditorTool::PathEdit
         && m_hasCursorPosition && !m_panning && !m_spacePressed) {
         painter.setPen(QPen(m_tool == EditorTool::EffectMask
                                 ? QColor(255, 174, 104, 220)
@@ -480,6 +555,38 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
 
 void EditorCanvas::mouseDoubleClickEvent(QMouseEvent* event)
 {
+    if (event->button() == Qt::LeftButton && m_tool == EditorTool::PathEdit
+        && !m_pathEditObjectId.isEmpty() && m_pathEditGeometry.nodes.size() >= 2) {
+        const QPointF pagePoint = documentPosition(event->position());
+        const QPointF localPoint = m_pathEditFrame.pagePointToLocal(pagePoint);
+        int nearestSegment = 0;
+        qreal nearestDistance = std::numeric_limits<qreal>::max();
+        for (int segment = 0; segment < m_pathEditGeometry.segmentCount(); ++segment) {
+            const int next = (segment + 1) % m_pathEditGeometry.nodes.size();
+            const QPointF a = m_pathEditFrame.localPointToPage(
+                m_pathEditGeometry.nodes.at(segment).anchor);
+            const QPointF b = m_pathEditFrame.localPointToPage(
+                m_pathEditGeometry.nodes.at(next).anchor);
+            const qreal distance = QLineF(pagePoint, a).length()
+                + QLineF(pagePoint, b).length() - QLineF(a, b).length();
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestSegment = segment;
+            }
+        }
+        PathGeometry candidate = m_pathEditGeometry;
+        PathNode node;
+        node.id = createStableId(QStringLiteral("path-node"));
+        node.anchor = localPoint;
+        const int insertIndex = qMin(candidate.nodes.size(), nearestSegment + 1);
+        candidate.nodes.insert(insertIndex, node);
+        m_pathEditGeometry = candidate;
+        m_pathEditNodeIndex = insertIndex;
+        m_pathEditNodeId = node.id;
+        emit pathGeometryCommitted(m_pathEditObjectId, candidate, m_pathEditSpatialRevision);
+        event->accept();
+        return;
+    }
     // Deformation and effect-mask tools own their gestures.  Select/Move may
     // promote an editable object into the native QPlainTextEdit session.
     if (event->button() == Qt::LeftButton
@@ -505,6 +612,27 @@ bool EditorCanvas::handleCanvasMousePress(Qt::MouseButton button,
         m_panning = true;
         m_lastMousePosition = widgetPosition.toPoint();
         updateCursorShape();
+        return true;
+    }
+
+    if (button == Qt::LeftButton && m_tool == EditorTool::PathEdit) {
+        if (m_pathEditObjectId.isEmpty() || m_pathEditGeometry.nodes.isEmpty()) {
+            return true;
+        }
+        int nodeIndex = -1;
+        int handleKind = 0;
+        if (pathHandleAt(documentPosition(widgetPosition), &nodeIndex, &handleKind)) {
+            m_pathEditing = true;
+            m_pathEditBefore = m_pathEditGeometry;
+            m_pathEditNodeIndex = nodeIndex;
+            m_pathEditHandleKind = handleKind;
+            m_pathEditNodeId = m_pathEditBefore.nodes.at(nodeIndex).id;
+            const PathNode& node = m_pathEditBefore.nodes.at(nodeIndex);
+            m_pathEditStartLocal = handleKind == 1
+                ? node.anchor
+                : (handleKind == 2 ? node.incomingHandle : node.outgoingHandle);
+            grabMouse();
+        }
         return true;
     }
 
@@ -646,6 +774,11 @@ void EditorCanvas::mouseMoveEvent(QMouseEvent* event)
         event->accept();
         return;
     }
+    if (m_pathEditing) {
+        updatePathEditPreview(documentPosition(event->position()));
+        event->accept();
+        return;
+    }
     if (m_brushing) {
         const QPointF position = documentPosition(event->position());
         if (m_brushPositions.isEmpty() || m_brushPositions.last() != position) {
@@ -717,6 +850,20 @@ void EditorCanvas::mouseReleaseEvent(QMouseEvent* event)
         event->accept();
         return;
     }
+    if (m_pathEditing && event->button() == Qt::LeftButton) {
+        const PathGeometry candidate = m_pathEditGeometry;
+        const bool changed = candidate != m_pathEditBefore;
+        m_pathEditing = false;
+        releaseMouse();
+        m_pathEditHandleKind = 0;
+        if (changed) {
+            emit pathGeometryCommitted(m_pathEditObjectId, candidate,
+                                       m_pathEditSpatialRevision);
+        }
+        update();
+        event->accept();
+        return;
+    }
     if (m_brushing && event->button() == Qt::LeftButton) {
         const QString targetId = m_brushTargetId;
         const DeformationStroke stroke = currentStroke();
@@ -749,6 +896,10 @@ void EditorCanvas::keyPressEvent(QKeyEvent* event)
 {
     if (event->key() == Qt::Key_Escape && !event->isAutoRepeat()) {
         cancelBrushStroke();
+        if (m_tool == EditorTool::PathEdit && m_pathEditing) {
+            cancelPathEdit();
+            emit pathEditCancelled();
+        }
         if (m_marqueeSelecting || m_movingObjects || m_transforming) {
             const bool cancelTransform = m_transforming;
             m_marqueeSelecting = false;
@@ -761,6 +912,37 @@ void EditorCanvas::keyPressEvent(QKeyEvent* event)
             releaseMouse();
             update();
         }
+        event->accept();
+        return;
+    }
+    if (m_tool == EditorTool::PathEdit && event->key() == Qt::Key_Delete
+        && !m_pathEditObjectId.isEmpty() && m_pathEditNodeIndex >= 0
+        && m_pathEditGeometry.nodes.size() > 2) {
+        PathGeometry candidate = m_pathEditGeometry;
+        candidate.nodes.removeAt(m_pathEditNodeIndex);
+        m_pathEditGeometry = candidate;
+        emit pathGeometryCommitted(m_pathEditObjectId, candidate,
+                                   m_pathEditSpatialRevision);
+        m_pathEditNodeIndex = -1;
+        m_pathEditNodeId.clear();
+        update();
+        event->accept();
+        return;
+    }
+    if (m_tool == EditorTool::PathEdit && event->key() == Qt::Key_C
+        && !event->isAutoRepeat() && m_pathEditNodeIndex >= 0
+        && m_pathEditNodeIndex < m_pathEditGeometry.nodes.size()) {
+        PathGeometry candidate = m_pathEditGeometry;
+        PathNode& node = candidate.nodes[m_pathEditNodeIndex];
+        const qreal handleLength = 40.0;
+        node.hasIncomingHandle = true;
+        node.hasOutgoingHandle = true;
+        node.incomingHandle = node.anchor - QPointF(handleLength, 0.0);
+        node.outgoingHandle = node.anchor + QPointF(handleLength, 0.0);
+        m_pathEditGeometry = candidate;
+        emit pathGeometryCommitted(m_pathEditObjectId, candidate,
+                                   m_pathEditSpatialRevision);
+        update();
         event->accept();
         return;
     }
@@ -897,6 +1079,77 @@ bool EditorCanvas::isOutsideNativeEditor(const QPointF& viewportPosition) const
     return !m_editorProxy->boundingRect().contains(proxyPosition);
 }
 
+QPointF EditorCanvas::pathPointToPage(const QPointF& localPoint) const
+{
+    return m_pathEditFrame.localPointToPage(localPoint);
+}
+
+int EditorCanvas::pathHandleAt(const QPointF& documentPoint,
+                               int* nodeIndex,
+                               int* handleKind) const
+{
+    if (!nodeIndex || !handleKind) {
+        return -1;
+    }
+    *nodeIndex = -1;
+    *handleKind = 0;
+    const qreal threshold = 10.0 / qMax<qreal>(0.01, m_zoom);
+    qreal closest = threshold;
+    for (int index = 0; index < m_pathEditGeometry.nodes.size(); ++index) {
+        const PathNode& node = m_pathEditGeometry.nodes.at(index);
+        const auto consider = [&](const QPointF& point, int kind) {
+            const qreal distance = QLineF(documentPoint, pathPointToPage(point)).length();
+            if (distance <= closest) {
+                closest = distance;
+                *nodeIndex = index;
+                *handleKind = kind;
+            }
+        };
+        consider(node.anchor, 1);
+        if (node.hasIncomingHandle) consider(node.incomingHandle, 2);
+        if (node.hasOutgoingHandle) consider(node.outgoingHandle, 3);
+    }
+    return *nodeIndex;
+}
+
+void EditorCanvas::updatePathEditPreview(const QPointF& documentPoint)
+{
+    if (!m_pathEditing || m_pathEditNodeIndex < 0
+        || m_pathEditNodeIndex >= m_pathEditBefore.nodes.size()) {
+        return;
+    }
+    const QPointF localPoint = m_pathEditFrame.pagePointToLocal(documentPoint);
+    PathGeometry candidate = m_pathEditBefore;
+    PathNode& node = candidate.nodes[m_pathEditNodeIndex];
+    if (m_pathEditHandleKind == 1) {
+        const QPointF delta = localPoint - m_pathEditStartLocal;
+        node.anchor = localPoint;
+        if (node.hasIncomingHandle) node.incomingHandle += delta;
+        if (node.hasOutgoingHandle) node.outgoingHandle += delta;
+    } else if (m_pathEditHandleKind == 2) {
+        node.hasIncomingHandle = true;
+        node.incomingHandle = localPoint;
+    } else if (m_pathEditHandleKind == 3) {
+        node.hasOutgoingHandle = true;
+        node.outgoingHandle = localPoint;
+    }
+    m_pathEditGeometry = candidate;
+    update();
+}
+
+void EditorCanvas::cancelPathEdit()
+{
+    if (!m_pathEditing) {
+        return;
+    }
+    m_pathEditGeometry = m_pathEditBefore;
+    m_pathEditing = false;
+    m_pathEditNodeIndex = -1;
+    m_pathEditHandleKind = 0;
+    releaseMouse();
+    update();
+}
+
 void EditorCanvas::setZoom(qreal value)
 {
     const qreal bounded = qBound<qreal>(0.02, value, 32.0);
@@ -993,6 +1246,8 @@ void EditorCanvas::updateCursorShape()
         setCursor(Qt::SizeAllCursor);
     } else if (m_tool == EditorTool::Text) {
         setCursor(Qt::IBeamCursor);
+    } else if (m_tool == EditorTool::PathEdit) {
+        setCursor(Qt::CrossCursor);
     } else {
         setCursor(Qt::CrossCursor);
     }

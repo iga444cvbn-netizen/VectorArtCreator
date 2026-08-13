@@ -19,6 +19,11 @@ struct GeometryPiece {
     // Immutable source-layout anchor. Effects may move anchor, but never this
     // reference used by later effect normalization/order semantics.
     QPointF originalAnchor;
+    // Source-layout data retained until the optional path-layout stage. It is
+    // derived metadata, not persistent document state; effects and deformation
+    // operate on the transformed path/anchor below it.
+    QPointF layoutOrigin;
+    qreal layoutAdvance = 0.0;
     qreal opacityMultiplier = 1.0;
     int generationDepth = 0;
     QString generatorEffectId;

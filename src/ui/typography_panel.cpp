@@ -142,6 +142,50 @@ TypographyPanel::TypographyPanel(QWidget* parent)
     m_lineSpacingSlider->setSuffix(QStringLiteral(" ×"));
     layout->addRow(QStringLiteral("Line spacing"), m_lineSpacingSlider);
 
+    m_pathEnabled = new QCheckBox(QStringLiteral("Text on path"), group);
+    m_pathEnabled->setObjectName(QStringLiteral("textOnPathEnabled"));
+    layout->addRow(QStringLiteral("Path layout"), m_pathEnabled);
+    m_createPathButton = new QPushButton(QStringLiteral("Create / edit path"), group);
+    m_createPathButton->setObjectName(QStringLiteral("createTextPath"));
+    layout->addRow(QString(), m_createPathButton);
+    m_pathStartOffset = new SliderSpinBox(group);
+    m_pathStartOffset->setObjectName(QStringLiteral("pathStartOffset"));
+    m_pathStartOffset->setRange(-100000.0, 100000.0);
+    m_pathStartOffset->setSingleStep(1.0);
+    m_pathStartOffset->setDecimals(1);
+    m_pathStartOffset->setSuffix(QStringLiteral(" px"));
+    layout->addRow(QStringLiteral("Path start"), m_pathStartOffset);
+    m_pathBaselineOffset = new SliderSpinBox(group);
+    m_pathBaselineOffset->setObjectName(QStringLiteral("pathBaselineOffset"));
+    m_pathBaselineOffset->setRange(-100000.0, 100000.0);
+    m_pathBaselineOffset->setSingleStep(1.0);
+    m_pathBaselineOffset->setDecimals(1);
+    m_pathBaselineOffset->setSuffix(QStringLiteral(" px"));
+    layout->addRow(QStringLiteral("Path baseline"), m_pathBaselineOffset);
+    m_pathReverse = new QCheckBox(QStringLiteral("Reverse traversal"), group);
+    m_pathReverse->setObjectName(QStringLiteral("pathReverse"));
+    layout->addRow(QString(), m_pathReverse);
+    m_pathFlip = new QCheckBox(QStringLiteral("Flip text side"), group);
+    m_pathFlip->setObjectName(QStringLiteral("pathFlip"));
+    layout->addRow(QString(), m_pathFlip);
+    m_pathFollowTangent = new QCheckBox(QStringLiteral("Follow tangent"), group);
+    m_pathFollowTangent->setObjectName(QStringLiteral("pathFollowTangent"));
+    m_pathFollowTangent->setChecked(true);
+    layout->addRow(QString(), m_pathFollowTangent);
+    m_pathClosed = new QCheckBox(QStringLiteral("Closed path"), group);
+    m_pathClosed->setObjectName(QStringLiteral("pathClosed"));
+    layout->addRow(QString(), m_pathClosed);
+    auto* pathButtons = new QWidget(group);
+    auto* pathButtonsLayout = new QHBoxLayout(pathButtons);
+    pathButtonsLayout->setContentsMargins(0, 0, 0, 0);
+    m_reversePathButton = new QPushButton(QStringLiteral("Reverse geometry"), pathButtons);
+    m_reversePathButton->setObjectName(QStringLiteral("reverseTextPath"));
+    m_removePathButton = new QPushButton(QStringLiteral("Remove"), pathButtons);
+    m_removePathButton->setObjectName(QStringLiteral("removeTextPath"));
+    pathButtonsLayout->addWidget(m_reversePathButton);
+    pathButtonsLayout->addWidget(m_removePathButton);
+    layout->addRow(QString(), pathButtons);
+
     m_fillButton = new QPushButton(group);
     m_fillButton->setText(QStringLiteral("Choose color…"));
     layout->addRow(QStringLiteral("Fill"), m_fillButton);
@@ -182,6 +226,26 @@ TypographyPanel::TypographyPanel(QWidget* parent)
             [this](double value) { emit trackingChanged(value); });
     connect(m_lineSpacingSlider, &SliderSpinBox::valueChanged, this,
             [this](double value) { emit lineSpacingChanged(value); });
+    connect(m_pathEnabled, &QCheckBox::toggled,
+            this, &TypographyPanel::pathLayoutEnabledChanged);
+    connect(m_pathStartOffset, &SliderSpinBox::valueChanged, this,
+            [this](double value) { emit pathStartOffsetChanged(value); });
+    connect(m_pathBaselineOffset, &SliderSpinBox::valueChanged, this,
+            [this](double value) { emit pathBaselineOffsetChanged(value); });
+    connect(m_pathReverse, &QCheckBox::toggled,
+            this, &TypographyPanel::pathReverseChanged);
+    connect(m_pathFlip, &QCheckBox::toggled,
+            this, &TypographyPanel::pathFlipChanged);
+    connect(m_pathFollowTangent, &QCheckBox::toggled,
+            this, &TypographyPanel::pathFollowTangentChanged);
+    connect(m_pathClosed, &QCheckBox::toggled,
+            this, &TypographyPanel::pathClosedChanged);
+    connect(m_createPathButton, &QPushButton::clicked,
+            this, &TypographyPanel::createPathRequested);
+    connect(m_removePathButton, &QPushButton::clicked,
+            this, &TypographyPanel::removePathRequested);
+    connect(m_reversePathButton, &QPushButton::clicked,
+            this, &TypographyPanel::reversePathRequested);
     connect(m_fillButton, &QPushButton::clicked, this, &TypographyPanel::chooseFillColor);
     connect(m_refreshFontsButton, &QPushButton::clicked, this, &TypographyPanel::refreshFontsRequested);
 }
@@ -213,9 +277,49 @@ void TypographyPanel::refresh(const TextObject* object)
 {
     setEnabled(object != nullptr);
     if (!object) {
-        const QSignalBlocker blocker(m_textEdit);
-        m_textEdit->clear();
-        m_textEdit->setPlaceholderText(QStringLiteral("No object selected"));
+        {
+            const QSignalBlocker blocker(m_textEdit);
+            m_textEdit->clear();
+            m_textEdit->setPlaceholderText(QStringLiteral("No object selected"));
+        }
+        {
+            const QSignalBlocker blocker(m_pathEnabled);
+            m_pathEnabled->setChecked(false);
+        }
+        {
+            const QSignalBlocker blocker(m_pathStartOffset);
+            m_pathStartOffset->setValue(0.0);
+        }
+        {
+            const QSignalBlocker blocker(m_pathBaselineOffset);
+            m_pathBaselineOffset->setValue(0.0);
+        }
+        {
+            const QSignalBlocker blocker(m_pathReverse);
+            m_pathReverse->setChecked(false);
+        }
+        {
+            const QSignalBlocker blocker(m_pathFlip);
+            m_pathFlip->setChecked(false);
+        }
+        {
+            const QSignalBlocker blocker(m_pathFollowTangent);
+            m_pathFollowTangent->setChecked(true);
+        }
+        {
+            const QSignalBlocker blocker(m_pathClosed);
+            m_pathClosed->setChecked(false);
+        }
+        m_pathEnabled->setEnabled(false);
+        m_pathStartOffset->setEnabled(false);
+        m_pathBaselineOffset->setEnabled(false);
+        m_pathReverse->setEnabled(false);
+        m_pathFlip->setEnabled(false);
+        m_pathFollowTangent->setEnabled(false);
+        m_pathClosed->setEnabled(false);
+        m_createPathButton->setEnabled(false);
+        m_removePathButton->setEnabled(false);
+        m_reversePathButton->setEnabled(false);
         return;
     }
     m_textEdit->setPlaceholderText(QStringLiteral("Enter Latin or Cyrillic text…"));
@@ -280,6 +384,47 @@ void TypographyPanel::refresh(const TextObject* object)
     const bool multiline = object->sourceText.contains(QLatin1Char('\n'));
     m_lineSpacingSlider->setEnabled(multiline);
     m_lineSpacingSlider->setToolTip(QStringLiteral("Affects spacing between multiple lines."));
+
+    const bool hasPath = object->path.has_value();
+    const bool pathEnabled = hasPath && object->pathLayout.enabled;
+    {
+        const QSignalBlocker blocker(m_pathEnabled);
+        m_pathEnabled->setChecked(pathEnabled);
+    }
+    {
+        const QSignalBlocker blocker(m_pathStartOffset);
+        m_pathStartOffset->setValue(object->pathLayout.startOffset);
+    }
+    {
+        const QSignalBlocker blocker(m_pathBaselineOffset);
+        m_pathBaselineOffset->setValue(object->pathLayout.baselineOffset);
+    }
+    {
+        const QSignalBlocker blocker(m_pathReverse);
+        m_pathReverse->setChecked(object->pathLayout.reverse);
+    }
+    {
+        const QSignalBlocker blocker(m_pathFlip);
+        m_pathFlip->setChecked(object->pathLayout.flip);
+    }
+    {
+        const QSignalBlocker blocker(m_pathFollowTangent);
+        m_pathFollowTangent->setChecked(object->pathLayout.followTangent);
+    }
+    {
+        const QSignalBlocker blocker(m_pathClosed);
+        m_pathClosed->setChecked(hasPath && object->path->closed);
+    }
+    m_pathEnabled->setEnabled(true);
+    m_pathStartOffset->setEnabled(hasPath);
+    m_pathBaselineOffset->setEnabled(hasPath);
+    m_pathReverse->setEnabled(hasPath);
+    m_pathFlip->setEnabled(hasPath);
+    m_pathFollowTangent->setEnabled(hasPath);
+    m_pathClosed->setEnabled(hasPath);
+    m_createPathButton->setEnabled(true);
+    m_removePathButton->setEnabled(hasPath);
+    m_reversePathButton->setEnabled(hasPath);
 
     m_fill = object->fill;
     m_fillButton->setStyleSheet(QStringLiteral("QPushButton { background-color: %1; }")

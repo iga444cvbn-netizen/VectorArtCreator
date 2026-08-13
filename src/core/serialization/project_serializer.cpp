@@ -30,6 +30,8 @@ bool validateHierarchicalIdentity(const QJsonObject& root, QString* error)
     QSet<QString> layerIds;
     QSet<QString> objectIds;
     QSet<QString> effectIds;
+    QSet<QString> pathIds;
+    QSet<QString> pathNodeIds;
     QHash<QString, QSet<QString>> layerIdsByPage;
     QHash<QString, QSet<QString>> objectIdsByPage;
 
@@ -78,6 +80,74 @@ bool validateHierarchicalIdentity(const QJsonObject& root, QString* error)
                     }
                     effectIds.insert(effectId);
                 }
+                const QJsonValue pathValue = object.value(QStringLiteral("path"));
+                if (!pathValue.isUndefined()) {
+                    if (!pathValue.isObject()) {
+                        return identityError(
+                            QStringLiteral("Text object path data is not an object at pages[%1].layers[%2].objects[%3].path.")
+                                .arg(pageIndex).arg(layerIndex).arg(objectIndex), error);
+                    }
+                    PathGeometry parsedPath;
+                    QString pathError;
+                    if (!PathGeometry::fromJson(pathValue.toObject(), &parsedPath, &pathError)) {
+                        return identityError(
+                            QStringLiteral("Invalid path at pages[%1].layers[%2].objects[%3].path: %4")
+                                .arg(pageIndex).arg(layerIndex).arg(objectIndex).arg(pathError), error);
+                    }
+                    if (pathIds.contains(parsedPath.id)) {
+                        return identityError(
+                            QStringLiteral("Project contains a duplicate path ID at pages[%1].layers[%2].objects[%3].path.id.")
+                                .arg(pageIndex).arg(layerIndex).arg(objectIndex), error);
+                    }
+                    pathIds.insert(parsedPath.id);
+                    for (const PathNode& node : parsedPath.nodes) {
+                        if (pathNodeIds.contains(node.id)) {
+                            return identityError(
+                                QStringLiteral("Project contains a duplicate path node ID at pages[%1].layers[%2].objects[%3].path.")
+                                    .arg(pageIndex).arg(layerIndex).arg(objectIndex), error);
+                        }
+                        pathNodeIds.insert(node.id);
+                    }
+                    const QJsonValue layoutValue = object.value(QStringLiteral("pathLayout"));
+                    if (!layoutValue.isUndefined()) {
+                        if (!layoutValue.isObject()) {
+                            return identityError(QStringLiteral("Path typography data is not an object."), error);
+                        }
+                        PathTypographyProperties properties;
+                        QString layoutError;
+                        if (!PathTypographyProperties::fromJson(
+                                layoutValue.toObject(), &properties, &layoutError)) {
+                            return identityError(
+                                QStringLiteral("Invalid path typography at pages[%1].layers[%2].objects[%3]: %4")
+                                    .arg(pageIndex).arg(layerIndex).arg(objectIndex).arg(layoutError), error);
+                        }
+                        if (!properties.pathId.isEmpty() && properties.pathId != parsedPath.id) {
+                            return identityError(
+                                QStringLiteral("Path typography references a different owned path at pages[%1].layers[%2].objects[%3].pathLayout.pathId.")
+                                    .arg(pageIndex).arg(layerIndex).arg(objectIndex), error);
+                        }
+                    }
+                } else {
+                    const QJsonValue layoutValue = object.value(QStringLiteral("pathLayout"));
+                    if (!layoutValue.isUndefined()) {
+                        if (!layoutValue.isObject()) {
+                            return identityError(QStringLiteral("Path typography data is not an object."), error);
+                        }
+                        PathTypographyProperties properties;
+                        QString layoutError;
+                        if (!PathTypographyProperties::fromJson(
+                                layoutValue.toObject(), &properties, &layoutError)) {
+                            return identityError(
+                                QStringLiteral("Invalid path typography at pages[%1].layers[%2].objects[%3]: %4")
+                                    .arg(pageIndex).arg(layerIndex).arg(objectIndex).arg(layoutError), error);
+                        }
+                        if (properties.enabled || !properties.pathId.isEmpty()) {
+                            return identityError(
+                                QStringLiteral("Path typography references a missing owned path at pages[%1].layers[%2].objects[%3].pathLayout.")
+                                    .arg(pageIndex).arg(layerIndex).arg(objectIndex), error);
+                        }
+                    }
+                }
             }
         }
     }
@@ -106,6 +176,10 @@ struct ResourceBudgetTracker {
     qint64 maskPoints = 0;
     qint64 deformationStrokes = 0;
     qint64 deformationSamples = 0;
+    qint64 paths = 0;
+    qint64 pathNodes = 0;
+    qint64 cubicSegments = 0;
+    qint64 pathWork = 0;
     qint64 estimatedWork = 0;
 };
 
@@ -258,12 +332,91 @@ bool validateTextObjectResources(const QJsonObject& object,
         }
     }
 
+    qint64 objectPathNodes = 0;
+    const QJsonValue pathValue = object.value(QStringLiteral("path"));
+    if (!pathValue.isUndefined()) {
+        if (!pathValue.isObject()) {
+            if (error) {
+                *error = QStringLiteral("Path data at %1.path must be an object.").arg(path);
+            }
+            return false;
+        }
+        tracker->paths = saturatedAdd(tracker->paths, 1);
+        if (!checkLimit(1, limits.maximumPathsPerObject,
+                        path + QStringLiteral(".path"),
+                        QStringLiteral("paths per object"), error)
+            || !checkLimit(tracker->paths, limits.maximumPaths,
+                           path + QStringLiteral(".path"),
+                           QStringLiteral("aggregate paths"), error)) {
+            return false;
+        }
+        const QJsonObject serializedPath = pathValue.toObject();
+        const QJsonValue nodesValue = serializedPath.value(QStringLiteral("nodes"));
+        if (!nodesValue.isArray()) {
+            if (error) {
+                *error = QStringLiteral("Path nodes at %1.path.nodes must be an array.").arg(path);
+            }
+            return false;
+        }
+        const QJsonArray nodes = nodesValue.toArray();
+        if (!checkLimit(nodes.size(), limits.maximumPathNodesPerPath,
+                        path + QStringLiteral(".path.nodes"),
+                        QStringLiteral("path nodes per path"), error)) {
+            return false;
+        }
+        objectPathNodes = saturatedAdd(objectPathNodes, nodes.size());
+        tracker->pathNodes = saturatedAdd(tracker->pathNodes, nodes.size());
+        if (!checkLimit(tracker->pathNodes, limits.maximumPathNodes,
+                        path + QStringLiteral(".path.nodes"),
+                        QStringLiteral("aggregate path nodes"), error)) {
+            return false;
+        }
+        qint64 cubicSegments = 0;
+        for (int nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
+            const QJsonValue nodeValue = nodes.at(nodeIndex);
+            if (!nodeValue.isObject()) {
+                if (error) {
+                    *error = QStringLiteral("Path node %1 at %2.path is not an object.")
+                                 .arg(nodeIndex).arg(path);
+                }
+                return false;
+            }
+        }
+        const bool closed = serializedPath.value(QStringLiteral("closed")).toBool(false);
+        const int segmentCount = closed ? nodes.size() : qMax(0, nodes.size() - 1);
+        for (int segmentIndex = 0; segmentIndex < segmentCount; ++segmentIndex) {
+            const int endIndex = (segmentIndex + 1) % nodes.size();
+            const QJsonObject start = nodes.at(segmentIndex).toObject();
+            const QJsonObject end = nodes.at(endIndex).toObject();
+            if (start.value(QStringLiteral("hasOutgoingHandle")).toBool(false)
+                || end.value(QStringLiteral("hasIncomingHandle")).toBool(false)) {
+                ++cubicSegments;
+            }
+        }
+        tracker->cubicSegments = saturatedAdd(tracker->cubicSegments, cubicSegments);
+        if (!checkLimit(tracker->cubicSegments, limits.maximumCubicSegments,
+                        path + QStringLiteral(".path"),
+                        QStringLiteral("aggregate cubic segments"), error)) {
+            return false;
+        }
+        const qint64 pathWork = saturatedMultiply(
+            qMax<qint64>(1, nodes.size()),
+            saturatedAdd(1, saturatedMultiply(cubicSegments, 64)));
+        tracker->pathWork = saturatedAdd(tracker->pathWork, pathWork);
+        if (!checkLimit(tracker->pathWork, limits.maximumPathWork,
+                        path + QStringLiteral(".path"),
+                        QStringLiteral("aggregate path work"), error)) {
+            return false;
+        }
+    }
+
     // The expensive paths scale approximately with glyph/piece count multiplied
     // by ordered effects, mask segments, and deformation samples. This rejects
     // adversarial products whose individual child arrays all remain legal.
     const qint64 geometryUnits = qMax<qint64>(1, sourceUnits);
     const qint64 nestedUnits = saturatedAdd(
-        saturatedAdd(effects.size(), objectMaskPoints), objectDeformationSamples);
+        saturatedAdd(effects.size(), objectMaskPoints),
+        saturatedAdd(objectDeformationSamples, objectPathNodes));
     const qint64 objectWork = ProjectSerializer::saturatedEstimatedObjectWork(
         geometryUnits, nestedUnits);
     tracker->estimatedWork = saturatedAdd(tracker->estimatedWork, objectWork);
@@ -357,6 +510,10 @@ QJsonObject serializeTextObject(const TextObject& textObject)
     object.insert(QStringLiteral("effects"), textObject.effects.toJson());
     object.insert(QStringLiteral("effectStackStrength"), textObject.effectStackStrength);
     object.insert(QStringLiteral("deformation"), textObject.deformation.toJson());
+    object.insert(QStringLiteral("pathLayout"), textObject.pathLayout.toJson());
+    if (textObject.path.has_value()) {
+        object.insert(QStringLiteral("path"), textObject.path->toJson());
+    }
     object.insert(QStringLiteral("transform"), textObject.transform.toJson());
     object.insert(QStringLiteral("visible"), textObject.visible);
     object.insert(QStringLiteral("futureData"), textObject.futureData);
@@ -390,6 +547,50 @@ bool deserializeTextObject(const QJsonObject& object,
     if (formatVersion >= 6) {
         result.effectStackStrength = qBound<qreal>(0.0,
             object.value(QStringLiteral("effectStackStrength")).toDouble(1.0), 2.0);
+    }
+    if (formatVersion >= 7) {
+        const QJsonValue pathValue = object.value(QStringLiteral("path"));
+        if (!pathValue.isUndefined()) {
+            if (!pathValue.isObject()) {
+                if (error) *error = QStringLiteral("Text object path data is not an object.");
+                return false;
+            }
+            QString pathError;
+            PathGeometry parsedPath;
+            if (!PathGeometry::fromJson(pathValue.toObject(), &parsedPath, &pathError)) {
+                if (error) *error = pathError;
+                return false;
+            }
+            result.path = std::move(parsedPath);
+        }
+        const QJsonValue pathLayoutValue = object.value(QStringLiteral("pathLayout"));
+        if (!pathLayoutValue.isUndefined()) {
+            if (!pathLayoutValue.isObject()) {
+                if (error) *error = QStringLiteral("Text object path typography data is not an object.");
+                return false;
+            }
+            QString pathLayoutError;
+            if (!PathTypographyProperties::fromJson(
+                    pathLayoutValue.toObject(), &result.pathLayout, &pathLayoutError)) {
+                if (error) *error = pathLayoutError;
+                return false;
+            }
+        }
+        if (result.path.has_value()) {
+            if (result.pathLayout.pathId.isEmpty()) {
+                result.pathLayout.pathId = result.path->id;
+            }
+            if (result.pathLayout.pathId != result.path->id) {
+                if (error) *error = QStringLiteral("Text object path typography references a different path.");
+                return false;
+            }
+        } else if (result.pathLayout.enabled) {
+            if (error) *error = QStringLiteral("Enabled path typography has no path data.");
+            return false;
+        } else if (!result.pathLayout.pathId.isEmpty()) {
+            if (error) *error = QStringLiteral("Text object path typography references a missing path.");
+            return false;
+        }
     }
 
     const QJsonValue effectValue = object.value(QStringLiteral("effects"));
