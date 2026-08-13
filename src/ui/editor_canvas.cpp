@@ -351,7 +351,9 @@ int EditorCanvas::pathEditorHitNodeAtViewport(const QPointF& widgetPosition) con
 {
     int nodeIndex = -1;
     int handleKind = 0;
-    pathHandleAt(documentPosition(widgetPosition), &nodeIndex, &handleKind);
+    const int ignoredNodeIndex = pathHandleAt(
+        documentPosition(widgetPosition), &nodeIndex, &handleKind);
+    Q_UNUSED(ignoredNodeIndex);
     Q_UNUSED(handleKind);
     return nodeIndex;
 }
