@@ -68,6 +68,11 @@ public:
     [[nodiscard]] QString pathEditorObjectId() const { return m_pathEditObjectId; }
     [[nodiscard]] QPointF pathEditorAnchorPage(int index) const;
     [[nodiscard]] int pathEditorHitNodeAtViewport(const QPointF& widgetPosition) const;
+    [[nodiscard]] bool pathEditorUsesPathTool() const
+    {
+        return m_tool == EditorTool::PathEdit;
+    }
+    [[nodiscard]] bool pathEditorGestureActive() const { return m_pathEditing; }
     [[nodiscard]] BrushMode brushMode() const { return m_brushMode; }
     [[nodiscard]] BrushTarget brushTarget() const { return m_brushTarget; }
     [[nodiscard]] bool maskEnabled() const { return m_maskEnabled; }

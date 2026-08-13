@@ -979,6 +979,7 @@ void EffectsPanelUiTests::pathTypographyControlsAndAnchorGesture()
     QTRY_VERIFY_WITH_TIMEOUT(pathTool->isEnabled(), 5000);
     QTest::mouseClick(pathTool, Qt::LeftButton);
     QTRY_COMPARE(static_cast<int>(controller->tool()), static_cast<int>(EditorTool::PathEdit));
+    QTRY_VERIFY_WITH_TIMEOUT(canvas->pathEditorUsesPathTool(), 5000);
     QTRY_VERIFY_WITH_TIMEOUT(
         controller->sceneGeometry().spatialRevision == controller->spatialRevision(), 5000);
     QTRY_VERIFY_WITH_TIMEOUT(canvas->pathEditorObjectId() == objectId, 5000);
@@ -1001,6 +1002,7 @@ void EffectsPanelUiTests::pathTypographyControlsAndAnchorGesture()
                             .arg(canvas->zoom())));
     QSignalSpy pathCommit(canvas, &EditorCanvas::pathGeometryCommitted);
     QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, press);
+    QTRY_VERIFY_WITH_TIMEOUT(canvas->pathEditorGestureActive(), 5000);
     QTest::mouseMove(canvas, press + QPoint(20, 12), 20);
     QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, press + QPoint(20, 12));
     QTRY_VERIFY_WITH_TIMEOUT(pathCommit.count() > 0, 5000);
