@@ -690,7 +690,8 @@ void CoreTests::pathLayoutPreservesClustersThroughEffects()
     auto wave = std::make_unique<WaveEffect>();
     wave->amplitude = 0.4;
     wave->frequency = 1.7;
-    wave->scope = {EffectScopeKind::TextRange, 0, qMax(1, object.sourceText.size() / 2)};
+    wave->scope = {EffectScopeKind::TextRange, 0,
+                   qMax<int>(1, static_cast<int>(object.sourceText.size() / 2))};
     EffectStack effects;
     effects.append(std::move(wave));
     const QByteArray before = geometrySignature(geometry);
