@@ -338,6 +338,15 @@ QPointF EditorCanvas::mapDocumentToViewport(const QPointF& documentPoint) const
     return viewTransform().map(documentPoint);
 }
 
+QPointF EditorCanvas::pathEditorAnchorPage(int index) const
+{
+    if (index < 0 || index >= m_pathEditGeometry.nodes.size()) {
+        return {};
+    }
+    return m_pathEditFrame.localPointToPage(
+        m_pathEditGeometry.nodes.at(index).anchor);
+}
+
 void EditorCanvas::fitContent()
 {
     QRectF bounds(QPointF(0.0, 0.0), m_sceneGeometry.pageSize);

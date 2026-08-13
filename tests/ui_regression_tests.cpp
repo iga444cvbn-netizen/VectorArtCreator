@@ -20,6 +20,7 @@
 #include <QGuiApplication>
 #include <QInputMethodEvent>
 #include <QJsonArray>
+#include <QLineF>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
@@ -986,8 +987,13 @@ void EffectsPanelUiTests::pathTypographyControlsAndAnchorGesture()
     const SceneObjectGeometry* sceneObject = controller->sceneGeometry().objectById(objectId);
     QVERIFY(object && object->path.has_value() && sceneObject);
     const QPointF oldAnchor = object->path->nodes.front().anchor;
+    const QPointF expectedAnchorPage = sceneObject->frame.localPointToPage(oldAnchor);
+    const QPointF overlayAnchorPage = canvas->pathEditorAnchorPage(0);
+    QVERIFY2(QLineF(expectedAnchorPage, overlayAnchorPage).length() < 1.0e-6,
+             qPrintable(QStringLiteral("path overlay frame diverged by %1")
+                            .arg(QLineF(expectedAnchorPage, overlayAnchorPage).length())));
     const QPoint press = canvas->mapDocumentToViewport(
-        sceneObject->frame.localPointToPage(oldAnchor)).toPoint();
+        expectedAnchorPage).toPoint();
     QSignalSpy pathCommit(canvas, &EditorCanvas::pathGeometryCommitted);
     QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, press);
     QTest::mouseMove(canvas, press + QPoint(20, 12), 20);
