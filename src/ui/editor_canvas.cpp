@@ -66,6 +66,19 @@ void EditorCanvas::setScene(const SceneGeometry& scene,
     if (active && active->fill.isValid()) {
         m_fill = active->fill;
     }
+    if (!m_pathEditObjectId.isEmpty()) {
+        const SceneObjectGeometry* editing =
+            m_sceneGeometry.objectById(m_pathEditObjectId);
+        if (editing && editing->visible && !editing->locked
+            && editing->spatialRevision == m_sceneGeometry.spatialRevision
+            && editing->frame.spatialRevision == m_sceneGeometry.spatialRevision) {
+            // Keep the overlay and hit-test frame aligned with the newest
+            // authoritative scene even if the capability refresh is queued
+            // behind this scene delivery.
+            m_pathEditFrame = editing->frame;
+            m_pathEditSpatialRevision = m_sceneGeometry.spatialRevision;
+        }
+    }
     if (!m_hasInitialFit && width() > 0 && height() > 0) {
         fitContent();
     }
