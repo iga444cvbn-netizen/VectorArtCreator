@@ -196,7 +196,7 @@ std::optional<PathArcLengthTable> PathArcLengthTable::build(
             }
         } else {
             segment.samples.push_back(makeSample(segment, 0.0, 0.0));
-            if (!appendCubicSubdivision(segment, 0.0, 1.0, segment.p0, segment.p1,
+            if (!appendCubicSubdivision(&segment, 0.0, 1.0, segment.p0, segment.p1,
                                          segment.p2, segment.p3, 0, work)) {
                 return std::nullopt;
             }
