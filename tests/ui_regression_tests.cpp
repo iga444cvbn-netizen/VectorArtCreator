@@ -20,7 +20,6 @@
 #include <QGuiApplication>
 #include <QInputMethodEvent>
 #include <QJsonArray>
-#include <QLineF>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
@@ -979,34 +978,17 @@ void EffectsPanelUiTests::pathTypographyControlsAndAnchorGesture()
     QTRY_VERIFY_WITH_TIMEOUT(pathTool->isEnabled(), 5000);
     QTest::mouseClick(pathTool, Qt::LeftButton);
     QTRY_COMPARE(static_cast<int>(controller->tool()), static_cast<int>(EditorTool::PathEdit));
-    QTRY_VERIFY_WITH_TIMEOUT(canvas->pathEditorUsesPathTool(), 5000);
     QTRY_VERIFY_WITH_TIMEOUT(
         controller->sceneGeometry().spatialRevision == controller->spatialRevision(), 5000);
-    QTRY_VERIFY_WITH_TIMEOUT(canvas->pathEditorObjectId() == objectId, 5000);
 
     const TextObject* object = controller->document().objectById(objectId);
     const SceneObjectGeometry* sceneObject = controller->sceneGeometry().objectById(objectId);
     QVERIFY(object && object->path.has_value() && sceneObject);
     const QPointF oldAnchor = object->path->nodes.front().anchor;
-    const QPointF expectedAnchorPage = sceneObject->frame.localPointToPage(oldAnchor);
-    const QPointF overlayAnchorPage = canvas->pathEditorAnchorPage(0);
-    QVERIFY2(QLineF(expectedAnchorPage, overlayAnchorPage).length() < 1.0e-6,
-             qPrintable(QStringLiteral("path overlay frame diverged by %1")
-                            .arg(QLineF(expectedAnchorPage, overlayAnchorPage).length())));
     const QPoint press = canvas->mapDocumentToViewport(
-        expectedAnchorPage).toPoint();
-    const int hitNode = canvas->pathEditorHitNodeAtViewport(QPointF(press));
-    QVERIFY2(hitNode == 0,
-             qPrintable(QStringLiteral("path hit-test selected node %1 at zoom %2")
-                            .arg(hitNode)
-                            .arg(canvas->zoom())));
+        sceneObject->frame.localPointToPage(oldAnchor)).toPoint();
     QSignalSpy pathCommit(canvas, &EditorCanvas::pathGeometryCommitted);
     QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, press);
-    QVERIFY2(canvas->pathEditorMousePressCount() > 0,
-             "EditorCanvas did not receive the path mouse press");
-    QVERIFY2(canvas->pathEditorPathBranchCount() > 0,
-             "EditorCanvas did not enter the PathEdit mouse branch");
-    QTRY_VERIFY_WITH_TIMEOUT(canvas->pathEditorGestureActive(), 5000);
     QTest::mouseMove(canvas, press + QPoint(20, 12), 20);
     QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, press + QPoint(20, 12));
     QTRY_VERIFY_WITH_TIMEOUT(pathCommit.count() > 0, 5000);

@@ -338,26 +338,6 @@ QPointF EditorCanvas::mapDocumentToViewport(const QPointF& documentPoint) const
     return viewTransform().map(documentPoint);
 }
 
-QPointF EditorCanvas::pathEditorAnchorPage(int index) const
-{
-    if (index < 0 || index >= m_pathEditGeometry.nodes.size()) {
-        return {};
-    }
-    return m_pathEditFrame.localPointToPage(
-        m_pathEditGeometry.nodes.at(index).anchor);
-}
-
-int EditorCanvas::pathEditorHitNodeAtViewport(const QPointF& widgetPosition) const
-{
-    int nodeIndex = -1;
-    int handleKind = 0;
-    const int ignoredNodeIndex = pathHandleAt(
-        documentPosition(widgetPosition), &nodeIndex, &handleKind);
-    Q_UNUSED(ignoredNodeIndex);
-    Q_UNUSED(handleKind);
-    return nodeIndex;
-}
-
 void EditorCanvas::fitContent()
 {
     QRectF bounds(QPointF(0.0, 0.0), m_sceneGeometry.pageSize);
@@ -579,9 +559,6 @@ void EditorCanvas::wheelEvent(QWheelEvent* event)
 void EditorCanvas::mousePressEvent(QMouseEvent* event)
 {
     setFocus(Qt::MouseFocusReason);
-    if (event->button() == Qt::LeftButton) {
-        ++m_pathEditMousePressCount;
-    }
     if (handleCanvasMousePress(event->button(), event->position(), event->modifiers())) {
         event->accept();
         return;
@@ -652,13 +629,12 @@ bool EditorCanvas::handleCanvasMousePress(Qt::MouseButton button,
     }
 
     if (button == Qt::LeftButton && m_tool == EditorTool::PathEdit) {
-        ++m_pathEditPathBranchCount;
         if (m_pathEditObjectId.isEmpty() || m_pathEditGeometry.nodes.isEmpty()) {
             return true;
         }
         int nodeIndex = -1;
         int handleKind = 0;
-        if (pathHandleAt(documentPosition(widgetPosition), &nodeIndex, &handleKind)) {
+        if (pathHandleAt(documentPosition(widgetPosition), &nodeIndex, &handleKind) >= 0) {
             m_pathEditing = true;
             m_pathEditBefore = m_pathEditGeometry;
             m_pathEditNodeIndex = nodeIndex;
