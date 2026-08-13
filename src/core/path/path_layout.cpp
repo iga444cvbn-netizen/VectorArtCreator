@@ -265,7 +265,11 @@ PathPosition PathArcLengthTable::positionAt(qreal distance, bool wrapClosed) con
     const qreal t = a.t * (1.0 - fraction) + b.t * fraction;
     result.valid = true;
     result.distance = distance;
-    result.point = cubicPoint(selected->p0, selected->p1, selected->p2, selected->p3, t);
+    const bool isLine = selected->p0 == selected->p1
+        && selected->p2 == selected->p3;
+    result.point = isLine
+        ? a.point * (1.0 - fraction) + b.point * fraction
+        : cubicPoint(selected->p0, selected->p1, selected->p2, selected->p3, t);
     result.tangent = interpolatedTangent(a, b, fraction);
     return result;
 }

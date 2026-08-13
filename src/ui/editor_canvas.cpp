@@ -1093,7 +1093,10 @@ int EditorCanvas::pathHandleAt(const QPointF& documentPoint,
     }
     *nodeIndex = -1;
     *handleKind = 0;
-    const qreal threshold = 10.0 / qMax<qreal>(0.01, m_zoom);
+    // Keep the hit target in screen space.  A slightly generous target is
+    // important at low zoom where a one-pixel rounding of the page-to-widget
+    // mapping can otherwise make an anchor appear visible but unselectable.
+    const qreal threshold = 16.0 / qMax<qreal>(0.01, m_zoom);
     qreal closest = threshold;
     for (int index = 0; index < m_pathEditGeometry.nodes.size(); ++index) {
         const PathNode& node = m_pathEditGeometry.nodes.at(index);

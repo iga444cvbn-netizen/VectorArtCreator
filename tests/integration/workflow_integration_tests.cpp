@@ -1476,7 +1476,8 @@ void WorkflowIntegrationTests::seededValidWorkflows()
                                                            controller.selectionModel()->activeObjectId());
             QVERIFY2(undoReport.ok(), qPrintable(context(step) + QLatin1Char('\n') + undoReport.summary()));
             controller.undoStack()->redo();
-            QCOMPARE(test::semanticFingerprint(controller.document()), beforeUndo);
+            QVERIFY2(test::semanticFingerprint(controller.document()) == beforeUndo,
+                     qPrintable(context(step) + QStringLiteral("\nredo did not restore the semantic document fingerprint")));
         }
     }
 }
