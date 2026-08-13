@@ -347,6 +347,14 @@ QPointF EditorCanvas::pathEditorAnchorPage(int index) const
         m_pathEditGeometry.nodes.at(index).anchor);
 }
 
+int EditorCanvas::pathEditorHitNodeAtViewport(const QPointF& widgetPosition) const
+{
+    int nodeIndex = -1;
+    int handleKind = 0;
+    pathHandleAt(documentPosition(widgetPosition), &nodeIndex, &handleKind);
+    return nodeIndex;
+}
+
 void EditorCanvas::fitContent()
 {
     QRectF bounds(QPointF(0.0, 0.0), m_sceneGeometry.pageSize);

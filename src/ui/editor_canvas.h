@@ -67,6 +67,7 @@ public:
     // mutation and is cleared whenever the authoritative scene is stale.
     [[nodiscard]] QString pathEditorObjectId() const { return m_pathEditObjectId; }
     [[nodiscard]] QPointF pathEditorAnchorPage(int index) const;
+    [[nodiscard]] int pathEditorHitNodeAtViewport(const QPointF& widgetPosition) const;
     [[nodiscard]] BrushMode brushMode() const { return m_brushMode; }
     [[nodiscard]] BrushTarget brushTarget() const { return m_brushTarget; }
     [[nodiscard]] bool maskEnabled() const { return m_maskEnabled; }

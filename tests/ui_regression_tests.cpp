@@ -994,6 +994,11 @@ void EffectsPanelUiTests::pathTypographyControlsAndAnchorGesture()
                             .arg(QLineF(expectedAnchorPage, overlayAnchorPage).length())));
     const QPoint press = canvas->mapDocumentToViewport(
         expectedAnchorPage).toPoint();
+    const int hitNode = canvas->pathEditorHitNodeAtViewport(QPointF(press));
+    QVERIFY2(hitNode == 0,
+             qPrintable(QStringLiteral("path hit-test selected node %1 at zoom %2")
+                            .arg(hitNode)
+                            .arg(canvas->zoom())));
     QSignalSpy pathCommit(canvas, &EditorCanvas::pathGeometryCommitted);
     QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, press);
     QTest::mouseMove(canvas, press + QPoint(20, 12), 20);
