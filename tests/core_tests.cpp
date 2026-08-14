@@ -52,6 +52,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 using namespace vt;
 
@@ -167,6 +168,113 @@ QPointF firstPathElement(const QPainterPath& path)
     return QPointF(element.x, element.y);
 }
 
+VectorGeometry pathEffectFixture(const QVector<qreal>& offsets,
+                                 qreal advance = 8.0)
+{
+    VectorGeometry geometry;
+    qreal maximumOffset = 0.0;
+    for (int index = 0; index < offsets.size(); ++index) {
+        const qreal offset = offsets.at(index);
+        maximumOffset = qMax(maximumOffset, offset);
+        GeometryPiece piece;
+        piece.path.addRect(QRectF(offset - 4.0, -4.0, 8.0, 8.0));
+        piece.anchor = QPointF(offset, 0.0);
+        piece.originalAnchor = piece.anchor;
+        piece.layoutOrigin = piece.anchor;
+        piece.layoutAdvance = advance;
+        piece.sourceGlyphIndex = index;
+        piece.sourceClusterStart = index;
+        geometry.pieces.push_back(std::move(piece));
+    }
+    geometry.setReferenceBounds(QRectF(0.0, -8.0,
+                                       maximumOffset + advance, 16.0));
+    geometry.recomputeBounds();
+    return geometry;
+}
+
+QVector<qreal> effectAnchorDisplacements(VectorGeometry geometry,
+                                         const Effect& effect)
+{
+    QVector<qreal> before;
+    before.reserve(geometry.pieces.size());
+    for (const GeometryPiece& piece : geometry.pieces) {
+        before.push_back(piece.anchor.y());
+    }
+    effect.apply(geometry, {geometry.referenceBounds, geometry.referenceHeight});
+
+    QVector<qreal> result;
+    result.reserve(geometry.pieces.size());
+    for (int index = 0; index < geometry.pieces.size(); ++index) {
+        result.push_back(geometry.pieces.at(index).anchor.y() - before.at(index));
+    }
+    return result;
+}
+
+PathGeometry verticalEffectPath()
+{
+    PathGeometry path;
+    path.id = QStringLiteral("effect-vertical");
+    path.nodes = {
+        {QStringLiteral("vertical-start"), QPointF(500.0, 100.0), {}, {}, false, false},
+        {QStringLiteral("vertical-end"), QPointF(500.0, 700.0), {}, {}, false, false},
+    };
+    return path;
+}
+
+PathGeometry backtrackingEffectPath()
+{
+    PathGeometry path;
+    path.id = QStringLiteral("effect-backtracking");
+    path.nodes = {
+        {QStringLiteral("backtracking-0"), QPointF(0.0, 0.0), {}, {}, false, false},
+        {QStringLiteral("backtracking-1"), QPointF(200.0, 0.0), {}, {}, false, false},
+        {QStringLiteral("backtracking-2"), QPointF(0.0, 200.0), {}, {}, false, false},
+        {QStringLiteral("backtracking-3"), QPointF(200.0, 200.0), {}, {}, false, false},
+    };
+    return path;
+}
+
+PathGeometry curvedClosedEffectPath()
+{
+    PathGeometry path;
+    path.id = QStringLiteral("effect-curved-closed");
+    PathNode first;
+    first.id = QStringLiteral("curved-0");
+    first.anchor = QPointF(0.0, 0.0);
+    first.incomingHandle = QPointF(-80.0, 100.0);
+    first.hasIncomingHandle = true;
+    first.outgoingHandle = QPointF(100.0, -80.0);
+    first.hasOutgoingHandle = true;
+
+    PathNode second;
+    second.id = QStringLiteral("curved-1");
+    second.anchor = QPointF(400.0, 0.0);
+    second.incomingHandle = QPointF(300.0, -80.0);
+    second.hasIncomingHandle = true;
+    second.outgoingHandle = QPointF(480.0, 100.0);
+    second.hasOutgoingHandle = true;
+
+    PathNode third;
+    third.id = QStringLiteral("curved-2");
+    third.anchor = QPointF(400.0, 400.0);
+    third.incomingHandle = QPointF(480.0, 300.0);
+    third.hasIncomingHandle = true;
+    third.outgoingHandle = QPointF(300.0, 480.0);
+    third.hasOutgoingHandle = true;
+
+    PathNode fourth;
+    fourth.id = QStringLiteral("curved-3");
+    fourth.anchor = QPointF(0.0, 400.0);
+    fourth.incomingHandle = QPointF(100.0, 480.0);
+    fourth.hasIncomingHandle = true;
+    fourth.outgoingHandle = QPointF(-80.0, 300.0);
+    fourth.hasOutgoingHandle = true;
+
+    path.nodes = {first, second, third, fourth};
+    path.closed = true;
+    return path;
+}
+
 } // namespace
 
 class CoreTests final : public QObject {
@@ -182,6 +290,7 @@ private slots:
     void pathLayoutClipsOpenOverflowWithoutEndpointPileup();
     void pathLayoutPreservesClustersThroughEffects();
     void postPathEffectsFollowPathProgressInsteadOfSourceAnchors();
+    void postPathEffectsFollowArcLengthTraversal();
     void complexShapingPlacementHasFiniteAdvancesAndClusters();
     void pathPipelineAppliesEffectsAndDeformationToFinalGeometry();
     void pathLayoutHonorsCancellationBudget();
@@ -821,6 +930,110 @@ void CoreTests::postPathEffectsFollowPathProgressInsteadOfSourceAnchors()
     wave.apply(geometry, {geometry.referenceBounds, geometry.referenceHeight});
     QVERIFY(std::abs(geometry.pieces.at(3).anchor.y()
                      - geometry.pieces.at(0).anchor.y()) > 0.01);
+}
+
+void CoreTests::postPathEffectsFollowArcLengthTraversal()
+{
+    ShapedText shaped;
+    shaped.lineBounds = {QRectF(0.0, 0.0, 2400.0, 24.0)};
+
+    WaveEffect wave;
+    wave.amplitude = 1.0;
+    wave.frequency = 0.5;
+    wave.phase = 0.0;
+
+    auto applyPath = [&](VectorGeometry* geometry,
+                         const PathGeometry& path,
+                         const PathTypographyProperties& settings,
+                         QString* error) {
+        return PathLayoutEngine::apply(geometry, shaped, path, settings, error);
+    };
+
+    {
+        const PathGeometry path = verticalEffectPath();
+        PathTypographyProperties settings;
+        settings.enabled = true;
+        settings.pathId = path.id;
+        VectorGeometry geometry = pathEffectFixture(
+            {0.0, 120.0, 240.0, 360.0}, 12.0);
+        QString error;
+        QVERIFY2(applyPath(&geometry, path, settings, &error), qPrintable(error));
+        const QVector<qreal> displacements = effectAnchorDisplacements(geometry, wave);
+        for (int index = 1; index < displacements.size(); ++index) {
+            QVERIFY2(displacements.at(index) > displacements.at(index - 1) + 1.0e-4,
+                     "vertical path progression must increase with arc distance");
+        }
+    }
+
+    {
+        const PathGeometry path = backtrackingEffectPath();
+        PathTypographyProperties settings;
+        settings.enabled = true;
+        settings.pathId = path.id;
+        VectorGeometry geometry = pathEffectFixture(
+            {0.0, 150.0, 250.0, 350.0, 500.0}, 10.0);
+        QString error;
+        QVERIFY2(applyPath(&geometry, path, settings, &error), qPrintable(error));
+        const QVector<qreal> displacements = effectAnchorDisplacements(geometry, wave);
+        for (int index = 1; index < displacements.size(); ++index) {
+            QVERIFY2(displacements.at(index) > displacements.at(index - 1) + 1.0e-4,
+                     "backtracking path progression must follow distance, not X");
+        }
+    }
+
+    {
+        const PathGeometry path = PathGeometry::makeDefault(600.0);
+        PathTypographyProperties settings;
+        settings.enabled = true;
+        settings.pathId = path.id;
+        settings.reverse = true;
+        VectorGeometry geometry = pathEffectFixture(
+            {0.0, 120.0, 240.0, 360.0, 480.0}, 10.0);
+        QString error;
+        QVERIFY2(applyPath(&geometry, path, settings, &error), qPrintable(error));
+        QVERIFY(geometry.pieces.at(1).anchor.x() < geometry.pieces.at(0).anchor.x());
+        const QVector<qreal> displacements = effectAnchorDisplacements(geometry, wave);
+        for (int index = 1; index < displacements.size(); ++index) {
+            QVERIFY2(displacements.at(index) > displacements.at(index - 1) + 1.0e-4,
+                     "reverse traversal must still progress from its own start");
+        }
+    }
+
+    {
+        const PathGeometry path = curvedClosedEffectPath();
+        const std::optional<PathArcLengthTable> table = PathArcLengthTable::build(path);
+        QVERIFY(table.has_value());
+        const qreal total = table->totalLength();
+        QVERIFY(total > 100.0);
+
+        PathTypographyProperties settings;
+        settings.enabled = true;
+        settings.pathId = path.id;
+        VectorGeometry geometry = pathEffectFixture(
+            {total - 30.0, total + 90.0}, 8.0);
+        QString error;
+        QVERIFY2(applyPath(&geometry, path, settings, &error), qPrintable(error));
+        ProceduralEffect verticalSpread(
+            QStringLiteral("verticalSpread"), QStringLiteral("Vertical Spread"),
+            ProceduralEffect::Mode::VerticalSpread);
+        QVERIFY(verticalSpread.setParameter(QStringLiteral("strength"), 1.0));
+        const QVector<qreal> displacements = effectAnchorDisplacements(
+            geometry, verticalSpread);
+        QVERIFY2(displacements.at(0) > 0.0,
+                 "closed-path progress must remain near one before the seam");
+        QVERIFY2(displacements.at(1) < 0.0,
+                 "closed-path progress must wrap after the seam");
+    }
+
+    {
+        VectorGeometry ordinary = pathEffectFixture({0.0, 100.0}, 8.0);
+        ordinary.setReferenceBounds(QRectF(0.0, -8.0, 200.0, 16.0));
+        ordinary.recomputeBounds();
+        const QVector<qreal> displacements = effectAnchorDisplacements(ordinary, wave);
+        QCOMPARE(displacements.size(), 2);
+        QVERIFY(std::abs(displacements.at(0)) < 1.0e-6);
+        QVERIFY(std::abs(displacements.at(1) - ordinary.referenceHeight) < 1.0e-6);
+    }
 }
 
 void CoreTests::complexShapingPlacementHasFiniteAdvancesAndClusters()
