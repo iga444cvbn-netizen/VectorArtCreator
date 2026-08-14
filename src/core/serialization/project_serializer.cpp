@@ -215,7 +215,7 @@ bool validateHierarchicalIdentity(const QJsonObject& root, QString* error)
                 }
                 const QJsonValue modeValue = object.value(QStringLiteral("layoutMode"));
                 if (!modeValue.isUndefined()) {
-                    TypographyLayoutMode mode;
+                    TypographyLayoutMode mode = TypographyLayoutMode::Baseline;
                     if (!modeValue.isString()
                         || !typographyLayoutModeFromString(modeValue.toString(), &mode)) {
                         return identityError(QStringLiteral("Text object contains an invalid layout mode."), error);
