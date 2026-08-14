@@ -171,6 +171,7 @@ private slots:
     void regionLayoutRejectsBetweenSampleBandConcavityAndHole();
     void regionLayoutDefinesUnbreakableWordFallback();
     void regionLayoutShapesRealBidiTextWithoutClusterLoss();
+    void regionValidationRejectsAdversarialTopologyAndCancellation();
     void regionSerializationMigratesAndRejectsDuplicateIdentity();
     void controllerRegionEditsUndoAndFreshenDuplicateIdentity();
 };
@@ -659,6 +660,91 @@ void RegionTypographyTests::regionLayoutShapesRealBidiTextWithoutClusterLoss()
             QVERIFY(byVisualX.at(index - 1) < byVisualX.at(index));
         }
     }
+}
+
+void RegionTypographyTests::regionValidationRejectsAdversarialTopologyAndCancellation()
+{
+    const auto reject = [](const TypographyRegion& candidate, const char* reason) {
+        QString error;
+        const bool valid = candidate.validate(&error);
+        QVERIFY2(!valid, reason);
+        QVERIFY2(!error.isEmpty(), "Rejected region validation must explain the failure.");
+    };
+
+    TypographyRegion bowTie = rectangleRegion(QStringLiteral("bow-tie"),
+                                               QRectF(0.0, 0.0, 100.0, 100.0));
+    bowTie.outer = polygonContour(QStringLiteral("bow-tie-outer"),
+                                  {{0.0, 0.0}, {100.0, 100.0},
+                                   {0.0, 100.0}, {100.0, 0.0}});
+    reject(bowTie, "A self-intersecting outer contour must be rejected.");
+
+    TypographyRegion zeroArea = rectangleRegion(QStringLiteral("zero-area"),
+                                                QRectF(0.0, 0.0, 100.0, 100.0));
+    zeroArea.outer = polygonContour(QStringLiteral("zero-area-outer"),
+                                    {{0.0, 0.0}, {50.0, 0.0}, {100.0, 0.0}});
+    reject(zeroArea, "A zero-area outer contour must be rejected.");
+
+    TypographyRegion touchingOuter = rectangleRegion(QStringLiteral("touching-outer"),
+                                                      QRectF(0.0, 0.0, 100.0, 100.0));
+    touchingOuter.holes.push_back(rectangleContour(QStringLiteral("touching-hole"),
+                                                    QRectF(20.0, 0.0, 20.0, 20.0)));
+    reject(touchingOuter, "A hole tangent to the outer boundary must be rejected.");
+
+    TypographyRegion overlappingHoles = rectangleRegion(
+        QStringLiteral("overlapping-holes"), QRectF(0.0, 0.0, 100.0, 100.0));
+    overlappingHoles.holes.push_back(rectangleContour(QStringLiteral("overlap-a"),
+                                                       QRectF(20.0, 20.0, 40.0, 40.0)));
+    overlappingHoles.holes.push_back(rectangleContour(QStringLiteral("overlap-b"),
+                                                       QRectF(50.0, 30.0, 30.0, 40.0)));
+    reject(overlappingHoles, "Overlapping holes must be rejected.");
+
+    TypographyRegion nestedHoles = rectangleRegion(QStringLiteral("nested-holes"),
+                                                    QRectF(0.0, 0.0, 100.0, 100.0));
+    nestedHoles.holes.push_back(rectangleContour(QStringLiteral("nested-a"),
+                                                  QRectF(20.0, 20.0, 60.0, 60.0)));
+    nestedHoles.holes.push_back(rectangleContour(QStringLiteral("nested-b"),
+                                                  QRectF(35.0, 35.0, 30.0, 30.0)));
+    reject(nestedHoles, "Nested holes must be rejected.");
+
+    TypographyRegion sharedVertex = rectangleRegion(QStringLiteral("shared-vertex"),
+                                                     QRectF(0.0, 0.0, 100.0, 100.0));
+    sharedVertex.holes.push_back(rectangleContour(QStringLiteral("shared-a"),
+                                                   QRectF(20.0, 20.0, 30.0, 30.0)));
+    sharedVertex.holes.push_back(rectangleContour(QStringLiteral("shared-b"),
+                                                   QRectF(50.0, 50.0, 30.0, 30.0)));
+    reject(sharedVertex, "Holes sharing a vertex must be rejected.");
+
+    TypographyRegion nearValidGap = rectangleRegion(QStringLiteral("near-valid-gap"),
+                                                    QRectF(0.0, 0.0, 100.0, 100.0));
+    nearValidGap.holes.push_back(rectangleContour(QStringLiteral("gap-a"),
+                                                   QRectF(20.0, 20.0, 20.0, 20.0)));
+    nearValidGap.holes.push_back(rectangleContour(QStringLiteral("gap-b"),
+                                                   QRectF(40.001, 20.0, 20.0, 20.0)));
+    QString error;
+    QVERIFY2(nearValidGap.validate(&error), qPrintable(error));
+
+    const TypographyRegion largeLegal = rectangleRegion(
+        QStringLiteral("large-legal"), QRectF(-999999999.0, -999999999.0,
+                                                1999999998.0, 1999999998.0));
+    QVERIFY2(largeLegal.validate(&error), qPrintable(error));
+
+    TypographyRegion nonFinite = rectangleRegion(QStringLiteral("non-finite"),
+                                                  QRectF(0.0, 0.0, 100.0, 100.0));
+    nonFinite.outer.nodes.front().anchor.setX(
+        std::numeric_limits<qreal>::quiet_NaN());
+    reject(nonFinite, "Non-finite contour coordinates must be rejected.");
+
+    const TypographyRegion beforeCancellation = rectangleRegion(
+        QStringLiteral("cancelled-region"), QRectF(0.0, 0.0, 100.0, 100.0));
+    TypographyRegion cancellationCandidate = beforeCancellation;
+    WorkControl work = WorkControl::unlimited();
+    work.setCheckpointCallback([&work](qint64 consumed) {
+        if (consumed >= 3) work.cancel();
+    });
+    error.clear();
+    QVERIFY2(!cancellationCandidate.validate(&error, work), qPrintable(error));
+    QCOMPARE(cancellationCandidate, beforeCancellation);
+    QCOMPARE(work.status(), WorkControlStatus::Cancelled);
 }
 
 void RegionTypographyTests::regionSerializationMigratesAndRejectsDuplicateIdentity()
