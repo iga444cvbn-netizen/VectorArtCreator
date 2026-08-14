@@ -506,15 +506,21 @@ void RegionTypographyTests::regionLayoutJustifiesWhitespaceWithIndependentGeomet
     // word is intentionally an indivisible shaping cluster and must not move
     // merely because the first line used Justified alignment.
     const QString wrappedSource = QStringLiteral("a a BIG");
+    const TypographyRegion wrappedRegion = rectangleRegion(
+        QStringLiteral("wrapped-justification-oracle"), QRectF(0.0, 0.0, 30.0, 100.0));
     VectorGeometry wrappedLeft = glyphGeometryWithWidths(
         {0, 1, 2, 3, 4}, {1, 1, 1, 1, 3},
         {8.0, 2.0, 8.0, 2.0, 20.0},
         {8.0, 2.0, 8.0, 2.0, 20.0});
     VectorGeometry wrappedJustified = wrappedLeft;
+    RegionTypographyProperties wrappedLeftSettings = regionSettings(wrappedRegion);
+    RegionTypographyProperties wrappedJustifiedSettings = wrappedLeftSettings;
+    wrappedJustifiedSettings.horizontalAlignment = RegionHorizontalAlignment::Justified;
     QVERIFY2(RegionLayoutEngine::apply(&wrappedLeft, oneLineShape(30.0), wrappedSource,
-                                       region, leftSettings, 1.0, &error), qPrintable(error));
+                                       wrappedRegion, wrappedLeftSettings, 1.0, &error),
+             qPrintable(error));
     QVERIFY2(RegionLayoutEngine::apply(&wrappedJustified, oneLineShape(30.0), wrappedSource,
-                                       region, justifiedSettings, 1.0, &error),
+                                       wrappedRegion, wrappedJustifiedSettings, 1.0, &error),
              qPrintable(error));
     QVERIFY(std::abs(wrappedJustified.pieces.at(2).path.boundingRect().left()
                      - wrappedLeft.pieces.at(2).path.boundingRect().left() - 5.0) < 1.0e-4);
@@ -561,7 +567,7 @@ void RegionTypographyTests::regionLayoutRejectsBetweenSampleBandConcavityAndHole
 void RegionTypographyTests::regionLayoutDoesNotSilentlySplitUnbreakableWords()
 {
     const TypographyRegion region = rectangleRegion(
-        QStringLiteral("unbreakable-word"), QRectF(0.0, 0.0, 25.0, 100.0));
+        QStringLiteral("unbreakable-word"), QRectF(0.0, 0.0, 20.0, 100.0));
     const RegionTypographyProperties settings = regionSettings(region);
     QString error;
     for (const QString& source : {QStringLiteral("abcdefgh"), QString::fromUtf8("абвг")}) {
