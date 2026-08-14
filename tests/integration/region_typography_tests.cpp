@@ -18,6 +18,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <numeric>
 
 using namespace vt;
 
@@ -525,7 +526,9 @@ void RegionTypographyTests::regionLayoutJustifiesWhitespaceWithIndependentGeomet
     QVERIFY2(RegionLayoutEngine::apply(&repeatedJustified, oneLineShape(40.0), repeatedSource,
                                        region, justifiedSettings, 1.0, &error),
              qPrintable(error));
-    const qreal perOpportunity = (100.0 - 40.0) / 2.0;
+    const qreal repeatedTotalAdvance = std::accumulate(
+        repeatedAdvances.cbegin(), repeatedAdvances.cend(), 0.0);
+    const qreal perOpportunity = (100.0 - repeatedTotalAdvance) / 2.0;
     QVERIFY(std::abs((repeatedJustified.pieces.at(2).path.boundingRect().left()
                       - repeatedLeft.pieces.at(2).path.boundingRect().left())
                      - perOpportunity) < 1.0e-4);

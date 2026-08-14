@@ -105,6 +105,7 @@ void SmokeWorkflowTests::firstFiveMinutesCanary()
     driver.undo();
     driver.redo();
     QCOMPARE(test::semanticFingerprint(driver.controller().document()), afterRegionEdits);
+    driver.waitForSceneGeneration(id);
 
     QTemporaryDir artifacts;
     QVERIFY(artifacts.isValid());
