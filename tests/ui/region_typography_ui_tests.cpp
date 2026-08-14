@@ -38,6 +38,8 @@ void RegionTypographyUiTests::regionControlsExposePersistentSettings()
     QSignalSpy modeSpy(&panel, &TypographyPanel::typographyLayoutModeChanged);
     QSignalSpy paddingSpy(&panel, &TypographyPanel::regionPaddingChanged);
     QSignalSpy rectangleSpy(&panel, &TypographyPanel::createRegionRectangleRequested);
+    QSignalSpy ellipseSpy(&panel, &TypographyPanel::createRegionEllipseRequested);
+    QSignalSpy customSpy(&panel, &TypographyPanel::createRegionCustomRequested);
     mode->setCurrentIndex(mode->findData(static_cast<int>(TypographyLayoutMode::Region)));
     QCOMPARE(modeSpy.count(), 1);
     QCOMPARE(modeSpy.at(0).at(0).toInt(), static_cast<int>(TypographyLayoutMode::Region));
@@ -47,6 +49,10 @@ void RegionTypographyUiTests::regionControlsExposePersistentSettings()
     QCOMPARE(paddingSpy.at(0).at(1).toDouble(), 24.0);
     rectangle->click();
     QCOMPARE(rectangleSpy.count(), 1);
+    ellipse->click();
+    QCOMPARE(ellipseSpy.count(), 1);
+    custom->click();
+    QCOMPARE(customSpy.count(), 1);
 
     TextObject object;
     object.region = TypographyRegion::makeRectangle(QRectF(0.0, 0.0, 200.0, 100.0));
