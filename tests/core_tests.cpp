@@ -962,8 +962,14 @@ void CoreTests::postPathEffectsFollowArcLengthTraversal()
         const QVector<qreal> expectedProgress = {0.0, 0.2, 0.4, 0.6};
         for (int index = 0; index < geometry.pieces.size(); ++index) {
             QVERIFY(geometry.pieces.at(index).hasEffectReferenceProgress);
-            QVERIFY(std::abs(geometry.pieces.at(index).effectReferenceProgress
-                             - expectedProgress.at(index)) < 1.0e-6);
+            const QString progressDescription = QStringLiteral(
+                "vertical index %1 actual %2 expected %3")
+                .arg(index)
+                .arg(geometry.pieces.at(index).effectReferenceProgress, 0, 'g', 16)
+                .arg(expectedProgress.at(index), 0, 'g', 16);
+            QVERIFY2(std::abs(geometry.pieces.at(index).effectReferenceProgress
+                              - expectedProgress.at(index)) < 1.0e-6,
+                     qPrintable(progressDescription));
         }
         for (int index = 1; index < displacements.size(); ++index) {
             QVERIFY2(displacements.at(index) > displacements.at(index - 1) + 1.0e-4,
