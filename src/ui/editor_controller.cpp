@@ -2,6 +2,7 @@
 
 #include "core/effects/effect.h"
 #include "core/effects/effect_registry.h"
+#include "core/region/region_layout.h"
 #include "core/scene/scene_evaluator.h"
 #include "core/scene/object_frame.h"
 #include "core/serialization/project_serializer.h"
@@ -18,6 +19,7 @@
 #include <QStandardPaths>
 #include <QUuid>
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -1156,13 +1158,43 @@ void EditorController::addRegionHole()
     if (!object || !object->region.has_value()
         || activeTypographyLayoutMode(*object) != TypographyLayoutMode::Region) return;
     TypographyRegion region = *object->region;
-    const QRectF bounds = region.outer.toPainterPath().controlPointRect().normalized();
-    const qreal holeHeight = qMax<qreal>(1.0, bounds.height() * 0.12);
     const WorkControl work = WorkControl::withBudget(500'000);
+    const auto flattened = flattenTypographyRegion(region, 0.05, work);
+    if (!flattened.has_value() || !work.isRunning()) {
+        publishError(work.isRunning()
+                         ? QStringLiteral("Could not flatten the region for hole placement.")
+                         : work.interruptionMessage());
+        return;
+    }
+    QRectF bounds;
+    for (const QPointF& point : flattened->outer) bounds = bounds.united(QRectF(point, QSizeF()));
+    bounds = bounds.normalized();
+    const qreal holeHeight = qMax<qreal>(1.0, bounds.height() * 0.12);
+    QVector<qreal> events = {bounds.top(), bounds.bottom()};
+    const auto addEvents = [&events, &bounds](const QVector<QPointF>& points) {
+        for (const QPointF& point : points) {
+            if (point.y() > bounds.top() && point.y() < bounds.bottom()) {
+                events.push_back(point.y());
+            }
+        }
+    };
+    addEvents(flattened->outer);
+    for (const QVector<QPointF>& hole : flattened->holes) addEvents(hole);
+    std::sort(events.begin(), events.end());
+    events.erase(std::unique(events.begin(), events.end(), [](qreal left, qreal right) {
+        return std::abs(left - right) <= 1.0e-6;
+    }), events.end());
+    QVector<qreal> candidateYs = events;
+    candidateYs.reserve(events.size() * 2);
+    for (int index = 0; index + 1 < events.size(); ++index) {
+        if (events.at(index + 1) - events.at(index) > 1.0e-6) {
+            candidateYs.push_back((events.at(index) + events.at(index + 1)) * 0.5);
+        }
+    }
     QString validationError;
-    for (int sample = 1; sample <= 7; ++sample) {
-        const qreal y = bounds.top() + bounds.height() * sample / 8.0;
-        const QVector<RegionInterval> intervals = regionIntervalsAtY(region, y, work);
+    for (const qreal y : candidateYs) {
+        if (!work.consume()) break;
+        const QVector<RegionInterval> intervals = regionIntervalsAtY(*flattened, y, work);
         if (!work.isRunning()) break;
         std::optional<RegionInterval> widest;
         for (const RegionInterval& interval : intervals) {
