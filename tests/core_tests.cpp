@@ -959,9 +959,80 @@ void CoreTests::postPathEffectsFollowArcLengthTraversal()
         QString error;
         QVERIFY2(applyPath(&geometry, path, settings, &error), qPrintable(error));
         const QVector<qreal> displacements = effectAnchorDisplacements(geometry, wave);
+        const QVector<qreal> expectedProgress = {0.0, 0.2, 0.4, 0.6};
+        for (int index = 0; index < geometry.pieces.size(); ++index) {
+            QVERIFY(geometry.pieces.at(index).hasEffectReferenceProgress);
+            QVERIFY(std::abs(geometry.pieces.at(index).effectReferenceProgress
+                             - expectedProgress.at(index)) < 1.0e-6);
+        }
         for (int index = 1; index < displacements.size(); ++index) {
             QVERIFY2(displacements.at(index) > displacements.at(index - 1) + 1.0e-4,
                      "vertical path progression must increase with arc distance");
+        }
+
+        PathTypographyProperties shiftedSettings = settings;
+        shiftedSettings.startOffset = 60.0;
+        VectorGeometry shifted = pathEffectFixture(
+            {0.0, 120.0, 240.0, 360.0}, 12.0);
+        QVERIFY2(applyPath(&shifted, path, shiftedSettings, &error), qPrintable(error));
+        QVERIFY(std::abs(shifted.pieces.at(0).effectReferenceProgress - 0.1) < 1.0e-6);
+
+        PathTypographyProperties baselineSettings = settings;
+        baselineSettings.baselineOffset = 42.0;
+        VectorGeometry baseline = pathEffectFixture(
+            {0.0, 120.0, 240.0, 360.0}, 12.0);
+        QVERIFY2(applyPath(&baseline, path, baselineSettings, &error), qPrintable(error));
+        PathTypographyProperties flipSettings = settings;
+        flipSettings.flip = true;
+        VectorGeometry flipped = pathEffectFixture(
+            {0.0, 120.0, 240.0, 360.0}, 12.0);
+        QVERIFY2(applyPath(&flipped, path, flipSettings, &error), qPrintable(error));
+        for (int index = 0; index < geometry.pieces.size(); ++index) {
+            QVERIFY(std::abs(baseline.pieces.at(index).effectReferenceProgress
+                             - geometry.pieces.at(index).effectReferenceProgress) < 1.0e-6);
+            QVERIFY(std::abs(flipped.pieces.at(index).effectReferenceProgress
+                             - geometry.pieces.at(index).effectReferenceProgress) < 1.0e-6);
+        }
+
+        QTransform objectTransform;
+        objectTransform.translate(120.0, -55.0);
+        VectorGeometry transformed = geometry;
+        transformed.transformAll(objectTransform);
+        for (int index = 0; index < geometry.pieces.size(); ++index) {
+            QVERIFY(std::abs(transformed.pieces.at(index).effectReferenceProgress
+                             - geometry.pieces.at(index).effectReferenceProgress) < 1.0e-6);
+        }
+
+        VectorGeometry clipped = pathEffectFixture({0.0, 1000.0}, 12.0);
+        for (GeometryPiece& piece : clipped.pieces) {
+            piece.effectReferenceProgress = 0.9;
+            piece.hasEffectReferenceProgress = true;
+        }
+        QVERIFY2(applyPath(&clipped, path, settings, &error), qPrintable(error));
+        QVERIFY(clipped.pieces.at(0).hasEffectReferenceProgress);
+        QVERIFY(!clipped.pieces.at(1).hasEffectReferenceProgress);
+
+        const test::GeometrySignature signature = test::geometrySignature(geometry);
+        QVERIFY(signature.pieces.at(1).hasEffectReferenceProgress);
+        QVERIFY(signature.pieces.at(1).effectReferenceProgress != 0);
+        VectorGeometry changedProgress = geometry;
+        changedProgress.pieces[1].effectReferenceProgress += 0.1;
+        QString difference;
+        QVERIFY2(!test::compareGeometry(
+                      signature, test::geometrySignature(changedProgress), &difference),
+                  "structured geometry signatures must observe path progress metadata");
+        QVERIFY(difference.contains(QStringLiteral("effectReferenceProgress")));
+
+        TrailEffect trail(QStringLiteral("trail"), QStringLiteral("Trail"));
+        QVERIFY(trail.setParameter(QStringLiteral("copyCount"), 1.0));
+        VectorGeometry generated = geometry;
+        trail.apply(generated, {generated.referenceBounds, generated.referenceHeight});
+        QCOMPARE(generated.pieces.size(), geometry.pieces.size() * 2);
+        for (int index = geometry.pieces.size(); index < generated.pieces.size(); ++index) {
+            const int sourceIndex = index - geometry.pieces.size();
+            QVERIFY(generated.pieces.at(index).hasEffectReferenceProgress);
+            QVERIFY(std::abs(generated.pieces.at(index).effectReferenceProgress
+                             - geometry.pieces.at(sourceIndex).effectReferenceProgress) < 1.0e-6);
         }
     }
 
@@ -975,6 +1046,13 @@ void CoreTests::postPathEffectsFollowArcLengthTraversal()
         QString error;
         QVERIFY2(applyPath(&geometry, path, settings, &error), qPrintable(error));
         const QVector<qreal> displacements = effectAnchorDisplacements(geometry, wave);
+        const QVector<qreal> expectedProgress = {0.0, 0.25, 250.0 / 600.0,
+                                                 350.0 / 600.0, 500.0 / 600.0};
+        for (int index = 0; index < geometry.pieces.size(); ++index) {
+            QVERIFY(geometry.pieces.at(index).hasEffectReferenceProgress);
+            QVERIFY(std::abs(geometry.pieces.at(index).effectReferenceProgress
+                             - expectedProgress.at(index)) < 1.0e-6);
+        }
         for (int index = 1; index < displacements.size(); ++index) {
             QVERIFY2(displacements.at(index) > displacements.at(index - 1) + 1.0e-4,
                      "backtracking path progression must follow distance, not X");
@@ -993,6 +1071,11 @@ void CoreTests::postPathEffectsFollowArcLengthTraversal()
         QVERIFY2(applyPath(&geometry, path, settings, &error), qPrintable(error));
         QVERIFY(geometry.pieces.at(1).anchor.x() < geometry.pieces.at(0).anchor.x());
         const QVector<qreal> displacements = effectAnchorDisplacements(geometry, wave);
+        for (int index = 0; index < geometry.pieces.size(); ++index) {
+            QVERIFY(geometry.pieces.at(index).hasEffectReferenceProgress);
+            QVERIFY(std::abs(geometry.pieces.at(index).effectReferenceProgress
+                             - index * 0.2) < 1.0e-6);
+        }
         for (int index = 1; index < displacements.size(); ++index) {
             QVERIFY2(displacements.at(index) > displacements.at(index - 1) + 1.0e-4,
                      "reverse traversal must still progress from its own start");
@@ -1019,6 +1102,12 @@ void CoreTests::postPathEffectsFollowArcLengthTraversal()
         QVERIFY(verticalSpread.setParameter(QStringLiteral("strength"), 1.0));
         const QVector<qreal> displacements = effectAnchorDisplacements(
             geometry, verticalSpread);
+        const PathPosition beforeSeam = table->positionAt(total - 30.0, true);
+        const PathPosition afterSeam = table->positionAt(total + 90.0, true);
+        QVERIFY(std::abs(geometry.pieces.at(0).effectReferenceProgress
+                         - beforeSeam.distance / total) < 1.0e-6);
+        QVERIFY(std::abs(geometry.pieces.at(1).effectReferenceProgress
+                         - afterSeam.distance / total) < 1.0e-6);
         QVERIFY2(displacements.at(0) > 0.0,
                  "closed-path progress must remain near one before the seam");
         QVERIFY2(displacements.at(1) < 0.0,
@@ -1031,6 +1120,9 @@ void CoreTests::postPathEffectsFollowArcLengthTraversal()
         ordinary.recomputeBounds();
         const QVector<qreal> displacements = effectAnchorDisplacements(ordinary, wave);
         QCOMPARE(displacements.size(), 2);
+        for (const GeometryPiece& piece : ordinary.pieces) {
+            QVERIFY(!piece.hasEffectReferenceProgress);
+        }
         QVERIFY(std::abs(displacements.at(0)) < 1.0e-6);
         QVERIFY(std::abs(displacements.at(1) - ordinary.referenceHeight) < 1.0e-6);
     }
@@ -1220,6 +1312,8 @@ void CoreTests::pathLayoutHonorsCancellationBudget()
     piece.originalAnchor = piece.anchor;
     piece.layoutOrigin = piece.anchor;
     piece.layoutAdvance = 10.0;
+    piece.effectReferenceProgress = 0.25;
+    piece.hasEffectReferenceProgress = true;
     VectorGeometry geometry;
     geometry.pieces.push_back(piece);
     piece.path = QPainterPath();

@@ -5,6 +5,26 @@
 #include <cmath>
 
 namespace vt {
+namespace {
+
+qreal normalizedProgress(const GeometryPiece& piece,
+                         const QRectF& referenceBounds)
+{
+    if (piece.hasEffectReferenceProgress
+        && std::isfinite(piece.effectReferenceProgress)) {
+        return qBound<qreal>(0.0, piece.effectReferenceProgress, 1.0);
+    }
+
+    const qreal width = qMax<qreal>(1.0, referenceBounds.width());
+    const QPointF effectAnchor = piece.hasEffectReferenceAnchor
+        ? piece.effectReferenceAnchor : piece.originalAnchor;
+    return qBound<qreal>(
+        0.0,
+        (effectAnchor.x() - referenceBounds.left()) / width,
+        1.0);
+}
+
+} // namespace
 
 QString WaveEffect::typeId() const
 {
@@ -80,7 +100,6 @@ bool WaveEffect::parametersFromJson(const QJsonObject& object, QString* error)
 
 void WaveEffect::apply(VectorGeometry& geometry, const EffectContext& context) const
 {
-    const qreal width = qMax<qreal>(1.0, context.referenceBounds.width());
     constexpr qreal twoPi = 6.28318530717958647692;
 
     for (int index = 0; index < geometry.pieces.size(); ++index) {
@@ -88,13 +107,9 @@ void WaveEffect::apply(VectorGeometry& geometry, const EffectContext& context) c
             break;
         }
         const GeometryPiece& piece = geometry.pieces[index];
-        const QPointF effectAnchor = piece.hasEffectReferenceAnchor
-            ? piece.effectReferenceAnchor : piece.originalAnchor;
-        const qreal progress = qBound<qreal>(
-            0.0,
-            (effectAnchor.x() - context.referenceBounds.left()) / width,
-            1.0);
-    const qreal displacement = amplitude * context.effectiveStrength(*this) * context.referenceHeight
+        const qreal progress = normalizedProgress(piece, context.referenceBounds);
+        const qreal displacement = amplitude * context.effectiveStrength(*this)
+            * context.referenceHeight
             * std::sin(twoPi * (frequency * progress + phase));
         geometry.translatePiece(index, QPointF(0.0, displacement));
     }

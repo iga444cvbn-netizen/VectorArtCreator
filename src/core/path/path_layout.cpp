@@ -288,6 +288,10 @@ bool PathLayoutEngine::apply(VectorGeometry* geometry,
         return false;
     }
     if (!settings.enabled) {
+        for (GeometryPiece& piece : geometry->pieces) {
+            piece.effectReferenceProgress = 0.0;
+            piece.hasEffectReferenceProgress = false;
+        }
         return true;
     }
     if (!settings.isFinite() || settings.overflow != PathOverflowMode::Clip) {
@@ -317,6 +321,12 @@ bool PathLayoutEngine::apply(VectorGeometry* geometry,
         return false;
     }
     VectorGeometry candidate = *geometry;
+    for (GeometryPiece& piece : candidate.pieces) {
+        // A successful re-layout must not retain a scalar derived from an
+        // earlier path, including for glyphs clipped by the new path.
+        piece.effectReferenceProgress = 0.0;
+        piece.hasEffectReferenceProgress = false;
+    }
     if (table->totalLength() <= MinimumLength) {
         // A degenerate path has no meaningful baseline. Clear pieces instead
         // of returning one endpoint for every glyph. Keep the mutation in the
@@ -379,6 +389,12 @@ bool PathLayoutEngine::apply(VectorGeometry* geometry,
         if (!start.valid || !middle.valid) {
             piece.path = QPainterPath();
             continue;
+        }
+        const qreal normalizedProgress = start.distance / table->totalLength();
+        if (std::isfinite(normalizedProgress)) {
+            piece.effectReferenceProgress = qBound<qreal>(
+                0.0, normalizedProgress, 1.0);
+            piece.hasEffectReferenceProgress = true;
         }
         QPointF tangent = settings.followTangent ? middle.tangent : QPointF(1.0, 0.0);
         tangent = normalizedOrFallback(tangent, QPointF(1.0, 0.0));

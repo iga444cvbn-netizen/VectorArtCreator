@@ -30,6 +30,11 @@ struct GeometryPiece {
     // they actually receive rather than against pre-path text coordinates.
     QPointF effectReferenceAnchor;
     bool hasEffectReferenceAnchor = false;
+    // Transient normalized position along the actual path traversal. This is
+    // derived by PathLayoutEngine for progression-dependent effects and is
+    // never persistent document state.
+    qreal effectReferenceProgress = 0.0;
+    bool hasEffectReferenceProgress = false;
     qreal opacityMultiplier = 1.0;
     int generationDepth = 0;
     QString generatorEffectId;

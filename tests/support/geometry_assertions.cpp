@@ -38,6 +38,10 @@ bool hasFiniteGeometry(const VectorGeometry& geometry, QString* error)
     for (const GeometryPiece& piece : geometry.pieces) {
         if (!isFinite(piece.anchor) || !isFinite(piece.originalAnchor)
             || (piece.hasEffectReferenceAnchor && !isFinite(piece.effectReferenceAnchor))
+            || (piece.hasEffectReferenceProgress
+                && (!std::isfinite(piece.effectReferenceProgress)
+                    || piece.effectReferenceProgress < -1.0e-6
+                    || piece.effectReferenceProgress > 1.000001))
             || !std::isfinite(piece.opacityMultiplier)
             || piece.opacityMultiplier < -1.0e-6 || piece.opacityMultiplier > 1.000001) {
             if (error) *error = QStringLiteral("non-finite geometry piece metadata");
