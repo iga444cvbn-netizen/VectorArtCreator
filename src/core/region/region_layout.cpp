@@ -15,8 +15,6 @@ namespace vt {
 namespace {
 
 constexpr qreal LayoutEpsilon = 1.0e-6;
-constexpr int BandSamples = 9;
-constexpr int MaximumVerticalIterations = 8;
 
 struct Cluster {
     int start = -1;
@@ -88,7 +86,6 @@ QSet<int> lineBreaks(const QString& sourceText, int start, int end)
 }
 
 QVector<Cluster> buildClusters(const VectorGeometry& geometry,
-                               const ShapedText& shaped,
                                const QString& sourceText,
                                int lineIndex)
 {
@@ -156,17 +153,21 @@ QVector<Cluster> buildClusters(const VectorGeometry& geometry,
     for (Cluster& cluster : clusters) {
         const int end = cluster.start >= 0
             ? qMin(sourceText.size(), cluster.start + cluster.length) : -1;
-        if (end > cluster.start && breaks.contains(end)) {
-            cluster.breakAfter = true;
-        } else if (cluster.start >= 0 && end > cluster.start) {
+        bool containsWhitespace = false;
+        if (cluster.start >= 0 && end > cluster.start) {
             for (int index = cluster.start; index < end; ++index) {
                 if (sourceText.at(index).isSpace()) {
-                    cluster.breakAfter = true;
-                    cluster.justifyAfter = true;
+                    containsWhitespace = true;
                     break;
                 }
             }
         }
+        // A legal break and an expandable whitespace opportunity are
+        // separate contracts. Qt may report whitespace as a legal boundary,
+        // so the whitespace flag must not live in the fallback branch.
+        cluster.breakAfter = end > cluster.start && breaks.contains(end);
+        if (!cluster.breakAfter && containsWhitespace) cluster.breakAfter = true;
+        cluster.justifyAfter = containsWhitespace;
     }
     return clusters;
 }
@@ -238,23 +239,49 @@ QVector<RegionInterval> safeIntervalsForBand(const TypographyRegion& region,
     if (!std::isfinite(top) || !std::isfinite(bottom) || bottom <= top) return {};
     const auto outer = flattenRegionContour(region.outer, 0.05, work);
     if (!outer.has_value() || !work.isRunning()) return {};
+    QVector<QVector<QPointF>> holes;
+    holes.reserve(region.holes.size());
+    for (const PathGeometry& hole : region.holes) {
+        const auto flattened = flattenRegionContour(hole, 0.05, work);
+        if (!flattened.has_value() || !work.isRunning()) return {};
+        holes.push_back(*flattened);
+    }
     QRectF outerBounds;
     for (const QPointF& point : *outer) outerBounds = outerBounds.united(QRectF(point, QSizeF()));
     const qreal contentTop = outerBounds.top() + settings.paddingTop;
     const qreal contentBottom = outerBounds.bottom() - settings.paddingBottom;
     if (top < contentTop - LayoutEpsilon || bottom > contentBottom + LayoutEpsilon) return {};
 
-    const qreal height = bottom - top;
-    const qreal edgeInset = qMin<qreal>(height * 0.001, 0.25);
-    QVector<RegionInterval> common;
-    for (int sample = 0; sample < BandSamples; ++sample) {
-        if (!work.consume()) return {};
-        qreal y = top + (height * sample) / static_cast<qreal>(BandSamples - 1);
-        if (height > edgeInset * 2.0) {
-            y = qBound(top + edgeInset, y, bottom - edgeInset);
-        } else {
-            y = (top + bottom) * 0.5;
+    // A line band is safe only when one interval survives for every Y in the
+    // full closed band. Flattened contour vertices are the critical events:
+    // between two consecutive events every crossing is a linear function of Y
+    // and the scanline topology is constant. Intersecting both event sides
+    // and each open slab midpoint is therefore conservative for the bounded
+    // flattened geometry; it does not rely on an arbitrary sample count.
+    QVector<qreal> events = {top, bottom};
+    const auto addEvents = [&events, top, bottom](const QVector<QPointF>& points) {
+        for (const QPointF& point : points) {
+            if (point.y() > top + LayoutEpsilon && point.y() < bottom - LayoutEpsilon) {
+                events.push_back(point.y());
+            }
         }
+    };
+    addEvents(*outer);
+    for (const QVector<QPointF>& hole : holes) addEvents(hole);
+    std::sort(events.begin(), events.end());
+    events.erase(std::unique(events.begin(), events.end(), [](qreal left, qreal right) {
+        return std::abs(left - right) <= LayoutEpsilon;
+    }), events.end());
+    QVector<qreal> probes = events;
+    probes.reserve(events.size() * 2);
+    for (int index = 0; index + 1 < events.size(); ++index) {
+        if (events.at(index + 1) - events.at(index) > LayoutEpsilon) {
+            probes.push_back((events.at(index) + events.at(index + 1)) * 0.5);
+        }
+    }
+    QVector<RegionInterval> common;
+    for (const qreal y : probes) {
+        if (!work.consume()) return {};
         QVector<RegionInterval> current = regionIntervalsAtY(region, y, work);
         for (RegionInterval& interval : current) {
             interval.left += settings.paddingLeft;
@@ -306,6 +333,14 @@ LayoutPass layoutAtOrigin(const VectorGeometry& geometry,
     for (int sourceLineIndex = 0; sourceLineIndex < shaped.lineBounds.size(); ++sourceLineIndex) {
         const QVector<Cluster>& clusters = allClusters.at(sourceLineIndex);
         int cursor = 0;
+        const auto unbreakableUnitEnd = [&clusters](int begin) {
+            int end = begin;
+            while (end < clusters.size()) {
+                ++end;
+                if (clusters.at(end - 1).breakAfter) break;
+            }
+            return end;
+        };
         if (clusters.isEmpty()) {
             const QRectF sourceLine = shaped.lineBounds.at(sourceLineIndex);
             const qreal height = qMax<qreal>(1.0, sourceLine.height());
@@ -349,7 +384,8 @@ LayoutPass layoutAtOrigin(const VectorGeometry& geometry,
                 const Cluster& cluster = clusters.at(index);
                 const qreal flowWidth = clusterFlowWidth(cluster);
                 if (index == cursor && flowWidth > capacity + LayoutEpsilon) {
-                    end = cursor + 1;
+                    end = unbreakableUnitEnd(cursor);
+                    used = clusterWidth(clusters, cursor, end);
                     oversized = true;
                     break;
                 }
@@ -362,13 +398,35 @@ LayoutPass layoutAtOrigin(const VectorGeometry& geometry,
                 break;
             }
             if (end <= cursor) {
-                end = cursor + 1;
-                oversized = clusterFlowWidth(clusters.at(cursor)) > capacity + LayoutEpsilon;
+                end = unbreakableUnitEnd(cursor);
+                used = clusterWidth(clusters, cursor, end);
+                oversized = true;
             } else if (end < clusters.size() && lastLegalBreak >= cursor) {
                 end = lastLegalBreak + 1;
                 used = clusterWidth(clusters, cursor, end);
+            } else if (end < clusters.size() && lastLegalBreak < cursor) {
+                // No legal break was found in the overflowing unit. Keep the
+                // complete word/grapheme sequence together and apply the
+                // explicit Clip policy to that unit instead of silently
+                // hard-breaking at an arbitrary shaping cluster.
+                const int unitEnd = unbreakableUnitEnd(cursor);
+                end = qMax(end, unitEnd);
+                used = clusterWidth(clusters, cursor, end);
+                oversized = used > capacity + LayoutEpsilon;
             }
-            const bool lastParagraphLine = end >= clusters.size();
+            const bool hasEarlierLineForSource = std::any_of(
+                pass.lines.cbegin(), pass.lines.cend(),
+                [sourceLineIndex](const PlannedLine& previous) {
+                    return previous.sourceLineIndex == sourceLineIndex;
+                });
+            const bool isFinalSourceLine = sourceLineIndex == shaped.lineBounds.size() - 1;
+            // A one-line paragraph is allowed to justify its only line so a
+            // standalone short label visibly honors the Justified control.
+            // For a wrapped or explicitly multiline paragraph, the final line
+            // remains ragged-right as in conventional paragraph layout.
+            const bool lastParagraphLine = end >= clusters.size()
+                && isFinalSourceLine
+                && (hasEarlierLineForSource || shaped.lineBounds.size() > 1);
             pass.lines.push_back({sourceLineIndex, cursor, end, lineTop,
                                   qMax<qreal>(1.0, sourceLine.height()), used,
                                   interval, oversized, lastParagraphLine});
@@ -470,7 +528,7 @@ bool RegionLayoutEngine::apply(VectorGeometry* geometry,
             if (error) *error = work.interruptionMessage();
             return false;
         }
-        allClusters.push_back(buildClusters(*geometry, shaped, sourceText, lineIndex));
+        allClusters.push_back(buildClusters(*geometry, sourceText, lineIndex));
         bands.push_back(sourceBand(*geometry, shaped, lineIndex));
     }
 
@@ -479,8 +537,35 @@ bool RegionLayoutEngine::apply(VectorGeometry* geometry,
     const qreal contentHeight = qMax<qreal>(0.0, contentBottom - contentTop);
     qreal origin = contentTop;
     LayoutPass pass;
-    int previousLineCount = -1;
-    for (int iteration = 0; iteration < MaximumVerticalIterations; ++iteration) {
+    QVector<LayoutPass> candidates;
+    QVector<qreal> candidateOrigins;
+    QSet<QByteArray> seenStates;
+    const qint64 complexity = static_cast<qint64>(shaped.lineBounds.size() + 1)
+        * static_cast<qint64>(geometry->pieces.size() + region.outer.nodes.size()
+                              + 1);
+    const int maximumCandidates = static_cast<int>(qBound<qint64>(16, complexity + 1, 4096));
+    auto chooseBestCandidate = [&]() {
+        int bestIndex = 0;
+        qreal bestResidual = std::numeric_limits<qreal>::max();
+        for (int index = 0; index < candidates.size(); ++index) {
+            const qreal next = verticalOrigin(contentTop, contentHeight,
+                                               candidates.at(index).blockHeight,
+                                               settings.verticalAlignment);
+            const qreal residual = std::abs(next - candidateOrigins.at(index));
+            if (residual < bestResidual - LayoutEpsilon
+                || (std::abs(residual - bestResidual) <= LayoutEpsilon
+                    && (candidates.at(index).lines.size()
+                            < candidates.at(bestIndex).lines.size()
+                        || (candidates.at(index).lines.size()
+                                == candidates.at(bestIndex).lines.size()
+                            && candidateOrigins.at(index) < candidateOrigins.at(bestIndex)))) {
+                bestIndex = index;
+                bestResidual = residual;
+            }
+        }
+        if (!candidates.isEmpty()) pass = candidates.at(bestIndex);
+    };
+    for (int iteration = 0; iteration < maximumCandidates; ++iteration) {
         pass = layoutAtOrigin(*geometry, shaped, sourceText, region, settings,
                               lineSpacing, origin, allClusters, bands, work);
         if (!work.isRunning()) {
@@ -489,19 +574,20 @@ bool RegionLayoutEngine::apply(VectorGeometry* geometry,
         }
         const qreal nextOrigin = verticalOrigin(contentTop, contentHeight,
                                                 pass.blockHeight, settings.verticalAlignment);
+        candidates.push_back(pass);
+        candidateOrigins.push_back(origin);
+        QByteArray state = QByteArray::number(nextOrigin, 'g', 14);
+        state += QByteArrayLiteral("|");
+        state += QByteArray::number(pass.lines.size());
         if (std::abs(nextOrigin - origin) <= 0.01
-            && previousLineCount == pass.lines.size()) {
+            || seenStates.contains(state)) {
+            chooseBestCandidate();
             break;
         }
-        previousLineCount = pass.lines.size();
+        seenStates.insert(state);
         origin = nextOrigin;
     }
-    pass = layoutAtOrigin(*geometry, shaped, sourceText, region, settings,
-                          lineSpacing, origin, allClusters, bands, work);
-    if (!work.isRunning()) {
-        if (error) *error = work.interruptionMessage();
-        return false;
-    }
+    if (candidates.size() >= maximumCandidates) chooseBestCandidate();
 
     VectorGeometry candidate = *geometry;
     clearRegionMetadata(&candidate);
