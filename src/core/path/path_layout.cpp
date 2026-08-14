@@ -407,7 +407,10 @@ bool PathLayoutEngine::apply(VectorGeometry* geometry,
     }
     const QPainterPath derivedPath = traversal.toPainterPath();
     const QRectF pathBounds = derivedPath.boundingRect();
-    if (!pathBounds.isEmpty()) {
+    // A valid horizontal or vertical path may have a zero-height or
+    // zero-width bounding rectangle. It is still the authoritative effect
+    // reference frame and must not fall back to source-layout bounds.
+    if (pathBounds.width() > 0.0 || pathBounds.height() > 0.0) {
         candidate.setReferenceBounds(pathBounds);
     }
     if (!work.isRunning()) {

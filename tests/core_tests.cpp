@@ -31,6 +31,7 @@
 
 #include <QAction>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFont>
@@ -1090,6 +1091,11 @@ void CoreTests::pathCancellationThresholdsDoNotPoisonPathStageCaches()
             });
         const SceneGeometry partial = SceneEvaluator::evaluate(
             pageFor(attempt), 202, interrupted);
+        if (partial.evaluationStatus != EvaluationStatus::Cancelled) {
+            qInfo() << "path cancellation checkpoint" << checkpoint
+                    << "consumed" << interrupted.unitsConsumed()
+                    << "work status" << static_cast<int>(interrupted.status());
+        }
         QCOMPARE(partial.evaluationStatus, EvaluationStatus::Cancelled);
         QVERIFY(partial.objects.isEmpty());
 
