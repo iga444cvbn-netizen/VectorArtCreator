@@ -962,15 +962,8 @@ void CoreTests::postPathEffectsFollowArcLengthTraversal()
         const QVector<qreal> expectedProgress = {0.0, 0.2, 0.4, 0.6};
         for (int index = 0; index < geometry.pieces.size(); ++index) {
             QVERIFY(geometry.pieces.at(index).hasEffectReferenceProgress);
-            const QString progressDescription = QStringLiteral(
-                "vertical index %1 actual %2 expected %3")
-                .arg(index)
-                .arg(geometry.pieces.at(index).effectReferenceProgress, 0, 'g', 16)
-                .arg(expectedProgress.at(index), 0, 'g', 16);
-            if (std::abs(geometry.pieces.at(index).effectReferenceProgress
-                         - expectedProgress.at(index)) >= 1.0e-6) {
-                QFAIL(qPrintable(progressDescription));
-            }
+            QVERIFY(std::abs(geometry.pieces.at(index).effectReferenceProgress
+                             - expectedProgress.at(index)) < 1.0e-6);
         }
         for (int index = 1; index < displacements.size(); ++index) {
             QVERIFY2(displacements.at(index) > displacements.at(index - 1) + 1.0e-4,
@@ -1053,19 +1046,15 @@ void CoreTests::postPathEffectsFollowArcLengthTraversal()
         QString error;
         QVERIFY2(applyPath(&geometry, path, settings, &error), qPrintable(error));
         const QVector<qreal> displacements = effectAnchorDisplacements(geometry, wave);
-        const QVector<qreal> expectedProgress = {0.0, 0.25, 250.0 / 600.0,
-                                                 350.0 / 600.0, 500.0 / 600.0};
+        const std::optional<PathArcLengthTable> table = PathArcLengthTable::build(path);
+        QVERIFY(table.has_value());
+        const qreal total = table->totalLength();
+        const QVector<qreal> expectedProgress = {
+            0.0, 150.0 / total, 250.0 / total, 350.0 / total, 500.0 / total};
         for (int index = 0; index < geometry.pieces.size(); ++index) {
             QVERIFY(geometry.pieces.at(index).hasEffectReferenceProgress);
-            const QString progressDescription = QStringLiteral(
-                "backtracking index %1 actual %2 expected %3")
-                .arg(index)
-                .arg(geometry.pieces.at(index).effectReferenceProgress, 0, 'g', 16)
-                .arg(expectedProgress.at(index), 0, 'g', 16);
-            if (std::abs(geometry.pieces.at(index).effectReferenceProgress
-                         - expectedProgress.at(index)) >= 1.0e-6) {
-                QFAIL(qPrintable(progressDescription));
-            }
+            QVERIFY(std::abs(geometry.pieces.at(index).effectReferenceProgress
+                             - expectedProgress.at(index)) < 1.0e-6);
         }
         for (int index = 1; index < displacements.size(); ++index) {
             QVERIFY2(displacements.at(index) > displacements.at(index - 1) + 1.0e-4,
