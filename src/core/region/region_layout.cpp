@@ -1,6 +1,7 @@
 #include "core/region/region_layout.h"
 
 #include <QHash>
+#include <QDebug>
 #include <QSet>
 #include <QTextBoundaryFinder>
 #include <QTransform>
@@ -236,6 +237,14 @@ QVector<RegionInterval> safeIntervalsForBand(const FlattenedTypographyRegion& fl
                                              const RegionTypographyProperties& settings,
                                              const WorkControl& work)
 {
+    const bool debugRegion = settings.regionId == QStringLiteral("wrap-region")
+        || settings.regionId == QStringLiteral("alignment-region")
+        || settings.regionId == QStringLiteral("justification-oracle")
+        || settings.regionId == QStringLiteral("unbreakable-word");
+    if (debugRegion) {
+        qWarning() << "region band begin" << settings.regionId << top << bottom
+                   << flattenedRegion.outer.size();
+    }
     if (!std::isfinite(top) || !std::isfinite(bottom) || bottom <= top) return {};
     QRectF outerBounds;
     for (const QPointF& point : flattenedRegion.outer) {
@@ -243,6 +252,9 @@ QVector<RegionInterval> safeIntervalsForBand(const FlattenedTypographyRegion& fl
     }
     const qreal contentTop = outerBounds.top() + settings.paddingTop;
     const qreal contentBottom = outerBounds.bottom() - settings.paddingBottom;
+    if (debugRegion) {
+        qWarning() << "region band bounds" << outerBounds << contentTop << contentBottom;
+    }
     if (top < contentTop - LayoutEpsilon || bottom > contentBottom + LayoutEpsilon) return {};
 
     // A line band is safe only when one interval survives for every Y in the
@@ -295,6 +307,12 @@ QVector<RegionInterval> safeIntervalsForBand(const FlattenedTypographyRegion& fl
     for (const qreal y : probes) {
         if (!work.consume()) return {};
         QVector<RegionInterval> current = regionIntervalsAtY(flattenedRegion, y, work);
+        if (debugRegion) {
+            qWarning() << "region band probe" << y << current.size();
+            for (const RegionInterval& interval : current) {
+                qWarning() << "  interval" << interval.left << interval.right;
+            }
+        }
         for (RegionInterval& interval : current) {
             interval.left += settings.paddingLeft;
             interval.right -= settings.paddingRight;
@@ -304,6 +322,12 @@ QVector<RegionInterval> safeIntervalsForBand(const FlattenedTypographyRegion& fl
         }), current.end());
         if (current.isEmpty()) return {};
         common = common.isEmpty() ? current : intersectIntervals(common, current);
+        if (debugRegion) {
+            qWarning() << "region band common" << common.size();
+            for (const RegionInterval& interval : common) {
+                qWarning() << "  common" << interval.left << interval.right;
+            }
+        }
         if (common.isEmpty()) return {};
     }
     std::sort(common.begin(), common.end(), [](const RegionInterval& left,
