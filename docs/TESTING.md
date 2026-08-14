@@ -24,9 +24,11 @@ contracts, not just isolated helper functions. A green core suite alone does
   legacy identity migration, and deterministic workload builders.
 - `vector_typography_region_tests` (`core;region;serialization;undo;adversarial`)
   provides independent rectangle/concave/hole/cubic scanline oracles, legal
-  cluster wrapping, padding/alignment/Clip behavior, cancellation
-  transactionality, v8 round trips, v7 migration, duplicate identity
-  rejection, and controller undo/redo plus duplicate freshening.
+  cluster wrapping, between-event topology safety, real bidi/RTL shaping,
+  explicit unbreakable-word fallback, padding/alignment/Clip behavior,
+  cancellation transactionality, v8 round trips and malformed atomic rejection,
+  v7 migration, duplicate identity rejection, and controller undo/redo plus
+  duplicate freshening.
 - `vector_typography_integration_tests`
   (`integration;undo;serialization;async;export`)
   checks real-file save/open/new/failure/migration behavior, exact undo/redo
@@ -35,7 +37,8 @@ contracts, not just isolated helper functions. A green core suite alone does
   text multiplicity, descriptor refusal paths, and ten seeded 200-action
   workflows.
 - `vector_typography_ui_smoke_tests` (`ui;smoke`) drives a visible
-  `MainWindow` through real widgets.  It is the fast first-five-minutes canary.
+  `MainWindow` through real widgets, including a persisted hole add/edit/remove
+  workflow with undo/redo. It is the fast first-five-minutes canary.
 - `vector_typography_ui_tests` (`ui;regression;undo`) retains focused UI regression
   cases such as outside click/wheel routing, focused native text edit, trait
   mode and scale preservation.
@@ -132,12 +135,15 @@ duplicate/paste freshening, stale spatial-revision rejection, and a real-widget
 inspector/canvas handoff test.
 
 Region-typography additions additionally require independent scanline oracles
-for rectangles, concavities, cubic contours, and holes; widest-continuous-
-interval selection with deterministic ties; shaping-cluster/UTF-16-safe
-wrapping; overlong Clip termination; horizontal/vertical alignment and
-padding; post-layout effect ordering; v8 identity/migration/resource
-validation; cancellation without partial geometry; controller undo/redo and
-duplicate freshening; and a real-widget inspector refresh/signal test.
+for rectangles, concavities, cubic contours, holes, and between-event notches;
+widest-continuous-interval selection with deterministic ties;
+shaping-cluster/UTF-16-safe wrapping including real bidi/RTL text; the explicit
+unbreakable-word hard-break policy and overlong Clip termination;
+horizontal/vertical alignment and padding; latest-generation publication;
+post-layout effect ordering; mode-scoped cache invalidation; v8
+identity/migration/resource validation; cancellation without partial geometry
+or cache poisoning; controller undo/redo, hole edit/remove, and duplicate
+freshening; final SVG export; and a real-widget inspector refresh/signal test.
 
 ## Random workflow replay
 

@@ -40,6 +40,7 @@ class WorkflowIntegrationTests final : public QObject {
 private slots:
     void semanticSaveLoadAndUndoRedoEquivalence();
     void latestAsyncTextGenerationWins();
+    void latestAsyncRegionGenerationWins();
     void latestAsyncSemanticSnapshotWins();
     void mixedRapidMutationsPublishOnlyFinalSemanticScene();
     void staleFrameCannotAuthorizeSpatialMutation();
@@ -95,6 +96,55 @@ void WorkflowIntegrationTests::latestAsyncTextGenerationWins()
     QTRY_COMPARE_WITH_TIMEOUT(controller.document().objectById(id)->sourceText, QStringLiteral("third"), 3000);
     QTRY_VERIFY_WITH_TIMEOUT(controller.sceneGeometry().objectById(id) != nullptr, 5000);
     QCOMPARE(controller.sceneGeometry().objectById(id)->sourceText, QStringLiteral("third"));
+}
+
+void WorkflowIntegrationTests::latestAsyncRegionGenerationWins()
+{
+    EditorController controller;
+    const QString id = controller.createTextObject(
+        QPointF(40.0, 40.0), QStringLiteral("initial region generation"));
+    controller.setTypographyLayoutMode(TypographyLayoutMode::Region);
+    controller.createRegionRectangle();
+    QTRY_VERIFY_WITH_TIMEOUT(controller.sceneGeometry().objectById(id) != nullptr, 5000);
+
+    test::AsyncEvaluationGate gate;
+    QVERIFY2(gate.waitUntilHolding(), "Could not acquire deterministic async evaluation barrier");
+
+    controller.setText(QString::fromUtf8("latest region generation Привет 😀"));
+    controller.setRegionPadding(RegionPaddingSide::Left, 19.0);
+    controller.setRegionPadding(RegionPaddingSide::Right, 7.0);
+    controller.setRegionHorizontalAlignment(RegionHorizontalAlignment::Justified);
+    controller.setRegionVerticalAlignment(RegionVerticalAlignment::Bottom);
+    controller.createRegionEllipse();
+
+    const SceneGeometry expectedScene = SceneEvaluator::evaluate(
+        *controller.document().currentPage(), controller.spatialRevision());
+    const SceneObjectGeometry* expectedObject = expectedScene.objectById(id);
+    QVERIFY(expectedObject);
+    const test::SceneObjectSignature expected = test::sceneObjectSignature(*expectedObject);
+
+    gate.release();
+    QTRY_VERIFY_WITH_TIMEOUT(
+        controller.sceneGeometry().objectById(id)
+            && controller.sceneGeometry().objectById(id)->sourceText
+                == QString::fromUtf8("latest region generation Привет 😀"),
+        8000);
+    QString difference;
+    QTRY_VERIFY_WITH_TIMEOUT(
+        controller.sceneGeometry().objectById(id)
+            && test::compareSceneObject(
+                expected,
+                test::sceneObjectSignature(*controller.sceneGeometry().objectById(id)),
+                &difference),
+        8000);
+    QVERIFY2(test::checkInvariants(
+                 controller.document(), &controller.sceneGeometry(),
+                 controller.selectedObjectIds(), controller.selectionModel()->activeObjectId())
+                 .ok(),
+             qPrintable(test::checkInvariants(
+                 controller.document(), &controller.sceneGeometry(),
+                 controller.selectedObjectIds(), controller.selectionModel()->activeObjectId())
+                 .summary()));
 }
 
 void WorkflowIntegrationTests::latestAsyncSemanticSnapshotWins()

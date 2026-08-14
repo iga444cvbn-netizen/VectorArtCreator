@@ -271,9 +271,11 @@ For every new persisted field or public workflow, add the applicable gates:
     post-layout effect/deformation ordering;
 13. region geometry and layout: outer/hole topology, cubic scanlines,
     concavity, widest-continuous-interval selection and deterministic ties,
-    shaping-safe wrapping, alignment, padding, Clip termination, cancellation,
-    v8 migration, identity freshening, controller undo/redo, and real-widget
-    inspector synchronization.
+    event/slab full-band safety, shaping-safe wrapping, real bidi/RTL cluster
+    ownership, explicit unbreakable-word fallback, alignment, padding, Clip
+    termination, cancellation/cache recovery, v8 migration, identity
+    freshening, controller undo/redo, post-layout effect ordering, export, and
+    real-widget inspector synchronization.
 
 All first-party MSVC targets MUST build warning-clean under `/W4 /WX`. External
 dependency headers MAY be demoted through the compiler's external-header policy;

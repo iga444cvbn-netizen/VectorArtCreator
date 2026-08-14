@@ -30,11 +30,16 @@ node, cubic-work, and estimated-work limits before replacing the live document.
 `RegionLayoutEngine` runs after shaping and glyph-outline construction and before
 effects or deformation. For every candidate line band it:
 
-1. flattens each cubic contour with a bounded adaptive tolerance;
-2. computes half-open horizontal scanline crossings for the outer contour;
-3. subtracts every hole interval explicitly;
-4. intersects the sampled band intervals to obtain ordered safe vector
-   intervals;
+1. flattens each cubic contour once with a bounded adaptive tolerance;
+2. collects the band endpoints and every flattened contour-vertex Y event in
+   that band;
+3. probes each event and the midpoint of every event slab, computes half-open
+   horizontal crossings for the outer contour, and subtracts every hole
+   interval explicitly;
+4. intersects all event/slab intervals to obtain a conservative full-band
+   safe interval set. The flattened geometry is piecewise linear between
+   events, so this is a bounded topology proof rather than a fixed sample
+   count;
 5. selects one continuous interval for the line: the widest safe interval,
    with the leftmost interval winning an equal-width tie; and
 6. wraps complete shaping clusters using their UTF-16 starts/lengths and shaped
@@ -48,15 +53,22 @@ The algorithm never splits a ligature, combining sequence, fallback cluster, or
 surrogate-pair span. Logical source order is used for wrapping and effect
 progress; the shaped physical piece order is used for visual placement, so RTL
 runs retain their visual order without changing UTF-16 ownership. Legal Qt line
-boundaries and a whitespace fallback provide break opportunities. If one cluster is wider than
-the available interval, the complete cluster is clipped and the cursor advances
-so it cannot be repeatedly placed at an endpoint.
+boundaries and whitespace provide break opportunities. If an unbreakable word
+has no legal break before the interval ends, Phase 5 uses a deterministic
+hard-break fallback between complete shaping clusters; this is an explicit
+policy, not a claimed Unicode line-break opportunity. A single cluster wider
+than the available interval follows `Clip`: it is emitted as one indivisible
+unit and the cursor advances so it cannot be repeatedly placed at an endpoint.
 
 Horizontal alignment supports Left, Center, Right, and Justified. Justification
 adds only non-negative space to whitespace opportunities and never compresses a
-line. Vertical alignment supports Top, Center, and Bottom and reflows until the
-line count/origin stabilizes. Padding is applied to all four sides. Overflow is
-currently the explicit `Clip` mode.
+line; a wrapped paragraph's final line remains ragged, while a standalone
+single-line paragraph may justify its only line. Vertical alignment supports
+Top, Center, and Bottom. Reflow records stable and repeated states, then picks
+the deterministic candidate with the smallest origin residual, fewer lines,
+and earliest origin tie-breaks; it does not accept an arbitrary fixed iteration
+sample. Padding is applied to all four sides. Overflow is currently the
+explicit `Clip` mode.
 
 Successful region placement sets transient logical effect progress in source
 order. Effects consume the post-region geometry, and deformation consumes the
@@ -86,12 +98,18 @@ text overflows.
 ## Verification
 
 `vector_typography_region_tests` provides independent analytical oracles for
-rectangle, concave, hole, and cubic/ellipse scanlines; cluster-preserving wrap;
-padding and all alignments; overlong Clip termination; cancellation
-transactionality; v8 round trips; v7 migration; duplicate identity rejection;
-and controller undo/redo plus duplicate freshening.
+rectangle, concave, hole, and cubic/ellipse scanlines; between-event notch and
+hole safety; cluster-preserving wrap; real bidi/RTL shaping with UTF-16 cluster
+ownership; padding and all alignments; overlong Clip and explicit unbreakable
+word fallback; cancellation transactionality; v8 round trips with malformed
+atomic rejection; v7 migration; duplicate identity rejection; and controller
+undo/redo plus duplicate freshening.
 
 `vector_typography_region_ui_tests` checks real TypographyPanel controls,
-signals, refresh synchronization, and mode/padding/preset affordances. The
-shared invariant checker and semantic-equality helper include region IDs,
-contours, settings, and active layout mode.
+signals, refresh synchronization, and mode/padding/preset affordances. UI smoke
+coverage adds and edits a hole through the controller path, removes it with
+undo/redo, and verifies save/open persistence. Integration/core coverage also
+checks latest-generation Region publication, post-layout effect/deformation
+ordering, mode-scoped cache keys, cancellation recovery, and final SVG path
+export. The shared invariant checker and semantic-equality helper include
+region IDs, contours, settings, and active layout mode.

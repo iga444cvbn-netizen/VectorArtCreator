@@ -47,9 +47,10 @@ TextEngine -> ShapedText -> GlyphGeometryBuilder -> VectorGeometry
 * `TypographyRegion` and `RegionTypographyProperties` are persistent,
   object-owned layout constraints. A region owns one closed outer cubic contour
   and zero or more closed hole contours with stable contour/node IDs. Its
-  derived scanline intervals constrain layout before effects; the region is not
-  a post-layout clipping mask. Duplicate, paste, and page clone freshen the
-  region, contours, and nodes together.
+  derived full-band scanline intervals constrain layout before effects; bounded
+  contour-event/slab probes prove the flattened topology across each line band.
+  The region is not a post-layout clipping mask. Duplicate, paste, and page
+  clone freshen the region, contours, and nodes together.
 * `DeformationToolState` is UI interaction state, not document state. `Select` is
   an inactive canvas tool and never creates a `DeformationStroke`; brush tools are
   mapped to `BrushMode` only when a real stroke is started.
@@ -100,13 +101,15 @@ which are evaluated as nondestructive geometric attenuation and are undoable.
    bounded arc-length table. Open paths use whole-glyph clipping; closed paths
    wrap by total length. Reverse traversal, baseline offset, side flip, tangent
    following, and line metadata are applied here, before any visual effect.
-5. `RegionLayoutEngine` optionally derives ordered safe line-band intervals from
-   cubic contour scanlines, subtracts holes, and selects one widest continuous
-   interval per logical line. Equal-width intervals choose the leftmost span.
+5. `RegionLayoutEngine` optionally derives ordered safe full-band intervals from
+   flattened cubic contour event/slab scanlines, subtracts holes, and selects
+   one widest continuous interval per logical line. Equal-width intervals
+   choose the leftmost span.
    It wraps complete shaping clusters, preserves UTF-16 ownership and advances,
-   applies padding/alignment, and clips an overlong cluster as one unit. The
-   stage is bounded, cancellable, and transactional; disconnected intervals are
-   not joined within one line.
+   applies padding/alignment, hard-breaks unbreakable words only between whole
+   clusters, and clips an overlong single cluster as one unit. The stage is
+   bounded, cancellable, and transactional; disconnected intervals are not
+   joined within one line.
 6. `EffectStack` applies enabled procedural effects in explicit user order and
    filters text-range scopes by source-cluster metadata.
 7. `ManualDeformation` evaluates persistent strokes on the post-effect geometry.

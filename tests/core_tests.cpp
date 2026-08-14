@@ -377,6 +377,7 @@ private slots:
     void contourMaskDistanceHandlesAdversarialGeometryAndCancellation();
     void workControlHasExactSharedTerminalBoundaries();
     void evaluationCancellationDoesNotPoisonWorkerCaches();
+    void regionEvaluationCancellationDoesNotPoisonWorkerCaches();
     void fontCacheEpochInvalidatesWorkerShapingKeys();
     void effectRegistryDescriptorsAgreeWithFactories();
     void builtInPresetCatalogParses();
@@ -4022,6 +4023,78 @@ void CoreTests::evaluationCancellationDoesNotPoisonWorkerCaches()
                      expected, test::geometrySignature(recovered.objects.front().geometry),
                      &difference),
                  qPrintable(QStringLiteral("cache recovery after checkpoint %1: %2")
+                                .arg(checkpoint).arg(difference)));
+    }
+}
+
+void CoreTests::regionEvaluationCancellationDoesNotPoisonWorkerCaches()
+{
+    TextObject fixture = configuredText(QString(128, QLatin1Char('W')));
+    fixture.id = QStringLiteral("region-cache-baseline-object");
+    fixture.layoutMode = TypographyLayoutMode::Region;
+    fixture.region = TypographyRegion::makeEllipse(QRectF(-160.0, -140.0, 2200.0, 900.0));
+    fixture.region->holes.push_back(
+        TypographyRegion::makeEllipse(QRectF(720.0, 90.0, 420.0, 260.0)).outer);
+    fixture.regionLayout.regionId = fixture.region->id;
+    fixture.regionLayout.paddingLeft = 18.0;
+    fixture.regionLayout.paddingRight = 12.0;
+    fixture.regionLayout.paddingTop = 10.0;
+    fixture.regionLayout.paddingBottom = 10.0;
+    fixture.regionLayout.horizontalAlignment = RegionHorizontalAlignment::Justified;
+    fixture.regionLayout.verticalAlignment = RegionVerticalAlignment::Center;
+
+    std::unique_ptr<Effect> wave = EffectRegistry::instance().create(QStringLiteral("wave"));
+    QVERIFY(wave);
+    QVERIFY(wave->setParameter(QStringLiteral("amplitude"), 0.65));
+    fixture.effects.append(std::move(wave));
+    fixture.deformation.strokes.push_back(pushStroke());
+
+    auto pageFor = [](const TextObject& source) {
+        Page page;
+        page.id = QStringLiteral("region-cache-page");
+        page.layers.front()->id = QStringLiteral("region-cache-layer");
+        page.layers.front()->objects.push_back(std::make_unique<TextObject>(source));
+        return page;
+    };
+
+    SceneEvaluator::invalidateFontCaches();
+    const WorkControl baselineWork = WorkControl::unlimited();
+    const SceneGeometry baseline = SceneEvaluator::evaluate(pageFor(fixture), 81, baselineWork);
+    QCOMPARE(baseline.evaluationStatus, EvaluationStatus::Complete);
+    QCOMPARE(baseline.objects.size(), 1);
+    QVERIFY(baseline.objects.front().geometry.hasVisibleGeometry());
+    QVERIFY(baselineWork.unitsConsumed() > 8);
+    const test::GeometrySignature expected = test::geometrySignature(
+        baseline.objects.front().geometry);
+
+    const QVector<qint64> checkpoints = {
+        1,
+        qMax<qint64>(2, baselineWork.unitsConsumed() / 4),
+        qMax<qint64>(3, baselineWork.unitsConsumed() / 2),
+        qMax<qint64>(4, baselineWork.unitsConsumed() * 3 / 4),
+        qMax<qint64>(5, baselineWork.unitsConsumed() - 1),
+    };
+    for (const qint64 checkpoint : checkpoints) {
+        SceneEvaluator::invalidateFontCaches();
+        const WorkControl interrupted = WorkControl::withBudget();
+        interrupted.setCheckpointCallback(
+            [&interrupted, checkpoint](qint64 consumed) {
+                if (consumed >= checkpoint) interrupted.cancel();
+            });
+        const SceneGeometry partial = SceneEvaluator::evaluate(pageFor(fixture), 82, interrupted);
+        QCOMPARE(partial.evaluationStatus, EvaluationStatus::Cancelled);
+        QVERIFY(partial.objects.isEmpty());
+
+        const WorkControl recoveredWork = WorkControl::unlimited();
+        const SceneGeometry recovered = SceneEvaluator::evaluate(pageFor(fixture), 83,
+                                                                  recoveredWork);
+        QCOMPARE(recovered.evaluationStatus, EvaluationStatus::Complete);
+        QCOMPARE(recovered.objects.size(), 1);
+        QString difference;
+        QVERIFY2(test::compareGeometry(
+                     expected, test::geometrySignature(recovered.objects.front().geometry),
+                     &difference),
+                 qPrintable(QStringLiteral("region cache recovery after checkpoint %1: %2")
                                 .arg(checkpoint).arg(difference)));
     }
 }

@@ -100,7 +100,7 @@ src/core/text           font descriptors, shaping, and fallback diagnostics
 src/core/geometry       positioned vector path pieces
 src/core/effects        effect interface, stack, and procedural effects
 src/core/deformation    spatial strokes, sampling, falloff, reconstruction
-src/core/region         persistent regions and vector scanline layout
+src/core/region         persistent regions and bounded full-band vector layout
 src/core/serialization  versioned project JSON
 src/core/presets        versioned preset JSON and UUID storage
 src/core/scene          immutable scene snapshots and asynchronous evaluation
@@ -117,8 +117,11 @@ Project files are currently format version 8. Version 1 absolute tracking values
 are migrated to `trackingEm`; legacy v1-v3 flat object arrays migrate into one
 page and one layer. A saved project always writes the current page/layer/object
 schema with stable IDs and object transforms. Region mode stores an owned closed
-outer contour, optional holes, settings, and stable contour/node IDs; line
-intervals and effect progress remain derived. Each deformation stroke stores its
+outer contour, optional holes, settings, and stable contour/node IDs; flattened
+contour-event/slab line intervals and effect progress remain derived. Wrapping
+preserves shaping clusters and uses an explicit whole-cluster hard-break fallback
+for unbreakable words, while an oversized single cluster follows Clip. Each
+deformation stroke stores its
 mode, target, document-space samples, radius, strength, hardness, and pressure.
 Strokes are spatial data, not pointers to transient painter paths or glyph indexes.
 

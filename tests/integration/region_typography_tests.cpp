@@ -752,15 +752,21 @@ void RegionTypographyTests::regionSerializationMigratesAndRejectsDuplicateIdenti
     TextObject object;
     object.id = QStringLiteral("region-object");
     object.sourceText = QStringLiteral("Persistent region");
-    object.region = rectangleRegion(QStringLiteral("persistent-region"),
-                                    QRectF(0.0, 0.0, 240.0, 120.0));
-    object.region->holes.push_back(rectangleContour(QStringLiteral("persistent-hole"),
-                                                    QRectF(80.0, 30.0, 80.0, 40.0)));
+    object.region = TypographyRegion::makeEllipse(QRectF(0.0, 0.0, 240.0, 120.0));
+    object.region->id = QStringLiteral("persistent-region");
+    PathGeometry persistentHole =
+        TypographyRegion::makeEllipse(QRectF(80.0, 30.0, 80.0, 40.0)).outer;
+    persistentHole.id = QStringLiteral("persistent-hole");
+    object.region->holes.push_back(persistentHole);
     object.layoutMode = TypographyLayoutMode::Region;
     object.regionLayout = regionSettings(*object.region);
     object.regionLayout.paddingLeft = 7.0;
-    object.regionLayout.horizontalAlignment = RegionHorizontalAlignment::Center;
+    object.regionLayout.paddingRight = 11.0;
+    object.regionLayout.paddingTop = 13.0;
+    object.regionLayout.paddingBottom = 17.0;
+    object.regionLayout.horizontalAlignment = RegionHorizontalAlignment::Justified;
     object.regionLayout.verticalAlignment = RegionVerticalAlignment::Bottom;
+    object.regionLayout.overflow = RegionOverflowMode::Clip;
 
     const QJsonObject serialized = ProjectSerializer::textObjectToJson(object);
     TextObject restored;
@@ -771,6 +777,38 @@ void RegionTypographyTests::regionSerializationMigratesAndRejectsDuplicateIdenti
     QVERIFY(restored.region.has_value());
     QVERIFY(restored.region.value() == object.region.value());
     QVERIFY(restored.regionLayout == object.regionLayout);
+
+    const auto assertRejectedAtomically = [&](const QJsonObject& malformed,
+                                               const QString& expectedError) {
+        TextObject target = object;
+        QString malformedError;
+        QVERIFY(!ProjectSerializer::textObjectFromJson(malformed, &target, &malformedError));
+        QVERIFY2(malformedError.contains(expectedError, Qt::CaseInsensitive),
+                 qPrintable(malformedError));
+        QCOMPARE(ProjectSerializer::textObjectToJson(target), serialized);
+    };
+
+    QJsonObject wrongRegionReference = serialized;
+    QJsonObject wrongRegionSettings = wrongRegionReference
+        .value(QStringLiteral("regionLayout")).toObject();
+    wrongRegionSettings.insert(QStringLiteral("regionId"), QStringLiteral("not-owned"));
+    wrongRegionReference.insert(QStringLiteral("regionLayout"), wrongRegionSettings);
+    assertRejectedAtomically(wrongRegionReference, QStringLiteral("different"));
+
+    QJsonObject conflictingPath = serialized;
+    conflictingPath.insert(QStringLiteral("path"), PathGeometry::makeDefault(300.0).toJson());
+    QJsonObject conflictingPathSettings = conflictingPath
+        .value(QStringLiteral("pathLayout")).toObject();
+    conflictingPathSettings.insert(QStringLiteral("enabled"), true);
+    conflictingPathSettings.insert(QStringLiteral("pathId"),
+                                   conflictingPath.value(QStringLiteral("path"))
+                                       .toObject().value(QStringLiteral("id")));
+    conflictingPath.insert(QStringLiteral("pathLayout"), conflictingPathSettings);
+    assertRejectedAtomically(conflictingPath, QStringLiteral("conflicting"));
+
+    QJsonObject missingRegionLayout = serialized;
+    missingRegionLayout.remove(QStringLiteral("regionLayout"));
+    assertRejectedAtomically(missingRegionLayout, QStringLiteral("regionLayout"));
 
     ProjectResourceLimits limited = ProjectSerializer::resourceLimits();
     limited.maximumRegionNodesPerContour = 3;
