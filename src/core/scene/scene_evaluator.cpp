@@ -4,7 +4,6 @@
 #include "core/path/path_layout.h"
 
 #include <QCryptographicHash>
-#include <QDebug>
 #include <QHash>
 #include <QJsonDocument>
 
@@ -215,13 +214,6 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
                                          object.pathLayout,
                                          &pathError,
                                          work)) {
-                qInfo() << "path stage returned false"
-                        << "object" << object.id
-                        << "consumed" << work.unitsConsumed()
-                        << "status" << static_cast<int>(work.status())
-                        << "path error" << pathError
-                        << "path nodes" << object.path->nodes.size()
-                        << "path segments" << object.path->segmentCount();
                 if (!work.isRunning()) {
                     cache.pathKey.clear();
                     return evaluated;

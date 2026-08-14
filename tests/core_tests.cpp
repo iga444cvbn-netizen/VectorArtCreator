@@ -31,7 +31,6 @@
 
 #include <QAction>
 #include <QCoreApplication>
-#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFont>
@@ -1070,12 +1069,25 @@ void CoreTests::pathCancellationThresholdsDoNotPoisonPathStageCaches()
     const test::GeometrySignature expected = test::geometrySignature(
         baseline.objects.front().geometry);
 
+    // The worker's TextEngine intentionally reuses a shaped result across
+    // object IDs. Measure the warm, path-cold workload used by the threshold
+    // loop so the cancellation checkpoints remain semantic rather than tied
+    // to the one-time cold shaping cost of the baseline evaluation.
+    TextObject warmFixture = fixture;
+    warmFixture.id = QStringLiteral("path-cache-threshold-warmup");
+    const WorkControl warmWork = WorkControl::unlimited();
+    const SceneGeometry warm = SceneEvaluator::evaluate(
+        pageFor(warmFixture), 202, warmWork);
+    QCOMPARE(warm.evaluationStatus, EvaluationStatus::Complete);
+    QCOMPARE(warm.objects.size(), 1);
+    QVERIFY(warmWork.unitsConsumed() > 32);
+
     QVector<qint64> checkpoints = {
         1,
         2,
-        qMax<qint64>(3, baselineWork.unitsConsumed() / 4),
-        qMax<qint64>(4, baselineWork.unitsConsumed() / 2),
-        qMax<qint64>(5, baselineWork.unitsConsumed() - 1),
+        qMax<qint64>(3, warmWork.unitsConsumed() / 4),
+        qMax<qint64>(4, warmWork.unitsConsumed() / 2),
+        qMax<qint64>(5, warmWork.unitsConsumed() - 1),
     };
     std::sort(checkpoints.begin(), checkpoints.end());
     checkpoints.erase(std::unique(checkpoints.begin(), checkpoints.end()), checkpoints.end());
@@ -1091,15 +1103,6 @@ void CoreTests::pathCancellationThresholdsDoNotPoisonPathStageCaches()
             });
         const SceneGeometry partial = SceneEvaluator::evaluate(
             pageFor(attempt), 202, interrupted);
-        if (partial.evaluationStatus != EvaluationStatus::Cancelled) {
-            qInfo() << "path cancellation checkpoint" << checkpoint
-                    << "consumed" << interrupted.unitsConsumed()
-                    << "work status" << static_cast<int>(interrupted.status())
-                    << "objects" << partial.objects.size()
-                    << "error" << (partial.objects.isEmpty()
-                                         ? QString()
-                                         : partial.objects.front().error);
-        }
         QCOMPARE(partial.evaluationStatus, EvaluationStatus::Cancelled);
         QVERIFY(partial.objects.isEmpty());
 
