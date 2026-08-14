@@ -38,6 +38,23 @@ bool nearlyEqual(double left, double right)
     return std::abs(left - right) < 1.0e-12;
 }
 
+QRectF boundsOfPoints(const QVector<QPointF>& points)
+{
+    if (points.isEmpty()) return {};
+    qreal left = points.front().x();
+    qreal right = left;
+    qreal top = points.front().y();
+    qreal bottom = top;
+    for (int index = 1; index < points.size(); ++index) {
+        const QPointF& point = points.at(index);
+        left = qMin(left, point.x());
+        right = qMax(right, point.x());
+        top = qMin(top, point.y());
+        bottom = qMax(bottom, point.y());
+    }
+    return QRectF(left, top, right - left, bottom - top);
+}
+
 void assignFreshEffectInstanceIds(EffectStack* stack)
 {
     if (!stack) return;
@@ -1166,9 +1183,7 @@ void EditorController::addRegionHole()
                          : work.interruptionMessage());
         return;
     }
-    QRectF bounds;
-    for (const QPointF& point : flattened->outer) bounds = bounds.united(QRectF(point, QSizeF()));
-    bounds = bounds.normalized();
+    const QRectF bounds = boundsOfPoints(flattened->outer).normalized();
     const qreal holeHeight = qMax<qreal>(1.0, bounds.height() * 0.12);
     QVector<qreal> events = {bounds.top(), bounds.bottom()};
     const auto addEvents = [&events, &bounds](const QVector<QPointF>& points) {

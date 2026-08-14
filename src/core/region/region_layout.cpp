@@ -1,7 +1,6 @@
 #include "core/region/region_layout.h"
 
 #include <QHash>
-#include <QDebug>
 #include <QSet>
 #include <QTextBoundaryFinder>
 #include <QTransform>
@@ -64,6 +63,23 @@ QRectF uniteRect(const QRectF& current,
         return value;
     }
     return current.united(value);
+}
+
+QRectF boundsOfPoints(const QVector<QPointF>& points)
+{
+    if (points.isEmpty()) return {};
+    qreal left = points.front().x();
+    qreal right = left;
+    qreal top = points.front().y();
+    qreal bottom = top;
+    for (int index = 1; index < points.size(); ++index) {
+        const QPointF& point = points.at(index);
+        left = qMin(left, point.x());
+        right = qMax(right, point.x());
+        top = qMin(top, point.y());
+        bottom = qMax(bottom, point.y());
+    }
+    return QRectF(left, top, right - left, bottom - top);
 }
 
 QSet<int> lineBreaks(const QString& sourceText, int start, int end)
@@ -237,24 +253,10 @@ QVector<RegionInterval> safeIntervalsForBand(const FlattenedTypographyRegion& fl
                                              const RegionTypographyProperties& settings,
                                              const WorkControl& work)
 {
-    const bool debugRegion = settings.regionId == QStringLiteral("wrap-region")
-        || settings.regionId == QStringLiteral("alignment-region")
-        || settings.regionId == QStringLiteral("justification-oracle")
-        || settings.regionId == QStringLiteral("unbreakable-word");
-    if (debugRegion) {
-        qWarning() << "region band begin" << settings.regionId << top << bottom
-                   << flattenedRegion.outer.size();
-    }
     if (!std::isfinite(top) || !std::isfinite(bottom) || bottom <= top) return {};
-    QRectF outerBounds;
-    for (const QPointF& point : flattenedRegion.outer) {
-        outerBounds = outerBounds.united(QRectF(point, QSizeF()));
-    }
+    const QRectF outerBounds = boundsOfPoints(flattenedRegion.outer);
     const qreal contentTop = outerBounds.top() + settings.paddingTop;
     const qreal contentBottom = outerBounds.bottom() - settings.paddingBottom;
-    if (debugRegion) {
-        qWarning() << "region band bounds" << outerBounds << contentTop << contentBottom;
-    }
     if (top < contentTop - LayoutEpsilon || bottom > contentBottom + LayoutEpsilon) return {};
 
     // A line band is safe only when one interval survives for every Y in the
@@ -307,12 +309,6 @@ QVector<RegionInterval> safeIntervalsForBand(const FlattenedTypographyRegion& fl
     for (const qreal y : probes) {
         if (!work.consume()) return {};
         QVector<RegionInterval> current = regionIntervalsAtY(flattenedRegion, y, work);
-        if (debugRegion) {
-            qWarning() << "region band probe" << y << current.size();
-            for (const RegionInterval& interval : current) {
-                qWarning() << "  interval" << interval.left << interval.right;
-            }
-        }
         for (RegionInterval& interval : current) {
             interval.left += settings.paddingLeft;
             interval.right -= settings.paddingRight;
@@ -322,12 +318,6 @@ QVector<RegionInterval> safeIntervalsForBand(const FlattenedTypographyRegion& fl
         }), current.end());
         if (current.isEmpty()) return {};
         common = common.isEmpty() ? current : intersectIntervals(common, current);
-        if (debugRegion) {
-            qWarning() << "region band common" << common.size();
-            for (const RegionInterval& interval : common) {
-                qWarning() << "  common" << interval.left << interval.right;
-            }
-        }
         if (common.isEmpty()) return {};
     }
     std::sort(common.begin(), common.end(), [](const RegionInterval& left,
@@ -535,10 +525,7 @@ bool RegionLayoutEngine::apply(VectorGeometry* geometry,
         if (error) *error = work.interruptionMessage();
         return false;
     }
-    QRectF regionBounds;
-    for (const QPointF& point : flattenedRegion->outer) {
-        regionBounds = regionBounds.united(QRectF(point, QSizeF()));
-    }
+    const QRectF regionBounds = boundsOfPoints(flattenedRegion->outer);
     if (regionBounds.width() <= LayoutEpsilon || regionBounds.height() <= LayoutEpsilon) {
         if (error) *error = QStringLiteral("Region has no usable area.");
         return false;

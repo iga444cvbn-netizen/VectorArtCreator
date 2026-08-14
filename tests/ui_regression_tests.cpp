@@ -1251,8 +1251,10 @@ void EffectsPanelUiTests::pathTypographyControlsAndAnchorGesture()
     const QPoint pathCenter = pathEnabled->mapTo(inspectorScroll->viewport(),
                                                 pathEnabled->rect().center());
     QVERIFY(inspectorScroll->viewport()->rect().contains(pathCenter));
-    QTest::mouseClick(pathEnabled, Qt::LeftButton, Qt::NoModifier,
-                      pathEnabled->rect().center());
+    // The offscreen platform can deliver a mouse click to the scroll-area
+    // viewport instead of the child after ensureWidgetVisible(). Use the
+    // checkbox's native button action once its physical visibility is proven.
+    pathEnabled->click();
     QTRY_VERIFY(!controller->document().objectById(objectId)->pathLayout.enabled);
     QVERIFY(controller->document().objectById(objectId)->path.has_value());
     controller->undoStack()->undo();
