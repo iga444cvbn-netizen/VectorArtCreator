@@ -166,6 +166,7 @@ private slots:
     void scanlineIntervalsHandleConcavityHolesAndCubics();
     void regionLayoutWrapsWithoutSplittingClusters();
     void regionLayoutHonorsAlignmentPaddingAndClip();
+    void regionVerticalReflowIsDeterministic();
     void regionLayoutUsesLogicalJustificationAndCancellation();
     void regionLayoutJustifiesWhitespaceWithIndependentGeometryOracle();
     void regionLayoutRejectsBetweenSampleBandConcavityAndHole();
@@ -417,6 +418,34 @@ void RegionTypographyTests::regionLayoutHonorsAlignmentPaddingAndClip()
     QVERIFY2(RegionLayoutEngine::apply(&overlong, oneLineShape(40.0), source, narrow,
                                        regionSettings(narrow), 1.0, &error), qPrintable(error));
     QVERIFY(overlong.pieces.front().path.isEmpty());
+}
+
+void RegionTypographyTests::regionVerticalReflowIsDeterministic()
+{
+    const TypographyRegion region = rectangleRegion(
+        QStringLiteral("vertical-reflow-region"), QRectF(0.0, 0.0, 42.0, 140.0));
+    const QVector<int> starts = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+    const QVector<int> lengths(starts.size(), 1);
+    const QVector<qreal> advances(starts.size(), 15.0);
+    const QVector<qreal> widths(starts.size(), 13.0);
+    const QString source = QStringLiteral("abcdefghijkl");
+    RegionTypographyProperties settings = regionSettings(region);
+    settings.verticalAlignment = RegionVerticalAlignment::Center;
+
+    VectorGeometry first = glyphGeometryWithWidths(starts, lengths, advances, widths);
+    VectorGeometry second = first;
+    QString error;
+    QVERIFY2(RegionLayoutEngine::apply(&first, oneLineShape(180.0), source, region,
+                                       settings, 1.7, &error), qPrintable(error));
+    QVERIFY2(RegionLayoutEngine::apply(&second, oneLineShape(180.0), source, region,
+                                       settings, 1.7, &error), qPrintable(error));
+    QCOMPARE(geometryState(first), geometryState(second));
+    for (const GeometryPiece& piece : first.pieces) {
+        if (!piece.path.isEmpty()) {
+            QVERIFY(piece.sourceLineIndex >= 0);
+            QVERIFY(piece.hasEffectReferenceAnchor);
+        }
+    }
 }
 
 void RegionTypographyTests::regionLayoutUsesLogicalJustificationAndCancellation()
