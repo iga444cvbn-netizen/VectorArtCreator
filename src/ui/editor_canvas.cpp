@@ -6,6 +6,7 @@
 #include <QGraphicsProxyWidget>
 #include <QGraphicsScene>
 #include <QGraphicsView>
+#include <QDebug>
 #include <QKeyEvent>
 #include <QLineF>
 #include <QMouseEvent>
@@ -651,12 +652,22 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
 
 void EditorCanvas::mouseDoubleClickEvent(QMouseEvent* event)
 {
+    qInfo() << "path double-click dispatch"
+            << "button" << static_cast<int>(event->button())
+            << "tool" << static_cast<int>(m_tool)
+            << "object" << m_pathEditObjectId
+            << "nodes" << m_pathEditGeometry.nodes.size()
+            << "revision" << m_pathEditSpatialRevision;
     if (event->button() == Qt::LeftButton && m_tool == EditorTool::PathEdit
         && !m_pathEditObjectId.isEmpty() && m_pathEditGeometry.nodes.size() >= 2) {
         const QPointF pagePoint = documentPosition(event->position());
         const PathSegmentHit hit = nearestPathSegment(m_pathEditGeometry,
                                                       m_pathEditFrame,
                                                       pagePoint);
+        qInfo() << "path double-click hit"
+                << "segment" << hit.segment
+                << "parameter" << hit.parameter
+                << "distanceSquared" << hit.distanceSquared;
         if (hit.segment < 0) {
             event->ignore();
             return;
@@ -981,6 +992,16 @@ void EditorCanvas::mouseReleaseEvent(QMouseEvent* event)
 
 void EditorCanvas::keyPressEvent(QKeyEvent* event)
 {
+    if (m_tool == EditorTool::PathEdit
+        && (event->key() == Qt::Key_C || event->key() == Qt::Key_L)) {
+        qInfo() << "path conversion key"
+                << event->key()
+                << "object" << m_pathEditObjectId
+                << "node" << m_pathEditNodeIndex
+                << "segments" << m_pathEditGeometry.segmentCount()
+                << "nodes" << m_pathEditGeometry.nodes.size()
+                << "revision" << m_pathEditSpatialRevision;
+    }
     if (event->key() == Qt::Key_Escape && !event->isAutoRepeat()) {
         cancelBrushStroke();
         if (m_tool == EditorTool::PathEdit && m_pathEditing) {
