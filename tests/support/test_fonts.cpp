@@ -1,5 +1,6 @@
 #include "tests/support/test_fonts.h"
 
+#include <QFont>
 #include <QFontDatabase>
 #include <QStringList>
 
@@ -13,7 +14,10 @@ QString deterministicTestFamily(bool requireCyrillic)
                                     QStringLiteral("Segoe UI"), QStringLiteral("Arial")}) {
         if (families.contains(preferred, Qt::CaseInsensitive)) return preferred;
     }
-    return families.value(0);
+    const QString systemFamily = QFontDatabase::systemFont(QFontDatabase::GeneralFont).family();
+    if (!systemFamily.isEmpty()) return systemFamily;
+    const QString defaultFamily = QFont().defaultFamily();
+    return defaultFamily.isEmpty() ? QStringLiteral("Sans Serif") : defaultFamily;
 }
 
 } // namespace vt::test

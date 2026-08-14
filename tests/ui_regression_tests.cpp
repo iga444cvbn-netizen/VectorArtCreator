@@ -24,6 +24,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QPainterPath>
+#include <QScrollArea>
 #include <QSignalSpy>
 #include <QSlider>
 #include <QStyle>
@@ -1168,6 +1169,7 @@ void EffectsPanelUiTests::pathTypographyControlsAndAnchorGesture()
     auto* pathEnabled = window.findChild<QCheckBox*>(QStringLiteral("textOnPathEnabled"));
     auto* pathTool = window.findChild<QToolButton*>(QStringLiteral("tool/path-edit"));
     auto* startOffset = window.findChild<SliderSpinBox*>(QStringLiteral("pathStartOffset"));
+    auto* inspectorScroll = window.findChild<QScrollArea*>();
     QVERIFY(controller);
     QVERIFY(canvas);
     QVERIFY(typography);
@@ -1175,6 +1177,7 @@ void EffectsPanelUiTests::pathTypographyControlsAndAnchorGesture()
     QVERIFY(pathEnabled);
     QVERIFY(pathTool);
     QVERIFY(startOffset);
+    QVERIFY(inspectorScroll);
 
     const QString objectId = controller->createTextObject(
         QPointF(180.0, 180.0), QStringLiteral("Path UI"));
@@ -1243,7 +1246,13 @@ void EffectsPanelUiTests::pathTypographyControlsAndAnchorGesture()
     QTRY_VERIFY_WITH_TIMEOUT(
         std::abs(controller->document().objectById(objectId)->pathLayout.startOffset - 18.0) < 0.01,
         5000);
-    QTest::mouseClick(pathEnabled, Qt::LeftButton);
+    inspectorScroll->ensureWidgetVisible(pathEnabled, 0, 12);
+    QCoreApplication::processEvents();
+    const QPoint pathCenter = pathEnabled->mapTo(inspectorScroll->viewport(),
+                                                pathEnabled->rect().center());
+    QVERIFY(inspectorScroll->viewport()->rect().contains(pathCenter));
+    QTest::mouseClick(pathEnabled, Qt::LeftButton, Qt::NoModifier,
+                      pathEnabled->rect().center());
     QTRY_VERIFY(!controller->document().objectById(objectId)->pathLayout.enabled);
     QVERIFY(controller->document().objectById(objectId)->path.has_value());
     controller->undoStack()->undo();
