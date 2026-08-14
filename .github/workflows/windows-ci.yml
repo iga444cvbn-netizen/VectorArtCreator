@@ -45,6 +45,7 @@ jobs:
           }
           $qtBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           'QT_QPA_PLATFORM=offscreen' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          'QT_QPA_FONTDIR=C:\Windows\Fonts' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "Qt runtime added to PATH: $qtBin"
 
       - name: Configure
@@ -70,8 +71,10 @@ jobs:
           $env:Path = "$qtBin;$env:Path"
           $env:QT_QPA_PLATFORM = 'offscreen'
           $env:QT_QPA_PLATFORM_PLUGIN_PATH = $qtPlatforms
+          $env:QT_QPA_FONTDIR = 'C:\Windows\Fonts'
           Write-Host "Running tests with Qt runtime PATH: $env:Path"
           Write-Host "Running tests with Qt platform plugin path: $env:QT_QPA_PLATFORM_PLUGIN_PATH"
+          Write-Host "Running tests with Qt font directory: $env:QT_QPA_FONTDIR"
           Write-Host "CTest layers: core, integration, UI smoke/regression, Windows platform."
           ctest --test-dir build --output-on-failure -VV -L "core|integration|ui|windows"
           $ctestExit = $LASTEXITCODE

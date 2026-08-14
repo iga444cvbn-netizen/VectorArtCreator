@@ -265,8 +265,27 @@ QVector<RegionInterval> safeIntervalsForBand(const FlattenedTypographyRegion& fl
     events.erase(std::unique(events.begin(), events.end(), [](qreal left, qreal right) {
         return std::abs(left - right) <= LayoutEpsilon;
     }), events.end());
-    QVector<qreal> probes = events;
+    if (events.size() < 2) return {};
+
+    // contourIntervals uses a half-open edge convention.  Evaluating an
+    // exact vertex can therefore return no crossings even when the open side
+    // of the band is fully inside the region.  Use both one-sided limits at
+    // interior events and the inward limit at the band endpoints.  Together
+    // with each slab midpoint, these are the extrema of the linear crossing
+    // functions on every topology-constant slab, without an arbitrary sample
+    // count.
+    QVector<qreal> probes;
     probes.reserve(events.size() * 2);
+    const auto inwardLimit = [](qreal value, qreal direction) {
+        const qreal probe = std::nextafter(value, direction);
+        return std::isfinite(probe) ? probe : value;
+    };
+    probes.push_back(inwardLimit(events.front(), events.at(1)));
+    for (int index = 1; index + 1 < events.size(); ++index) {
+        probes.push_back(inwardLimit(events.at(index), events.at(index - 1)));
+        probes.push_back(inwardLimit(events.at(index), events.at(index + 1)));
+    }
+    probes.push_back(inwardLimit(events.back(), events.at(events.size() - 2)));
     for (int index = 0; index + 1 < events.size(); ++index) {
         if (events.at(index + 1) - events.at(index) > LayoutEpsilon) {
             probes.push_back((events.at(index) + events.at(index + 1)) * 0.5);
