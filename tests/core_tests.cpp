@@ -295,6 +295,7 @@ private slots:
     void complexShapingPlacementHasFiniteAdvancesAndClusters();
     void pathPipelineAppliesEffectsAndDeformationToFinalGeometry();
     void regionPipelineAppliesEffectsAfterLayoutAndExportsFinalGeometry();
+    void regionLayoutCacheKeyIsModeScoped();
     void pathLayoutHonorsCancellationBudget();
     void pathCancellationThresholdsDoNotPoisonPathStageCaches();
     void pathControllerDuplicateAndStaleGestureKeepIdentitySafe();
@@ -1417,6 +1418,74 @@ void CoreTests::regionPipelineAppliesEffectsAfterLayoutAndExportsFinalGeometry()
     QVERIFY(svgBytes.contains("<path"));
     QVERIFY(!svgBytes.contains("<text"));
     QVERIFY(!svgBytes.contains("regionWave"));
+}
+
+void CoreTests::regionLayoutCacheKeyIsModeScoped()
+{
+    TextObject fixture = configuredText(QStringLiteral("Mode scoped region cache"));
+    fixture.id = QStringLiteral("mode-scoped-region-cache");
+    fixture.region = TypographyRegion::makeRectangle(QRectF(-200.0, -200.0,
+                                                              1200.0, 900.0));
+    fixture.regionLayout.regionId = fixture.region->id;
+    fixture.regionLayout.paddingLeft = 0.0;
+    fixture.regionLayout.paddingRight = 0.0;
+    fixture.regionLayout.paddingTop = 0.0;
+    fixture.regionLayout.paddingBottom = 0.0;
+    fixture.path = PathGeometry::makeDefault(1000.0);
+    fixture.pathLayout.pathId = fixture.path->id;
+    fixture.pathLayout.enabled = false;
+    fixture.layoutMode = TypographyLayoutMode::Region;
+
+    auto pageFor = [&fixture] {
+        Page page;
+        page.layers.front()->objects.clear();
+        page.layers.front()->objects.push_back(std::make_unique<TextObject>(fixture));
+        return page;
+    };
+
+    SceneEvaluator::invalidateFontCaches();
+    Page regionPage = pageFor();
+    const WorkControl regionWork = WorkControl::unlimited();
+    const SceneGeometry regionBaseline = SceneEvaluator::evaluate(regionPage, 311,
+                                                                    regionWork);
+    QCOMPARE(regionBaseline.evaluationStatus, EvaluationStatus::Complete);
+    const SceneObjectGeometry* regionBaselineObject =
+        regionBaseline.objectById(fixture.id);
+    QVERIFY(regionBaselineObject);
+
+    regionPage.layers.front()->objects.front()->path->nodes.front().anchor
+        += QPointF(240.0, 170.0);
+    const SceneGeometry inactivePathChange = SceneEvaluator::evaluate(regionPage, 312);
+    QCOMPARE(inactivePathChange.evaluationStatus, EvaluationStatus::Complete);
+    const SceneObjectGeometry* inactivePathObject = inactivePathChange.objectById(fixture.id);
+    QVERIFY(inactivePathObject);
+    QString difference;
+    QVERIFY2(test::compareGeometry(
+                 test::geometrySignature(regionBaselineObject->geometry),
+                 test::geometrySignature(inactivePathObject->geometry), &difference),
+             qPrintable(QStringLiteral("inactive path changed Region geometry: %1")
+                            .arg(difference)));
+
+    Page pathPage = pageFor();
+    TextObject* pathObject = pathPage.layers.front()->objects.front().get();
+    pathObject->layoutMode = TypographyLayoutMode::Path;
+    pathObject->pathLayout.enabled = true;
+    pathObject->pathLayout.pathId = pathObject->path->id;
+    const SceneGeometry pathBaseline = SceneEvaluator::evaluate(pathPage, 313);
+    QCOMPARE(pathBaseline.evaluationStatus, EvaluationStatus::Complete);
+    const SceneObjectGeometry* pathBaselineObject = pathBaseline.objectById(fixture.id);
+    QVERIFY(pathBaselineObject);
+
+    pathObject->region->outer.nodes.front().anchor += QPointF(180.0, -130.0);
+    const SceneGeometry inactiveRegionChange = SceneEvaluator::evaluate(pathPage, 314);
+    QCOMPARE(inactiveRegionChange.evaluationStatus, EvaluationStatus::Complete);
+    const SceneObjectGeometry* inactiveRegionObject = inactiveRegionChange.objectById(fixture.id);
+    QVERIFY(inactiveRegionObject);
+    QVERIFY2(test::compareGeometry(
+                 test::geometrySignature(pathBaselineObject->geometry),
+                 test::geometrySignature(inactiveRegionObject->geometry), &difference),
+             qPrintable(QStringLiteral("inactive Region changed Path geometry: %1")
+                            .arg(difference)));
 }
 
 void CoreTests::pathLayoutHonorsCancellationBudget()
