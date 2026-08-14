@@ -585,6 +585,24 @@ std::optional<QVector<QPointF>> flattenRegionContour(const PathGeometry& contour
     return points;
 }
 
+std::optional<FlattenedTypographyRegion> flattenTypographyRegion(
+    const TypographyRegion& region,
+    qreal tolerance,
+    const WorkControl& work)
+{
+    const auto outer = flattenRegionContour(region.outer, tolerance, work);
+    if (!outer.has_value() || !work.isRunning()) return std::nullopt;
+    FlattenedTypographyRegion result;
+    result.outer = *outer;
+    result.holes.reserve(region.holes.size());
+    for (const PathGeometry& hole : region.holes) {
+        const auto flattened = flattenRegionContour(hole, tolerance, work);
+        if (!flattened.has_value() || !work.isRunning()) return std::nullopt;
+        result.holes.push_back(*flattened);
+    }
+    return result;
+}
+
 bool TypographyRegion::validate(QString* error, const WorkControl& work) const
 {
     if (!work.consume()) {
@@ -808,14 +826,19 @@ QVector<RegionInterval> regionIntervalsAtY(const TypographyRegion& region,
                                             qreal y,
                                             const WorkControl& work)
 {
+    const auto flattened = flattenTypographyRegion(region, 0.05, work);
+    if (!flattened.has_value() || !work.isRunning()) return {};
+    return regionIntervalsAtY(*flattened, y, work);
+}
+
+QVector<RegionInterval> regionIntervalsAtY(const FlattenedTypographyRegion& region,
+                                            qreal y,
+                                            const WorkControl& work)
+{
     if (!std::isfinite(y) || !work.consume()) return {};
-    const auto outer = flattenRegionContour(region.outer, 0.05, work);
-    if (!outer.has_value() || !work.isRunning()) return {};
-    QVector<RegionInterval> result = contourIntervals(*outer, y, work);
-    for (const PathGeometry& hole : region.holes) {
-        const auto points = flattenRegionContour(hole, 0.05, work);
-        if (!points.has_value() || !work.isRunning()) return {};
-        result = subtractIntervals(result, contourIntervals(*points, y, work));
+    QVector<RegionInterval> result = contourIntervals(region.outer, y, work);
+    for (const QVector<QPointF>& hole : region.holes) {
+        result = subtractIntervals(result, contourIntervals(hole, y, work));
         if (result.isEmpty()) break;
     }
     std::sort(result.begin(), result.end(), [](const RegionInterval& left,

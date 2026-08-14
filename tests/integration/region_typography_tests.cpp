@@ -169,7 +169,7 @@ private slots:
     void regionLayoutUsesLogicalJustificationAndCancellation();
     void regionLayoutJustifiesWhitespaceWithIndependentGeometryOracle();
     void regionLayoutRejectsBetweenSampleBandConcavityAndHole();
-    void regionLayoutDoesNotSilentlySplitUnbreakableWords();
+    void regionLayoutDefinesUnbreakableWordFallback();
     void regionLayoutShapesRealBidiTextWithoutClusterLoss();
     void regionSerializationMigratesAndRejectsDuplicateIdentity();
     void controllerRegionEditsUndoAndFreshenDuplicateIdentity();
@@ -564,7 +564,7 @@ void RegionTypographyTests::regionLayoutRejectsBetweenSampleBandConcavityAndHole
              "A glyph may not leak through a hole between scanline samples.");
 }
 
-void RegionTypographyTests::regionLayoutDoesNotSilentlySplitUnbreakableWords()
+void RegionTypographyTests::regionLayoutDefinesUnbreakableWordFallback()
 {
     const TypographyRegion region = rectangleRegion(
         QStringLiteral("unbreakable-word"), QRectF(0.0, 0.0, 20.0, 100.0));
@@ -576,19 +576,26 @@ void RegionTypographyTests::regionLayoutDoesNotSilentlySplitUnbreakableWords()
         QVERIFY2(RegionLayoutEngine::apply(&geometry, oneLineShape(40.0), source,
                                            region, settings, 1.0, &error),
                  qPrintable(error));
-        for (const GeometryPiece& piece : geometry.pieces) {
-            QVERIFY2(piece.path.isEmpty(),
-                     "A word without a legal break must not be silently hard-broken.");
-        }
+        QVERIFY(!geometry.pieces.at(0).path.isEmpty());
+        QVERIFY(!geometry.pieces.at(1).path.isEmpty());
+        QVERIFY(!geometry.pieces.at(2).path.isEmpty());
+        QVERIFY(!geometry.pieces.at(3).path.isEmpty());
+        QVERIFY(std::abs(geometry.pieces.at(0).path.boundingRect().top()
+                         - geometry.pieces.at(1).path.boundingRect().top()) < 1.0e-4);
+        QVERIFY(geometry.pieces.at(2).path.boundingRect().top()
+                > geometry.pieces.at(1).path.boundingRect().top());
     }
 
     const QString emojiWord = QString::fromUtf8("😀😀");
     VectorGeometry emojiGeometry = glyphGeometry({0, 2}, {2, 2}, {12.0, 12.0}, 12.0);
     QVERIFY2(RegionLayoutEngine::apply(&emojiGeometry, oneLineShape(24.0), emojiWord,
                                        region, settings, 1.0, &error), qPrintable(error));
-    for (const GeometryPiece& piece : emojiGeometry.pieces) {
-        QVERIFY(piece.path.isEmpty());
-    }
+    QVERIFY(!emojiGeometry.pieces.at(0).path.isEmpty());
+    QVERIFY(!emojiGeometry.pieces.at(1).path.isEmpty());
+    QCOMPARE(emojiGeometry.pieces.at(0).sourceClusterLength, 2);
+    QCOMPARE(emojiGeometry.pieces.at(1).sourceClusterLength, 2);
+    QVERIFY(emojiGeometry.pieces.at(1).path.boundingRect().top()
+            > emojiGeometry.pieces.at(0).path.boundingRect().top());
 }
 
 void RegionTypographyTests::regionLayoutShapesRealBidiTextWithoutClusterLoss()

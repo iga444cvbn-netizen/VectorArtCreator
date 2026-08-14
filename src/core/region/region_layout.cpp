@@ -230,24 +230,17 @@ qreal clusterFlowWidth(const Cluster& cluster)
     return qMax<qreal>(cluster.advance, visualWidth);
 }
 
-QVector<RegionInterval> safeIntervalsForBand(const TypographyRegion& region,
+QVector<RegionInterval> safeIntervalsForBand(const FlattenedTypographyRegion& flattenedRegion,
                                              qreal top,
                                              qreal bottom,
                                              const RegionTypographyProperties& settings,
                                              const WorkControl& work)
 {
     if (!std::isfinite(top) || !std::isfinite(bottom) || bottom <= top) return {};
-    const auto outer = flattenRegionContour(region.outer, 0.05, work);
-    if (!outer.has_value() || !work.isRunning()) return {};
-    QVector<QVector<QPointF>> holes;
-    holes.reserve(region.holes.size());
-    for (const PathGeometry& hole : region.holes) {
-        const auto flattened = flattenRegionContour(hole, 0.05, work);
-        if (!flattened.has_value() || !work.isRunning()) return {};
-        holes.push_back(*flattened);
-    }
     QRectF outerBounds;
-    for (const QPointF& point : *outer) outerBounds = outerBounds.united(QRectF(point, QSizeF()));
+    for (const QPointF& point : flattenedRegion.outer) {
+        outerBounds = outerBounds.united(QRectF(point, QSizeF()));
+    }
     const qreal contentTop = outerBounds.top() + settings.paddingTop;
     const qreal contentBottom = outerBounds.bottom() - settings.paddingBottom;
     if (top < contentTop - LayoutEpsilon || bottom > contentBottom + LayoutEpsilon) return {};
@@ -266,8 +259,8 @@ QVector<RegionInterval> safeIntervalsForBand(const TypographyRegion& region,
             }
         }
     };
-    addEvents(*outer);
-    for (const QVector<QPointF>& hole : holes) addEvents(hole);
+    addEvents(flattenedRegion.outer);
+    for (const QVector<QPointF>& hole : flattenedRegion.holes) addEvents(hole);
     std::sort(events.begin(), events.end());
     events.erase(std::unique(events.begin(), events.end(), [](qreal left, qreal right) {
         return std::abs(left - right) <= LayoutEpsilon;
@@ -282,7 +275,7 @@ QVector<RegionInterval> safeIntervalsForBand(const TypographyRegion& region,
     QVector<RegionInterval> common;
     for (const qreal y : probes) {
         if (!work.consume()) return {};
-        QVector<RegionInterval> current = regionIntervalsAtY(region, y, work);
+        QVector<RegionInterval> current = regionIntervalsAtY(flattenedRegion, y, work);
         for (RegionInterval& interval : current) {
             interval.left += settings.paddingLeft;
             interval.right -= settings.paddingRight;
@@ -320,7 +313,7 @@ qreal clusterWidth(const QVector<Cluster>& clusters, int begin, int end)
 LayoutPass layoutAtOrigin(const VectorGeometry& geometry,
                           const ShapedText& shaped,
                           const QString& sourceText,
-                          const TypographyRegion& region,
+                          const FlattenedTypographyRegion& flattenedRegion,
                           const RegionTypographyProperties& settings,
                           qreal spacing,
                           qreal origin,
@@ -333,21 +326,13 @@ LayoutPass layoutAtOrigin(const VectorGeometry& geometry,
     for (int sourceLineIndex = 0; sourceLineIndex < shaped.lineBounds.size(); ++sourceLineIndex) {
         const QVector<Cluster>& clusters = allClusters.at(sourceLineIndex);
         int cursor = 0;
-        const auto unbreakableUnitEnd = [&clusters](int begin) {
-            int end = begin;
-            while (end < clusters.size()) {
-                ++end;
-                if (clusters.at(end - 1).breakAfter) break;
-            }
-            return end;
-        };
         if (clusters.isEmpty()) {
             const QRectF sourceLine = shaped.lineBounds.at(sourceLineIndex);
             const qreal height = qMax<qreal>(1.0, sourceLine.height());
             const qreal delta = lineTop - sourceLine.top();
             const QRectF band = bands.at(sourceLineIndex).translated(0.0, delta);
             const QVector<RegionInterval> intervals = safeIntervalsForBand(
-                region, band.top(), band.bottom(), settings, work);
+                flattenedRegion, band.top(), band.bottom(), settings, work);
             const std::optional<RegionInterval> selected = widestInterval(intervals);
             if (!selected.has_value()) {
                 pass.clipped = true;
@@ -368,7 +353,7 @@ LayoutPass layoutAtOrigin(const VectorGeometry& geometry,
             const qreal delta = lineTop - sourceLine.top();
             const QRectF band = bands.at(sourceLineIndex).translated(0.0, delta);
             const QVector<RegionInterval> intervals = safeIntervalsForBand(
-                region, band.top(), band.bottom(), settings, work);
+                flattenedRegion, band.top(), band.bottom(), settings, work);
             const std::optional<RegionInterval> selected = widestInterval(intervals);
             if (!selected.has_value()) {
                 pass.clipped = true;
@@ -384,8 +369,7 @@ LayoutPass layoutAtOrigin(const VectorGeometry& geometry,
                 const Cluster& cluster = clusters.at(index);
                 const qreal flowWidth = clusterFlowWidth(cluster);
                 if (index == cursor && flowWidth > capacity + LayoutEpsilon) {
-                    end = unbreakableUnitEnd(cursor);
-                    used = clusterWidth(clusters, cursor, end);
+                    end = cursor + 1;
                     oversized = true;
                     break;
                 }
@@ -398,21 +382,17 @@ LayoutPass layoutAtOrigin(const VectorGeometry& geometry,
                 break;
             }
             if (end <= cursor) {
-                end = unbreakableUnitEnd(cursor);
-                used = clusterWidth(clusters, cursor, end);
-                oversized = true;
+                end = cursor + 1;
+                oversized = clusterFlowWidth(clusters.at(cursor)) > capacity + LayoutEpsilon;
             } else if (end < clusters.size() && lastLegalBreak >= cursor) {
                 end = lastLegalBreak + 1;
                 used = clusterWidth(clusters, cursor, end);
             } else if (end < clusters.size() && lastLegalBreak < cursor) {
-                // No legal break was found in the overflowing unit. Keep the
-                // complete word/grapheme sequence together and apply the
-                // explicit Clip policy to that unit instead of silently
-                // hard-breaking at an arbitrary shaping cluster.
-                const int unitEnd = unbreakableUnitEnd(cursor);
-                end = qMax(end, unitEnd);
-                used = clusterWidth(clusters, cursor, end);
-                oversized = used > capacity + LayoutEpsilon;
+                // Phase 5 deliberately retains a deterministic hard-break
+                // fallback for an unbreakable multi-cluster word. It is not a
+                // legal Unicode break and is documented/tested separately;
+                // each shaping cluster remains indivisible and an oversized
+                // single cluster still follows the Clip policy above.
             }
             const bool hasEarlierLineForSource = std::any_of(
                 pass.lines.cbegin(), pass.lines.cend(),
@@ -507,13 +487,15 @@ bool RegionLayoutEngine::apply(VectorGeometry* geometry,
     }
     if (!region.validate(error, work)) return false;
 
-    const auto outer = flattenRegionContour(region.outer, 0.05, work);
-    if (!outer.has_value() || !work.isRunning()) {
+    const auto flattenedRegion = flattenTypographyRegion(region, 0.05, work);
+    if (!flattenedRegion.has_value() || !work.isRunning()) {
         if (error) *error = work.interruptionMessage();
         return false;
     }
     QRectF regionBounds;
-    for (const QPointF& point : *outer) regionBounds = regionBounds.united(QRectF(point, QSizeF()));
+    for (const QPointF& point : flattenedRegion->outer) {
+        regionBounds = regionBounds.united(QRectF(point, QSizeF()));
+    }
     if (regionBounds.width() <= LayoutEpsilon || regionBounds.height() <= LayoutEpsilon) {
         if (error) *error = QStringLiteral("Region has no usable area.");
         return false;
@@ -566,7 +548,7 @@ bool RegionLayoutEngine::apply(VectorGeometry* geometry,
         if (!candidates.isEmpty()) pass = candidates.at(bestIndex);
     };
     for (int iteration = 0; iteration < maximumCandidates; ++iteration) {
-        pass = layoutAtOrigin(*geometry, shaped, sourceText, region, settings,
+        pass = layoutAtOrigin(*geometry, shaped, sourceText, *flattenedRegion, settings,
                               lineSpacing, origin, allClusters, bands, work);
         if (!work.isRunning()) {
             if (error) *error = work.interruptionMessage();

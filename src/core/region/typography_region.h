@@ -111,11 +111,28 @@ struct RegionInterval {
     friend bool operator==(const RegionInterval&, const RegionInterval&) = default;
 };
 
+// A bounded per-layout scanline representation. The persistent cubic model
+// remains authoritative; this value is transient and is never serialized.
+struct FlattenedTypographyRegion {
+    QVector<QPointF> outer;
+    QVector<QVector<QPointF>> holes;
+};
+
 // Deterministic bounded flattening is used for validation and scanline
 // intersection.  It is not a replacement for the persistent cubic model.
 [[nodiscard]] std::optional<QVector<QPointF>> flattenRegionContour(
     const PathGeometry& contour,
     qreal tolerance = 0.05,
+    const WorkControl& work = WorkControl::unlimited());
+
+[[nodiscard]] std::optional<FlattenedTypographyRegion> flattenTypographyRegion(
+    const TypographyRegion& region,
+    qreal tolerance = 0.05,
+    const WorkControl& work = WorkControl::unlimited());
+
+[[nodiscard]] QVector<RegionInterval> regionIntervalsAtY(
+    const FlattenedTypographyRegion& region,
+    qreal y,
     const WorkControl& work = WorkControl::unlimited());
 
 // Return the filled horizontal intervals at one Y coordinate.  Outer/hole

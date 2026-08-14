@@ -56,6 +56,7 @@ private slots:
     void pathTypographySlidersAreTransactionalPhysicalGestures();
     void pathCubicInsertionSplitsCurveAndPreservesIdentity();
     void pathNodeLineCubicConversionIsReversible();
+    void regionPaddingIsTransactionalPhysicalGesture();
     void scaleControlsPreserveSmallAndMirroredValues();
     void inspectorEditEndsCanvasSessionWithoutStaleOverwrite();
     void styleIntensityGestureHasImmediateDirtyTruthAndOneUndoStep();
@@ -753,6 +754,108 @@ void EffectsPanelUiTests::styleIntensityGestureHasImmediateDirtyTruthAndOneUndoS
     QVERIFY(controller->undoStack()->isClean());
     controller->undoStack()->redo();
     QCOMPARE(test::semanticFingerprint(controller->document()), afterCleanGesture);
+}
+
+void EffectsPanelUiTests::regionPaddingIsTransactionalPhysicalGesture()
+{
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    auto* controller = window.findChild<EditorController*>();
+    auto* mode = window.findChild<QComboBox*>(QStringLiteral("typographyLayoutMode"));
+    auto* padding = window.findChild<SliderSpinBox*>(QStringLiteral("regionPaddingLeft"));
+    QVERIFY(controller);
+    QVERIFY(mode);
+    QVERIFY(padding);
+    QSlider* slider = padding->findChild<QSlider*>();
+    QVERIFY(slider);
+
+    const QString first = controller->createTextObject(
+        QPointF(120.0, 120.0), QStringLiteral("physical region padding"));
+    const QString second = controller->createTextObject(
+        QPointF(420.0, 120.0), QStringLiteral("second region"));
+    QVERIFY(!first.isEmpty());
+    QVERIFY(!second.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(first)
+                                 && controller->sceneGeometry().objectById(second), 5000);
+    controller->selectObject(first);
+    QTRY_VERIFY_WITH_TIMEOUT(mode->isEnabled(), 5000);
+    mode->setCurrentIndex(mode->findData(static_cast<int>(TypographyLayoutMode::Region)));
+    QTRY_VERIFY_WITH_TIMEOUT(controller->document().objectById(first)->region.has_value(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(controller->document().objectById(first)->layoutMode
+                                 == TypographyLayoutMode::Region, 5000);
+    controller->selectObject(second);
+    mode->setCurrentIndex(mode->findData(static_cast<int>(TypographyLayoutMode::Region)));
+    QTRY_VERIFY_WITH_TIMEOUT(controller->document().objectById(second)->region.has_value(), 5000);
+    controller->selectObject(first);
+
+    controller->undoStack()->clear();
+    controller->undoStack()->setClean();
+    const QString before = test::semanticFingerprint(controller->document());
+    const QPoint start = sliderHandleCenter(slider);
+    const QPoint target = sliderHandleCenterAt(slider, 720);
+    QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, start);
+    for (int step = 1; step <= 6; ++step) {
+        const QPoint point = (QPointF(start)
+                              + (QPointF(target) - QPointF(start))
+                                    * (static_cast<qreal>(step) / 6.0)).toPoint();
+        QTest::mouseMove(slider, point, 10);
+    }
+    QVERIFY(controller->document().objectById(first)->regionLayout.paddingLeft != 16.0);
+    QVERIFY(controller->isModified());
+    QCOMPARE(controller->undoStack()->count(), 1);
+    QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, target);
+    const QString firstFinal = test::semanticFingerprint(controller->document());
+    controller->undoStack()->undo();
+    QCOMPARE(test::semanticFingerprint(controller->document()), before);
+    QVERIFY(controller->undoStack()->isClean());
+    controller->undoStack()->redo();
+    QCOMPARE(test::semanticFingerprint(controller->document()), firstFinal);
+
+    const QPoint secondTarget = sliderHandleCenterAt(slider, 360);
+    QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier,
+                      sliderHandleCenter(slider));
+    QTest::mouseMove(slider, secondTarget, 10);
+    QTest::mouseMove(slider, sliderHandleCenterAt(slider, 480), 10);
+    QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, secondTarget);
+    QCOMPARE(controller->undoStack()->count(), 2);
+
+    controller->undoStack()->clear();
+    controller->undoStack()->setClean();
+    const QString netZero = test::semanticFingerprint(controller->document());
+    const QPoint returnStart = sliderHandleCenter(slider);
+    const QPoint returnAway = sliderHandleCenterAt(slider, 160);
+    QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, returnStart);
+    QTest::mouseMove(slider, returnAway, 10);
+    QTest::mouseMove(slider, returnStart, 10);
+    QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier, returnStart);
+    QCOMPARE(test::semanticFingerprint(controller->document()), netZero);
+    QVERIFY(controller->undoStack()->isClean());
+    QCOMPARE(controller->undoStack()->count(), 0);
+
+    // Selection changes terminate ownership of the held gesture. The old
+    // slider widget may continue emitting physical movement, but it must not
+    // merge the first object's command with the second object's edit.
+    controller->undoStack()->clear();
+    controller->undoStack()->setClean();
+    controller->selectObject(first);
+    const QPoint heldStart = sliderHandleCenter(slider);
+    const QPoint heldTarget = sliderHandleCenterAt(slider, 610);
+    QTest::mousePress(slider, Qt::LeftButton, Qt::NoModifier, heldStart);
+    QTest::mouseMove(slider, heldTarget, 10);
+    const qreal firstHeldValue = controller->document().objectById(first)
+        ->regionLayout.paddingLeft;
+    controller->selectObject(second);
+    QTRY_COMPARE(controller->selectionModel()->activeObjectId(), second);
+    QTest::mouseMove(slider, sliderHandleCenterAt(slider, 760), 10);
+    QTest::mouseRelease(slider, Qt::LeftButton, Qt::NoModifier,
+                        sliderHandleCenterAt(slider, 760));
+    QCOMPARE(controller->document().objectById(first)->regionLayout.paddingLeft,
+             firstHeldValue);
+    QVERIFY(controller->document().objectById(second)->region.has_value());
+    QVERIFY(controller->document().objectById(second)->regionLayout.paddingLeft != 16.0);
+    QCOMPARE(controller->undoStack()->count(), 2);
 }
 
 void EffectsPanelUiTests::rotatedMarqueeUsesInkAsNarrowPhase()
