@@ -690,9 +690,9 @@ bool validateTextObjectResources(const QJsonObject& object,
                         QStringLiteral("aggregate cubic segments"), error)) {
             return false;
         }
-        const qint64 topologyWork = saturatedMultiply(regionNodes, regionNodes);
+        const qint64 validatedTopologyWork = saturatedMultiply(regionNodes, regionNodes);
         const qint64 regionWork = saturatedAdd(
-            topologyWork,
+            validatedTopologyWork,
             saturatedMultiply(qMax<qint64>(1, regionNodes),
                               saturatedAdd(1, saturatedMultiply(regionCubics, 64))));
         tracker->regionWork = saturatedAdd(tracker->regionWork, regionWork);
