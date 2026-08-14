@@ -4,6 +4,7 @@
 #include "core/effects/effect.h"
 #include "core/geometry/vector_geometry.h"
 #include "core/path/path_geometry.h"
+#include "core/region/typography_region.h"
 #include "core/scene/scene_geometry.h"
 #include "ui/deformation_tool_state.h"
 
@@ -50,6 +51,11 @@ public:
                        const ObjectFrame& frame,
                        quint64 spatialRevision,
                        bool enabled);
+    void setRegionOverlay(const QString& objectId,
+                          const TypographyRegion* region,
+                          const ObjectFrame& frame,
+                          quint64 spatialRevision,
+                          bool enabled);
     void setNavigationSettings(const QString& mode, bool invertZoom);
     void beginTextEditing(const QString& objectId,
                           const QString& text,
@@ -232,6 +238,10 @@ private:
     quint64 m_pathEditSpatialRevision = 0;
     int m_pathEditNodeIndex = -1;
     QString m_pathEditNodeId;
+    QString m_regionOverlayObjectId;
+    TypographyRegion m_regionOverlay;
+    ObjectFrame m_regionOverlayFrame;
+    quint64 m_regionOverlaySpatialRevision = 0;
     int m_pathEditHandleKind = 0; // 1 anchor, 2 incoming, 3 outgoing
     QPointF m_pathEditStartLocal;
     bool m_pathEditing = false;

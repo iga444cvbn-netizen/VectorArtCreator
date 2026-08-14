@@ -23,8 +23,9 @@ covered at the lowest useful test layer.
 
 ## 2. Identity and hierarchy
 
-- Page, layer, text-object, effect-instance, path, and path-node IDs MUST be
-  nonempty and globally unique within a document.
+- Page, layer, text-object, effect-instance, path, path-node, region, region
+  contour, and region-node IDs MUST be nonempty and globally unique within a
+  document.
 - `currentPageId` MUST identify a page in the document. `activeLayerId` MUST
   identify a layer on that current page. Active and selected object IDs MUST
   identify objects on that current page. A selected effect ID MUST identify an
@@ -45,6 +46,11 @@ covered at the lowest useful test layer.
 - A text path is owned by exactly one text object. `pathLayout.pathId` MUST be
   empty when no path is present and MUST match the owned path ID otherwise.
   Path-node IDs participate in the same global identity contract.
+- A text region is owned by exactly one text object. `regionLayout.regionId`
+  MUST be present and match the owned region ID in Region mode. The region MUST
+  have one closed, simple outer contour; holes MUST be closed, simple, wholly
+  contained, non-overlapping, and non-nested. Region contour/node IDs
+  participate in the same global identity contract.
 
 ## 3. Undo, dirty state, and gestures
 
@@ -115,6 +121,14 @@ covered at the lowest useful test layer.
   arc-length sampling MUST be bounded, distance-based, and cooperative with the
   shared work budget. Open overflow MUST clip complete glyph pieces; degenerate
   paths MUST NOT pile all glyphs onto one endpoint.
+- Region layout MUST run after shaping/glyph geometry and before effects and
+  deformation. It MUST use vector scanline line bands derived from the outer
+  contour minus holes; unrestricted placement followed by a render clip is not
+  conforming. It MUST choose one widest continuous safe interval per line,
+  using the leftmost span as the deterministic equal-width tie-break, preserve
+  shaping clusters/UTF-16 spans, apply padding and alignment, and terminate
+  overlong clusters without endpoint pile-up. Region topology flattening and
+  interval work MUST honor the shared cancellation/budget contract.
 
 ## 6. Text, fonts, and source ranges
 
@@ -131,6 +145,11 @@ covered at the lowest useful test layer.
   says they reset.
 - Path layout MUST consume preserved glyph advance, source-cluster, and line
   metadata without rewriting UTF-16 cluster ownership.
+- Region line breaking MUST consume the same preserved glyph advance,
+  source-cluster, and line metadata. It MUST NOT split ligatures, combining
+  clusters, fallback clusters, bidi spans, or surrogate pairs. Region effect
+  progress MUST follow logical layout order rather than raw X or contour arc
+  order.
 - Missing family, missing style, and per-glyph fallback are distinct states and
   MUST remain distinguishable to the user.
 - Project rerendering is system-font dependent until font fingerprints or embedded
@@ -173,7 +192,9 @@ covered at the lowest useful test layer.
   All arrays and input byte sizes MUST have per-container and aggregate limits.
 - Bounds MUST cover combined processing cost, not only independent child counts.
   Project and private-clipboard bytes and aggregate hierarchy/text/effect/mask/
-  deformation/path products MUST be rejected before constructing the live model.
+  deformation/path/region products MUST be rejected before constructing the live
+  model. Region contour/node/topology work MUST have explicit per-object and
+  aggregate limits.
   Composite estimates MUST use saturating arithmetic; no count product may wrap
   into an admissible value.
 - Migrations MUST be deterministic, idempotent at the current schema, and covered
@@ -200,6 +221,10 @@ covered at the lowest useful test layer.
   disabling only the widget is insufficient.
 - Path-node gestures MUST carry the captured spatial revision and stable object/
   path identity; stale or locked gestures MUST be rejected without mutation.
+- Region contour gestures MUST carry the captured spatial revision and stable
+  object/region-contour identity; stale, open, self-intersecting, or locked
+  edits MUST be rejected without mutation. Region settings and padding gestures
+  MUST remain undoable and synchronize with the inspector without signal loops.
 - Success messages MUST describe what actually succeeded. Partial platform output
   failures MUST be surfaced as warnings.
 
@@ -243,7 +268,12 @@ For every new persisted field or public workflow, add the applicable gates:
 11. deterministic semantic-work cancellation when the workflow can be expensive;
 12. path geometry and layout: arc-length math, overflow/degenerate behavior,
     path-schema migration, identity freshening, undo/redo, stale gestures, and
-    post-layout effect/deformation ordering.
+    post-layout effect/deformation ordering;
+13. region geometry and layout: outer/hole topology, cubic scanlines,
+    concavity, widest-continuous-interval selection and deterministic ties,
+    shaping-safe wrapping, alignment, padding, Clip termination, cancellation,
+    v8 migration, identity freshening, controller undo/redo, and real-widget
+    inspector synchronization.
 
 All first-party MSVC targets MUST build warning-clean under `/W4 /WX`. External
 dependency headers MAY be demoted through the compiler's external-header policy;

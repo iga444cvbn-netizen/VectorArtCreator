@@ -12,8 +12,9 @@ handles. `PathTypographyProperties` stores the enabled flag, owned path ID,
 start and baseline offsets, reverse traversal, side flip, tangent following, and
 the closed-path overflow policy.
 
-The project schema is version 7. Version 6 and older documents migrate with path
-layout disabled. Current-schema load rejects missing or duplicate path/node
+The project schema is now version 8. Version 6 and older documents migrate with
+path layout disabled; version 7 documents retain their path state and infer the
+explicit Path/Baseline mode. Current-schema load rejects missing or duplicate path/node
 identities, unrelated `pathLayout.pathId` values, non-finite coordinates, and
 aggregate path budgets. Save is atomic and validates the same limits.
 

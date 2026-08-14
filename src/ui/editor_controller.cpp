@@ -63,6 +63,16 @@ void assignFreshPathIdentity(TextObject* object)
     object->pathLayout.pathId = path.id;
 }
 
+void assignFreshRegionIdentity(TextObject* object)
+{
+    if (!object || !object->region.has_value()) {
+        if (object) object->regionLayout = RegionTypographyProperties();
+        return;
+    }
+    object->region = object->region->duplicatedFresh();
+    object->regionLayout.regionId = object->region->id;
+}
+
 bool effectStacksEqual(const EffectStack& left, const EffectStack& right)
 {
     return QJsonDocument(left.toJson()).toJson(QJsonDocument::Compact)
@@ -131,6 +141,7 @@ EditorController::EditorController(QObject* parent)
         // Selection changes commit that transaction before authority moves.
         endEffectStackStrengthGesture();
         endPathOffsetGesture();
+        endRegionPaddingGesture();
         const QString previousObjectId = m_document.activeObjectId;
         if (!m_selectionModel->activeObjectId().isEmpty()) {
             if (TextObject* object = m_document.objectById(m_selectionModel->activeObjectId())) {
@@ -297,10 +308,38 @@ bool EditorController::pathLayoutEnabled() const
     return object && object->pathLayout.enabled && object->path.has_value();
 }
 
+bool EditorController::regionLayoutEnabled() const
+{
+    const TextObject* object = activeObject();
+    return object && activeTypographyLayoutMode(*object) == TypographyLayoutMode::Region
+        && object->region.has_value();
+}
+
 const PathGeometry* EditorController::activePath() const
 {
     const TextObject* object = activeObject();
     return object && object->path.has_value() ? &*object->path : nullptr;
+}
+
+const TypographyRegion* EditorController::activeRegion() const
+{
+    const TextObject* object = activeObject();
+    return object && object->region.has_value() ? &*object->region : nullptr;
+}
+
+const PathGeometry* EditorController::activeRegionContour() const
+{
+    const TextObject* object = activeObject();
+    if (!object || !object->region.has_value()) return nullptr;
+    const TypographyRegion& region = *object->region;
+    if (m_regionEditObjectId != object->id || m_regionEditContourId.isEmpty()
+        || m_regionEditContourId == region.outer.id) {
+        return &region.outer;
+    }
+    for (const PathGeometry& hole : region.holes) {
+        if (hole.id == m_regionEditContourId) return &hole;
+    }
+    return &region.outer;
 }
 
 QStringList EditorController::selectedObjectIds() const
@@ -386,6 +425,9 @@ void EditorController::newDocument()
     m_effectStackStrengthGestureActive = false;
     m_effectStackStrengthGestureObjectId.clear();
     endPathOffsetGesture();
+    endRegionPaddingGesture();
+    m_regionEditObjectId.clear();
+    m_regionEditContourId.clear();
     m_document = Document();
     resetTransientPreviews();
     m_undoStack.clear();
@@ -624,6 +666,7 @@ void EditorController::setFillColor(const QColor& color)
 
 void EditorController::setPathLayoutEnabled(bool enabled)
 {
+    endRegionPaddingGesture();
     TextObject* object = editableActiveObject();
     if (!object) {
         return;
@@ -647,11 +690,17 @@ void EditorController::setPathLayoutEnabled(bool enabled)
 
 void EditorController::removePathLayout()
 {
+    endRegionPaddingGesture();
     TextObject* object = editableActiveObject();
     if (!object) {
         return;
     }
-    pushPathState(object->id, std::nullopt, PathTypographyProperties(),
+    const TypographyLayoutMode mode = activeTypographyLayoutMode(*object)
+        == TypographyLayoutMode::Region ? TypographyLayoutMode::Region
+                                        : TypographyLayoutMode::Baseline;
+    pushTypographyLayoutState(object->id, mode,
+                               std::nullopt, PathTypographyProperties(),
+                               object->region, object->regionLayout,
                   QStringLiteral("Remove text path"));
 }
 
@@ -808,6 +857,11 @@ void EditorController::setPathGeometry(const QString& objectId,
     if (!object || !currentPageLayerForObject(m_document, objectId)) {
         return;
     }
+    if (activeTypographyLayoutMode(*object) == TypographyLayoutMode::Region
+        && object->region.has_value()) {
+        setRegionContour(objectId, path, inputSpatialRevision);
+        return;
+    }
     QString validationError;
     if (!path.validate(&validationError)) {
         publishError(validationError);
@@ -828,18 +882,421 @@ void EditorController::pushPathState(const QString& objectId,
                                      const QString& description)
 {
     endPathOffsetGesture();
+    endRegionPaddingGesture();
     TextObject* object = m_document.objectById(objectId);
     const Layer* layer = currentPageLayerForObject(m_document, objectId);
     if (!object || !layer || !layer->visible || layer->locked) {
         return;
     }
-    if (object->path == path && object->pathLayout == layout) {
+    const TypographyLayoutMode mode = layout.enabled
+        ? TypographyLayoutMode::Path
+        : (activeTypographyLayoutMode(*object) == TypographyLayoutMode::Region
+               ? TypographyLayoutMode::Region : TypographyLayoutMode::Baseline);
+    if (object->path == path && object->pathLayout == layout
+        && activeTypographyLayoutMode(*object) == mode) {
         return;
     }
-    m_undoStack.push(new SetPathTypographyCommand(
-        m_document, objectId, object->path, object->pathLayout,
-        std::move(path), std::move(layout),
-        [this] { onCommandChanged(); }, description));
+    pushTypographyLayoutState(objectId, mode, std::move(path), std::move(layout),
+                              object->region, object->regionLayout, description);
+}
+
+void EditorController::pushTypographyLayoutState(
+    const QString& objectId,
+    TypographyLayoutMode mode,
+    std::optional<PathGeometry> path,
+    PathTypographyProperties pathLayout,
+    std::optional<TypographyRegion> region,
+    RegionTypographyProperties regionLayout,
+    const QString& description,
+    quint64 mergeToken)
+{
+    TextObject* object = m_document.objectById(objectId);
+    const Layer* layer = currentPageLayerForObject(m_document, objectId);
+    if (!object || !layer || !layer->visible || layer->locked) return;
+    if (mode == TypographyLayoutMode::Path) {
+        if (!path.has_value()) return;
+        pathLayout.enabled = true;
+        pathLayout.pathId = path->id;
+    } else {
+        pathLayout.enabled = false;
+    }
+    if (mode == TypographyLayoutMode::Region) {
+        if (!region.has_value()) return;
+        regionLayout.regionId = region->id;
+    } else if (!region.has_value()) {
+        regionLayout = RegionTypographyProperties();
+    }
+    if (object->layoutMode == mode && object->path == path
+        && object->pathLayout == pathLayout && object->region == region
+        && object->regionLayout == regionLayout) {
+        return;
+    }
+    m_undoStack.push(new SetTypographyLayoutCommand(
+        m_document, objectId, activeTypographyLayoutMode(*object), object->path,
+        object->pathLayout, object->region, object->regionLayout,
+        mode, std::move(path), std::move(pathLayout), std::move(region),
+        std::move(regionLayout), [this] { onCommandChanged(); }, description,
+        mergeToken));
+}
+
+void EditorController::setTypographyLayoutMode(TypographyLayoutMode mode)
+{
+    endRegionPaddingGesture();
+    TextObject* object = editableActiveObject();
+    if (!object) return;
+    if (mode != TypographyLayoutMode::Baseline
+        && mode != TypographyLayoutMode::Path
+        && mode != TypographyLayoutMode::Region) {
+        publishError(QStringLiteral("The typography layout mode is invalid."));
+        return;
+    }
+    std::optional<PathGeometry> path = object->path;
+    PathTypographyProperties pathLayout = object->pathLayout;
+    std::optional<TypographyRegion> region = object->region;
+    RegionTypographyProperties regionLayout = object->regionLayout;
+    if (mode == TypographyLayoutMode::Path && !path.has_value()) {
+        const ObjectFrame frame = SceneEvaluator::evaluateObjectFrame(*object, m_spatialRevision);
+        path = PathGeometry::makeDefault(qMax<qreal>(120.0, frame.baseLocalBounds.width()), 0.0);
+        pathLayout.pathId = path->id;
+    }
+    if (mode == TypographyLayoutMode::Region && !region.has_value()) {
+        const ObjectFrame frame = SceneEvaluator::evaluateObjectFrame(*object, m_spatialRevision);
+        QRectF bounds = frame.baseLocalBounds;
+        if (bounds.isEmpty()) {
+            bounds = QRectF(0.0, -object->typography.fontSize,
+                            object->typography.fontSize * 6.0,
+                            object->typography.fontSize * 2.0);
+        }
+        const qreal margin = qMax<qreal>(8.0, object->typography.fontSize * 0.25);
+        region = TypographyRegion::makeRectangle(bounds.adjusted(-margin, -margin, margin, margin));
+        regionLayout.regionId = region->id;
+    }
+    pushTypographyLayoutState(object->id, mode, std::move(path), std::move(pathLayout),
+                              std::move(region), std::move(regionLayout),
+                              QStringLiteral("Change typography layout mode"));
+}
+
+void EditorController::createRegionRectangle()
+{
+    endRegionPaddingGesture();
+    TextObject* object = editableActiveObject();
+    if (!object) return;
+    const ObjectFrame frame = SceneEvaluator::evaluateObjectFrame(*object, m_spatialRevision);
+    QRectF bounds = frame.baseLocalBounds;
+    if (bounds.isEmpty()) {
+        bounds = QRectF(0.0, -object->typography.fontSize,
+                        object->typography.fontSize * 6.0,
+                        object->typography.fontSize * 2.0);
+    }
+    const qreal margin = qMax<qreal>(8.0, object->typography.fontSize * 0.25);
+    TypographyRegion region = TypographyRegion::makeRectangle(
+        bounds.adjusted(-margin, -margin, margin, margin));
+    RegionTypographyProperties settings = object->regionLayout;
+    settings.regionId = region.id;
+    pushTypographyLayoutState(object->id, TypographyLayoutMode::Region,
+                              object->path, object->pathLayout,
+                              std::move(region), settings,
+                              QStringLiteral("Create rectangular text region"));
+}
+
+void EditorController::createRegionEllipse()
+{
+    endRegionPaddingGesture();
+    TextObject* object = editableActiveObject();
+    if (!object) return;
+    const ObjectFrame frame = SceneEvaluator::evaluateObjectFrame(*object, m_spatialRevision);
+    QRectF bounds = frame.baseLocalBounds;
+    if (bounds.isEmpty()) bounds = QRectF(0.0, -object->typography.fontSize,
+                                          object->typography.fontSize * 6.0,
+                                          object->typography.fontSize * 2.0);
+    const qreal margin = qMax<qreal>(8.0, object->typography.fontSize * 0.25);
+    TypographyRegion region = TypographyRegion::makeEllipse(
+        bounds.adjusted(-margin, -margin, margin, margin));
+    RegionTypographyProperties settings = object->regionLayout;
+    settings.regionId = region.id;
+    pushTypographyLayoutState(object->id, TypographyLayoutMode::Region,
+                              object->path, object->pathLayout,
+                              std::move(region), settings,
+                              QStringLiteral("Create elliptical text region"));
+}
+
+void EditorController::createRegionCustom()
+{
+    endRegionPaddingGesture();
+    TextObject* object = editableActiveObject();
+    if (!object) return;
+    const ObjectFrame frame = SceneEvaluator::evaluateObjectFrame(*object, m_spatialRevision);
+    QRectF bounds = frame.baseLocalBounds;
+    if (bounds.isEmpty()) bounds = QRectF(0.0, -object->typography.fontSize,
+                                          object->typography.fontSize * 6.0,
+                                          object->typography.fontSize * 2.0);
+    const qreal margin = qMax<qreal>(8.0, object->typography.fontSize * 0.25);
+    TypographyRegion region = TypographyRegion::makeCustom(
+        bounds.adjusted(-margin, -margin, margin, margin));
+    RegionTypographyProperties settings = object->regionLayout;
+    settings.regionId = region.id;
+    pushTypographyLayoutState(object->id, TypographyLayoutMode::Region,
+                              object->path, object->pathLayout,
+                              std::move(region), settings,
+                              QStringLiteral("Create custom text region"));
+}
+
+void EditorController::removeRegion()
+{
+    endRegionPaddingGesture();
+    TextObject* object = editableActiveObject();
+    if (!object || !object->region.has_value()) return;
+    const TypographyLayoutMode mode = activeTypographyLayoutMode(*object)
+        == TypographyLayoutMode::Region ? TypographyLayoutMode::Baseline
+                                        : activeTypographyLayoutMode(*object);
+    pushTypographyLayoutState(object->id, mode, object->path, object->pathLayout,
+                              std::nullopt, RegionTypographyProperties(),
+                              QStringLiteral("Remove text region"));
+}
+
+void EditorController::setRegionPadding(RegionPaddingSide side, qreal value)
+{
+    TextObject* object = editableActiveObject();
+    if (!object || !object->region.has_value()
+        || activeTypographyLayoutMode(*object) != TypographyLayoutMode::Region) return;
+    RegionTypographyProperties settings = object->regionLayout;
+    const qreal bounded = qBound<qreal>(0.0, value, PathGeometry::MaximumCoordinate);
+    switch (side) {
+    case RegionPaddingSide::Left: settings.paddingLeft = bounded; break;
+    case RegionPaddingSide::Right: settings.paddingRight = bounded; break;
+    case RegionPaddingSide::Top: settings.paddingTop = bounded; break;
+    case RegionPaddingSide::Bottom: settings.paddingBottom = bounded; break;
+    }
+    const quint64 mergeToken = m_regionPaddingGestureActive
+            && m_regionPaddingGestureSide == side
+            && m_regionPaddingGestureObjectId == object->id
+        ? m_regionPaddingGestureToken : 0;
+    pushTypographyLayoutState(object->id, TypographyLayoutMode::Region,
+                              object->path, object->pathLayout,
+                              object->region, settings,
+                              QStringLiteral("Change region padding"), mergeToken);
+}
+
+void EditorController::beginRegionPaddingGesture(RegionPaddingSide side)
+{
+    TextObject* object = editableActiveObject();
+    if (!object || !object->region.has_value()
+        || activeTypographyLayoutMode(*object) != TypographyLayoutMode::Region) return;
+    endRegionPaddingGesture();
+    m_regionPaddingGestureActive = true;
+    m_regionPaddingGestureSide = side;
+    m_regionPaddingGestureObjectId = object->id;
+    m_regionPaddingGestureToken = ++m_regionPaddingGestureSerial;
+}
+
+void EditorController::endRegionPaddingGesture()
+{
+    m_regionPaddingGestureActive = false;
+    m_regionPaddingGestureObjectId.clear();
+    m_regionPaddingGestureToken = 0;
+}
+
+void EditorController::setRegionHorizontalAlignment(RegionHorizontalAlignment alignment)
+{
+    endRegionPaddingGesture();
+    TextObject* object = editableActiveObject();
+    if (!object || !object->region.has_value()
+        || activeTypographyLayoutMode(*object) != TypographyLayoutMode::Region) return;
+    if (alignment != RegionHorizontalAlignment::Left
+        && alignment != RegionHorizontalAlignment::Center
+        && alignment != RegionHorizontalAlignment::Right
+        && alignment != RegionHorizontalAlignment::Justified) {
+        publishError(QStringLiteral("The region horizontal alignment is invalid."));
+        return;
+    }
+    RegionTypographyProperties settings = object->regionLayout;
+    settings.horizontalAlignment = alignment;
+    pushTypographyLayoutState(object->id, TypographyLayoutMode::Region,
+                              object->path, object->pathLayout, object->region, settings,
+                              QStringLiteral("Change region horizontal alignment"));
+}
+
+void EditorController::setRegionVerticalAlignment(RegionVerticalAlignment alignment)
+{
+    endRegionPaddingGesture();
+    TextObject* object = editableActiveObject();
+    if (!object || !object->region.has_value()
+        || activeTypographyLayoutMode(*object) != TypographyLayoutMode::Region) return;
+    if (alignment != RegionVerticalAlignment::Top
+        && alignment != RegionVerticalAlignment::Center
+        && alignment != RegionVerticalAlignment::Bottom) {
+        publishError(QStringLiteral("The region vertical alignment is invalid."));
+        return;
+    }
+    RegionTypographyProperties settings = object->regionLayout;
+    settings.verticalAlignment = alignment;
+    pushTypographyLayoutState(object->id, TypographyLayoutMode::Region,
+                              object->path, object->pathLayout, object->region, settings,
+                              QStringLiteral("Change region vertical alignment"));
+}
+
+void EditorController::setRegionOverflow(RegionOverflowMode overflow)
+{
+    endRegionPaddingGesture();
+    TextObject* object = editableActiveObject();
+    if (!object || !object->region.has_value()
+        || activeTypographyLayoutMode(*object) != TypographyLayoutMode::Region
+        || overflow != RegionOverflowMode::Clip) return;
+    RegionTypographyProperties settings = object->regionLayout;
+    settings.overflow = overflow;
+    pushTypographyLayoutState(object->id, TypographyLayoutMode::Region,
+                              object->path, object->pathLayout, object->region, settings,
+                              QStringLiteral("Change region overflow"));
+}
+
+void EditorController::addRegionHole()
+{
+    endRegionPaddingGesture();
+    TextObject* object = editableActiveObject();
+    if (!object || !object->region.has_value()
+        || activeTypographyLayoutMode(*object) != TypographyLayoutMode::Region) return;
+    TypographyRegion region = *object->region;
+    const QRectF bounds = region.outer.toPainterPath().controlPointRect().normalized();
+    const qreal holeHeight = qMax<qreal>(1.0, bounds.height() * 0.12);
+    const WorkControl work = WorkControl::withBudget(500'000);
+    QString validationError;
+    for (int sample = 1; sample <= 7; ++sample) {
+        const qreal y = bounds.top() + bounds.height() * sample / 8.0;
+        const QVector<RegionInterval> intervals = regionIntervalsAtY(region, y, work);
+        if (!work.isRunning()) break;
+        std::optional<RegionInterval> widest;
+        for (const RegionInterval& interval : intervals) {
+            if (interval.width() <= 1.0e-6
+                || !widest.has_value()
+                || interval.width() > widest->width()
+                || (qFuzzyCompare(interval.width(), widest->width())
+                    && interval.left < widest->left)) {
+                widest = interval;
+            }
+        }
+        if (!widest.has_value()) continue;
+        const qreal holeWidth = qMin(widest->width() * 0.4,
+                                     qMax<qreal>(1.0, bounds.width() * 0.24));
+        if (holeWidth <= 1.0 || holeHeight <= 1.0) continue;
+        const QRectF holeBounds(widest->left + (widest->width() - holeWidth) * 0.5,
+                                y - holeHeight * 0.5,
+                                holeWidth, holeHeight);
+        TypographyRegion candidate = region;
+        candidate.holes.push_back(
+            TypographyRegion::makeRectangle(holeBounds).outer);
+        if (candidate.validate(&validationError, work)) {
+            m_regionEditObjectId = object->id;
+            m_regionEditContourId = candidate.holes.constLast().id;
+            RegionTypographyProperties settings = object->regionLayout;
+            settings.regionId = candidate.id;
+            pushTypographyLayoutState(object->id, TypographyLayoutMode::Region,
+                                      object->path, object->pathLayout,
+                                      std::move(candidate), settings,
+                                      QStringLiteral("Add region hole"));
+            return;
+        }
+        if (!work.isRunning()) break;
+    }
+    publishError(!work.isRunning()
+                     ? work.interruptionMessage()
+                     : (validationError.isEmpty()
+                            ? QStringLiteral("Could not place a valid hole inside the region.")
+                            : validationError));
+}
+
+void EditorController::removeRegionHole()
+{
+    endRegionPaddingGesture();
+    TextObject* object = editableActiveObject();
+    if (!object || !object->region.has_value()
+        || activeTypographyLayoutMode(*object) != TypographyLayoutMode::Region
+        || object->region->holes.isEmpty()) return;
+    TypographyRegion region = *object->region;
+    int removeIndex = region.holes.size() - 1;
+    if (m_regionEditObjectId == object->id) {
+        for (int index = 0; index < region.holes.size(); ++index) {
+            if (region.holes.at(index).id == m_regionEditContourId) {
+                removeIndex = index;
+                break;
+            }
+        }
+    }
+    const QString removedContourId = region.holes.at(removeIndex).id;
+    region.holes.removeAt(removeIndex);
+    if (m_regionEditObjectId == object->id && m_regionEditContourId == removedContourId) {
+        m_regionEditContourId = region.outer.id;
+    }
+    pushTypographyLayoutState(object->id, TypographyLayoutMode::Region,
+                              object->path, object->pathLayout, std::move(region), object->regionLayout,
+                              QStringLiteral("Remove region hole"));
+}
+
+void EditorController::editRegionOuterContour()
+{
+    const TextObject* object = editableActiveObject();
+    if (!object || !object->region.has_value()
+        || activeTypographyLayoutMode(*object) != TypographyLayoutMode::Region) return;
+    m_regionEditObjectId = object->id;
+    m_regionEditContourId = object->region->outer.id;
+    emit sceneChanged();
+}
+
+void EditorController::editRegionHoleContour()
+{
+    const TextObject* object = editableActiveObject();
+    if (!object || !object->region.has_value()
+        || activeTypographyLayoutMode(*object) != TypographyLayoutMode::Region
+        || object->region->holes.isEmpty()) return;
+    int currentIndex = -1;
+    if (m_regionEditObjectId == object->id) {
+        for (int index = 0; index < object->region->holes.size(); ++index) {
+            if (object->region->holes.at(index).id == m_regionEditContourId) {
+                currentIndex = index;
+                break;
+            }
+        }
+    }
+    const int nextIndex = currentIndex < 0
+        ? 0 : (currentIndex + 1) % object->region->holes.size();
+    m_regionEditObjectId = object->id;
+    m_regionEditContourId = object->region->holes.at(nextIndex).id;
+    emit sceneChanged();
+}
+
+void EditorController::setRegionContour(const QString& objectId,
+                                         const PathGeometry& contour,
+                                         quint64 inputSpatialRevision)
+{
+    endRegionPaddingGesture();
+    if (!pathInputRevisionIsCurrent(objectId, inputSpatialRevision)) return;
+    TextObject* object = m_document.objectById(objectId);
+    if (!object || !object->region.has_value()) return;
+    TypographyRegion region = *object->region;
+    bool replaced = false;
+    if (region.outer.id == contour.id) {
+        region.outer = contour;
+        replaced = true;
+    } else {
+        for (PathGeometry& hole : region.holes) {
+            if (hole.id == contour.id) {
+                hole = contour;
+                replaced = true;
+                break;
+            }
+        }
+    }
+    if (!replaced) {
+        publishError(QStringLiteral("The region edit targets a different contour identity."));
+        return;
+    }
+    QString validationError;
+    if (!region.validate(&validationError)) {
+        publishError(validationError);
+        return;
+    }
+    pushTypographyLayoutState(objectId, TypographyLayoutMode::Region,
+                              object->path, object->pathLayout, std::move(region),
+                              object->regionLayout, QStringLiteral("Edit text region"));
 }
 
 bool EditorController::pathInputRevisionIsCurrent(const QString& objectId,
@@ -847,18 +1304,20 @@ bool EditorController::pathInputRevisionIsCurrent(const QString& objectId,
 {
     if (inputSpatialRevision != 0 && inputSpatialRevision != m_spatialRevision) {
         publishError(QStringLiteral(
-            "The object changed while the path gesture was active; try the gesture again."));
+            "The object changed while the typography geometry gesture was active; try the gesture again."));
         return false;
     }
     const TextObject* object = m_document.objectById(objectId);
     const Layer* layer = currentPageLayerForObject(m_document, objectId);
+    const bool regionGesture = object
+        && activeTypographyLayoutMode(*object) == TypographyLayoutMode::Region;
     if (!object || !layer || !layer->visible || layer->locked
-        || !object->path.has_value()) {
+        || (regionGesture ? !object->region.has_value() : !object->path.has_value())) {
         return false;
     }
     const std::optional<ObjectFrame> frame = authoritativeObjectFrame(objectId);
     if (!frame.has_value()) {
-        publishError(QStringLiteral("Could not obtain a current frame for the path gesture."));
+        publishError(QStringLiteral("Could not obtain a current frame for the typography geometry gesture."));
         return false;
     }
     return true;
@@ -872,6 +1331,7 @@ void EditorController::selectObject(const QString& objectId, bool additive)
     // and discard the user's new selection.
     endEffectStackStrengthGesture();
     endPathOffsetGesture();
+    endRegionPaddingGesture();
     const SceneObjectGeometry* sceneObject = m_sceneGeometry.objectById(objectId);
     if (!sceneObject || !sceneObject->visible || sceneObject->locked) {
         return;
@@ -890,6 +1350,7 @@ void EditorController::toggleObjectSelection(const QString& objectId)
 {
     endEffectStackStrengthGesture();
     endPathOffsetGesture();
+    endRegionPaddingGesture();
     const SceneObjectGeometry* sceneObject = m_sceneGeometry.objectById(objectId);
     if (!sceneObject || !sceneObject->visible || sceneObject->locked) {
         return;
@@ -905,6 +1366,7 @@ void EditorController::clearSelection()
 {
     endEffectStackStrengthGesture();
     endPathOffsetGesture();
+    endRegionPaddingGesture();
     m_selectionModel->clear();
     emit sceneChanged();
 }
@@ -913,6 +1375,7 @@ void EditorController::selectObjectsInRect(const QRectF& rect, bool additive)
 {
     endEffectStackStrengthGesture();
     endPathOffsetGesture();
+    endRegionPaddingGesture();
     QStringList ids = additive ? m_selectionModel->selectedObjectIds() : QStringList();
     QPainterPath marquee;
     marquee.addRect(rect.normalized());
@@ -985,6 +1448,9 @@ void EditorController::deleteObject(const QString& objectId)
     if (m_pathOffsetGestureActive && m_pathOffsetGestureObjectId == objectId) {
         endPathOffsetGesture();
     }
+    if (m_regionPaddingGestureActive && m_regionPaddingGestureObjectId == objectId) {
+        endRegionPaddingGesture();
+    }
     if (m_effectStackStrengthGestureActive
         && m_effectStackStrengthGestureObjectId == objectId) {
         endEffectStackStrengthGesture();
@@ -1018,6 +1484,7 @@ void EditorController::deleteObject(const QString& objectId)
 void EditorController::deleteSelectedObjects()
 {
     endPathOffsetGesture();
+    endRegionPaddingGesture();
     const QStringList ids = selectedObjectIds();
     if (ids.isEmpty()) {
         return;
@@ -1051,6 +1518,7 @@ void EditorController::deleteSelectedObjects()
 void EditorController::duplicateSelectedObjects()
 {
     endEffectStackStrengthGesture();
+    endRegionPaddingGesture();
     const QStringList ids = selectedObjectIds();
     if (ids.isEmpty()) {
         return;
@@ -1070,6 +1538,7 @@ void EditorController::duplicateSelectedObjects()
         duplicate.id = createStableId(QStringLiteral("text"));
         assignFreshEffectInstanceIds(&duplicate.effects);
         assignFreshPathIdentity(&duplicate);
+        assignFreshRegionIdentity(&duplicate);
         duplicate.transform.position += QPointF(24.0, 24.0);
         duplicateIds.push_back(duplicate.id);
         m_undoStack.push(new AddTextObjectCommand(
@@ -1223,6 +1692,7 @@ void EditorController::duplicateCurrentPage()
                 object->id = createStableId(QStringLiteral("text"));
                 assignFreshEffectInstanceIds(&object->effects);
                 assignFreshPathIdentity(object.get());
+                assignFreshRegionIdentity(object.get());
             }
         }
     }
@@ -1286,10 +1756,13 @@ void EditorController::switchPage(const QString& pageId)
 {
     endEffectStackStrengthGesture();
     endPathOffsetGesture();
+    endRegionPaddingGesture();
     Page* page = m_document.pageById(pageId);
     if (!page || pageId == m_document.currentPageId) {
         return;
     }
+    m_regionEditObjectId.clear();
+    m_regionEditContourId.clear();
     const QString oldPageId = m_document.currentPageId;
     const QString oldLayerId = m_document.activeLayerId;
     const QString newLayerId = page->layers.empty() ? QString() : page->layers.front()->id;
@@ -2056,6 +2529,7 @@ void EditorController::pasteObjects()
         object.id = createStableId(QStringLiteral("text"));
         assignFreshEffectInstanceIds(&object.effects);
         assignFreshPathIdentity(&object);
+        assignFreshRegionIdentity(&object);
         object.transform.position += QPointF(24.0, 24.0);
         pastedIds.push_back(object.id);
         m_undoStack.push(new AddTextObjectCommand(
@@ -2212,6 +2686,7 @@ bool EditorController::saveProject(const QString& filePath, QString* error)
 {
     endEffectStackStrengthGesture();
     endPathOffsetGesture();
+    endRegionPaddingGesture();
     if (!ProjectSerializer::saveToFile(m_document, filePath, error)) {
         return false;
     }
@@ -2230,6 +2705,9 @@ bool EditorController::openProject(const QString& filePath, QString* error)
     m_effectStackStrengthGestureActive = false;
     m_effectStackStrengthGestureObjectId.clear();
     endPathOffsetGesture();
+    endRegionPaddingGesture();
+    m_regionEditObjectId.clear();
+    m_regionEditContourId.clear();
     m_document = std::move(loaded);
     resetTransientPreviews();
     m_undoStack.clear();

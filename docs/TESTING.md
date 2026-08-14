@@ -22,6 +22,11 @@ contracts, not just isolated helper functions. A green core suite alone does
   equality, fingerprints, hierarchy invariants, frame round trips, identity-
   corrupt project rejection, exact/one-over resource budgets, deterministic
   legacy identity migration, and deterministic workload builders.
+- `vector_typography_region_tests` (`core;region;serialization;undo;adversarial`)
+  provides independent rectangle/concave/hole/cubic scanline oracles, legal
+  cluster wrapping, padding/alignment/Clip behavior, cancellation
+  transactionality, v8 round trips, v7 migration, duplicate identity
+  rejection, and controller undo/redo plus duplicate freshening.
 - `vector_typography_integration_tests`
   (`integration;undo;serialization;async;export`)
   checks real-file save/open/new/failure/migration behavior, exact undo/redo
@@ -34,6 +39,9 @@ contracts, not just isolated helper functions. A green core suite alone does
 - `vector_typography_ui_tests` (`ui;regression;undo`) retains focused UI regression
   cases such as outside click/wheel routing, focused native text edit, trait
   mode and scale preservation.
+- `vector_typography_region_ui_tests` (`ui;region;smoke`) checks real
+  TypographyPanel mode, preset, padding, alignment, overflow, refresh, and
+  region-edit affordances.
 - `vector_typography_windows_tests` (`windows;export;clipboard`) validates the actual
   Windows Copy for Word clipboard boundary.
 
@@ -101,7 +109,7 @@ configure with MSVC/Qt 6.8.3, build Release, run every
 `core|integration|ui|windows` CTest label, then package and upload
 `VectorTypographyEditor-windows-x64`. A package is never produced after a build
 or test failure. The final Phase 4R evidence must come from one run whose head
-SHA exactly matches the draft PR head; all seven CTest executables must pass and
+SHA exactly matches the draft PR head; all nine CTest executables must pass and
 the complete compiler log must contain no first-party warning.
 
 ## Regression and feature policy
@@ -122,6 +130,14 @@ open/closed/degenerate overflow cases, cancellation and aggregate path limits,
 post-layout effect/deformation ordering, current-schema identity validation,
 duplicate/paste freshening, stale spatial-revision rejection, and a real-widget
 inspector/canvas handoff test.
+
+Region-typography additions additionally require independent scanline oracles
+for rectangles, concavities, cubic contours, and holes; widest-continuous-
+interval selection with deterministic ties; shaping-cluster/UTF-16-safe
+wrapping; overlong Clip termination; horizontal/vertical alignment and
+padding; post-layout effect ordering; v8 identity/migration/resource
+validation; cancellation without partial geometry; controller undo/redo and
+duplicate freshening; and a real-widget inspector refresh/signal test.
 
 ## Random workflow replay
 
@@ -186,6 +202,8 @@ The permanent checks are intentionally mapped to the user-visible bug class:
 | Path layout spacing, clipping, degeneracy, and cluster preservation | `pathArcLengthMatchesIndependentDenseOracle`, `pathSubdivisionAndDegenerateGeometryStayBounded`, `pathLayoutClipsOpenOverflowWithoutEndpointPileup`, `pathLayoutPreservesClustersThroughEffects` |
 | Path identity, malformed persistence, stale gestures, and object-targeted undo | `pathSerializationRejectsCorruptionAndBudgets`, `pathControllerDuplicateAndStaleGestureKeepIdentitySafe`, `pathUndoTargetsExplicitObjectAndRestoresFingerprint` |
 | Real-widget path creation, tool dispatch, anchor gesture, offsets, and disable/undo | `pathTypographyControlsAndAnchorGesture` |
+| Region scanline layout, shaping-safe wrap, topology, alignment, Clip, persistence, and controller semantics | `vector_typography_region_tests` |
+| Region inspector controls and refresh synchronization | `vector_typography_region_ui_tests` |
 | Stale scene frame authorizes page-space mutation (P1-03) | `staleFrameCannotAuthorizeSpatialMutation` holds revision N, maps mask/deformation through N+1, and proves stale-transform fingerprint/undo neutrality; `transientPreviewNeverBecomesDocumentOrFrameAuthority` proves preview geometry differs without becoming document/frame/cache authority |
 | Aggregate hostile workload / noncancellable work (P1-05) | `serializedResourceBudgetsHaveExactBoundaries` including saturating overflow/composite limits, `workControlHasExactSharedTerminalBoundaries`, `evaluationCancellationDoesNotPoisonWorkerCaches`, `cooperativeWorkBudgetAndCancellationAreDeterministic`, `cancelledSvgNeverCommitsPartialOutput`, Windows `cancellationStopsBeforeClipboardPublication` |
 | Per-run UTF-16 cluster span consumes the rest of a line (P2-01) | deterministic `logicalClusterSpansUseWholeLineContext`; real `mixedUtf16ShapingUsesGlobalClusterSpans`; downstream `mixedUtf16ClustersSurviveEffectsPersistenceAndExport` |

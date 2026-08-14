@@ -4,6 +4,7 @@
 #include "core/serialization/project_serializer.h"
 #include "ui/editor_controller.h"
 
+#include <QFile>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -85,6 +86,39 @@ void SmokeWorkflowTests::firstFiveMinutesCanary()
     ObjectTransform transform = driver.controller().document().objectById(id)->transform;
     transform.rotation = 30.0;
     driver.controller().setObjectTransform(id, transform);
+    driver.waitForSceneGeneration(id);
+    driver.controller().setTypographyLayoutMode(TypographyLayoutMode::Region);
+    driver.controller().createRegionRectangle();
+    driver.controller().setText(QString::fromUtf8("Region canary: Привет 😀 shape typography"));
+    driver.waitForSceneGeneration(id);
+    driver.controller().setRegionPadding(RegionPaddingSide::Left, 12.0);
+    driver.controller().setRegionHorizontalAlignment(RegionHorizontalAlignment::Center);
+    driver.controller().setRegionVerticalAlignment(RegionVerticalAlignment::Bottom);
+    TextObject* regionObject = driver.controller().document().objectById(id);
+    QVERIFY(regionObject && regionObject->region.has_value());
+    PathGeometry editedOuter = regionObject->region->outer;
+    editedOuter.nodes[1].anchor += QPointF(20.0, 5.0);
+    driver.controller().setPathGeometry(id, editedOuter, driver.controller().spatialRevision());
+    driver.waitForSceneGeneration(id);
+    const QString afterRegionEdits = test::semanticFingerprint(driver.controller().document());
+    driver.undo();
+    driver.redo();
+    QCOMPARE(test::semanticFingerprint(driver.controller().document()), afterRegionEdits);
+
+    QTemporaryDir artifacts;
+    QVERIFY(artifacts.isValid());
+    const QString svgPath = artifacts.filePath(QStringLiteral("region-canary.svg"));
+    const QString projectPath = artifacts.filePath(QStringLiteral("region-canary.vtproj"));
+    QString error;
+    QVERIFY2(driver.controller().exportSvg(svgPath, ExportScope::CurrentPage, &error),
+             qPrintable(error));
+    QFile svg(svgPath);
+    QVERIFY(svg.open(QIODevice::ReadOnly));
+    QVERIFY(svg.readAll().contains("<path"));
+    QVERIFY2(driver.controller().saveProject(projectPath, &error), qPrintable(error));
+    const QString savedFingerprint = test::semanticFingerprint(driver.controller().document());
+    QVERIFY2(driver.controller().openProject(projectPath, &error), qPrintable(error));
+    QCOMPARE(test::semanticFingerprint(driver.controller().document()), savedFingerprint);
     driver.waitForSceneGeneration(id);
     driver.expectVectorGeometry();
     driver.expectInvariants();

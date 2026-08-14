@@ -36,7 +36,7 @@ InvariantReport checkInvariants(const Document& document, const SceneGeometry* s
                                 const QString& activeObjectId, const QString& editingObjectId)
 {
     InvariantReport report;
-    QSet<QString> pages, layers, objects, effects, paths, pathNodes;
+    QSet<QString> pages, layers, objects, effects, geometryIds;
     QHash<QString, QString> pageForLayer;
     QHash<QString, QString> pageForObject;
     QHash<QString, QString> layerForObject;
@@ -101,16 +101,16 @@ InvariantReport checkInvariants(const Document& document, const SceneGeometry* s
                         report.failures << QStringLiteral("invalid path on %1: %2")
                                                .arg(object->id, pathError);
                     }
-                    if (paths.contains(object->path->id)) {
+                    if (geometryIds.contains(object->path->id)) {
                         report.failures << QStringLiteral("duplicate path id on %1").arg(object->id);
                     }
-                    paths.insert(object->path->id);
+                    geometryIds.insert(object->path->id);
                     for (const PathNode& node : object->path->nodes) {
-                        if (pathNodes.contains(node.id)) {
+                        if (geometryIds.contains(node.id)) {
                             report.failures << QStringLiteral("duplicate path node id on %1")
                                                    .arg(object->id);
                         }
-                        pathNodes.insert(node.id);
+                        geometryIds.insert(node.id);
                     }
                     if (object->pathLayout.pathId != object->path->id) {
                         report.failures << QStringLiteral("path layout identity mismatch on %1")
@@ -118,6 +118,58 @@ InvariantReport checkInvariants(const Document& document, const SceneGeometry* s
                     }
                 } else if (object->pathLayout.enabled || !object->pathLayout.pathId.isEmpty()) {
                     report.failures << QStringLiteral("path layout references missing path on %1")
+                                           .arg(object->id);
+                }
+                if (!object->regionLayout.isFinite()) {
+                    report.failures << QStringLiteral("invalid region typography state on %1")
+                                           .arg(object->id);
+                }
+                if (object->region.has_value()) {
+                    QString regionError;
+                    if (!object->region->validate(&regionError)) {
+                        report.failures << QStringLiteral("invalid region on %1: %2")
+                                               .arg(object->id, regionError);
+                    }
+                    if (geometryIds.contains(object->region->id)) {
+                        report.failures << QStringLiteral("duplicate region id on %1")
+                                               .arg(object->id);
+                    }
+                    geometryIds.insert(object->region->id);
+                    const auto collectRegionContour = [&](const PathGeometry& contour) {
+                        if (geometryIds.contains(contour.id)) {
+                            report.failures << QStringLiteral("duplicate region contour id on %1")
+                                                   .arg(object->id);
+                        }
+                        geometryIds.insert(contour.id);
+                        for (const PathNode& node : contour.nodes) {
+                            if (geometryIds.contains(node.id)) {
+                                report.failures << QStringLiteral("duplicate region node id on %1")
+                                                       .arg(object->id);
+                            }
+                            geometryIds.insert(node.id);
+                        }
+                    };
+                    collectRegionContour(object->region->outer);
+                    for (const PathGeometry& hole : object->region->holes) {
+                        collectRegionContour(hole);
+                    }
+                    if (object->regionLayout.regionId != object->region->id) {
+                        report.failures << QStringLiteral("region layout identity mismatch on %1")
+                                               .arg(object->id);
+                    }
+                } else if (!object->regionLayout.regionId.isEmpty()) {
+                    report.failures << QStringLiteral("region layout references missing region on %1")
+                                           .arg(object->id);
+                }
+                const TypographyLayoutMode activeMode = activeTypographyLayoutMode(*object);
+                if (activeMode == TypographyLayoutMode::Region
+                    && (!object->region.has_value() || object->pathLayout.enabled)) {
+                    report.failures << QStringLiteral("region layout mode is missing or conflicts on %1")
+                                           .arg(object->id);
+                }
+                if (activeMode == TypographyLayoutMode::Path
+                    && (!object->path.has_value() || !object->pathLayout.enabled)) {
+                    report.failures << QStringLiteral("path layout mode is missing or disabled on %1")
                                            .arg(object->id);
                 }
                 for (int strokeIndex = 0; strokeIndex < object->deformation.strokes.size(); ++strokeIndex) {

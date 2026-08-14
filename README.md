@@ -3,9 +3,10 @@
 Vector Typography Editor is a C++20/Qt 6 desktop editor for editable text,
 vector glyph outlines, nondestructive procedural effects, and persistent vector
 deformation strokes. The current workspace supports pages, layers, multiple
-stable-ID text objects, Latin/Cyrillic shaping, multiline layout, Select/Move/
-Text tools, marquee selection, object transforms, deformation brushes, JSON
-projects and presets, command-based undo/redo, and SVG path export.
+stable-ID text objects, Latin/Cyrillic shaping, multiline layout, Baseline/Path/
+Region typography with cubic contours and holes, Select/Move/Text tools, marquee
+selection, object transforms, deformation brushes, JSON projects and presets,
+command-based undo/redo, and SVG path export.
 
 ## Requirements
 
@@ -56,23 +57,26 @@ dispatches. After tests pass, `windeployqt` creates and uploads
 3. Edit source text and typography in the inspector. Tracking is stored as
    `trackingEm`; `0.05 em` means an additional five percent of the current font
    em size between shaped glyphs. The UI labels this unit explicitly.
-4. Add effects to the ordered stack and edit their parameters. Effects are
+4. Choose `Baseline`, `Path`, or `Region` in the Typography inspector. Region
+   presets create rectangle, ellipse, or editable custom contours; padding,
+   alignment, Clip overflow, and holes constrain line layout before effects.
+5. Add effects to the ordered stack and edit their parameters. Effects are
    nondestructive, deterministic where seeded, and reapplied after source text,
    font, or typography edits. Text-range effect scopes use source clusters.
-5. Use the deformation panel to choose Push, Pull, Inflate, Pinch, or Smooth.
+6. Use the deformation panel to choose Push, Pull, Inflate, Pinch, or Smooth.
    For brush tools, choose Glyphs or Shape and set radius, strength, and hardness.
    The radius is in document coordinates, so zoom does not change the affected
    size. Escape cancels an active stroke.
-6. Toggle stored deformation or adjust Overall strength. Clear removes all
+7. Toggle stored deformation or adjust Overall strength. Clear removes all
    stored strokes as one undoable operation.
-7. Select an effect in the Effects inspector, choose Whole Object or Selected
+8. Select an effect in the Effects inspector, choose Whole Object or Selected
    Text Range, and use the `Effect mask / eraser` tool to paint or restore the
    effect locally. Masks are nondestructive and undoable.
-8. Save the effect stack as a named JSON preset, then apply it to another text.
+9. Save the effect stack as a named JSON preset, then apply it to another text.
    Preset names remain Unicode, including `Бездна`, `Паника`, `Шёпот`, and
    `Искажение реальности`.
-9. Save/open a `.vtproj` JSON project.
-10. Use **File -> Export SVG**. The SVG contains final `<path>` geometry and does
+10. Save/open a `.vtproj` JSON project.
+11. Use **File -> Export SVG**. The SVG contains final `<path>` geometry and does
    not depend on the original font being installed.
 
 Tracking is stored as `trackingEm`. The shaper converts it using the resolved
@@ -96,6 +100,7 @@ src/core/text           font descriptors, shaping, and fallback diagnostics
 src/core/geometry       positioned vector path pieces
 src/core/effects        effect interface, stack, and procedural effects
 src/core/deformation    spatial strokes, sampling, falloff, reconstruction
+src/core/region         persistent regions and vector scanline layout
 src/core/serialization  versioned project JSON
 src/core/presets        versioned preset JSON and UUID storage
 src/core/scene          immutable scene snapshots and asynchronous evaluation
@@ -108,10 +113,12 @@ tests                   Qt Test coverage of core and controller behavior
 
 ## Serialization and compatibility
 
-Project files are currently format version 6. Version 1 absolute tracking values
+Project files are currently format version 8. Version 1 absolute tracking values
 are migrated to `trackingEm`; legacy v1-v3 flat object arrays migrate into one
 page and one layer. A saved project always writes the current page/layer/object
-schema with stable IDs and object transforms. Each deformation stroke stores its
+schema with stable IDs and object transforms. Region mode stores an owned closed
+outer contour, optional holes, settings, and stable contour/node IDs; line
+intervals and effect progress remain derived. Each deformation stroke stores its
 mode, target, document-space samples, radius, strength, hardness, and pressure.
 Strokes are spatial data, not pointers to transient painter paths or glyph indexes.
 
@@ -145,7 +152,9 @@ embedding/licensing workflows.
 
 This milestone intentionally does not include Zalgo, horror generators, glitch or
 blur systems, Word clipboard/EMF export, font embedding or licensing parsing,
-macOS support, plugins, AI tools, or Phase 4 work.
+macOS support, plugins, or AI tools. Region overflow currently exposes the
+explicit Clip policy; additional overflow policies and font embedding remain
+future work.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership, geometry stages, stroke
 evaluation, fallback diagnostics, cache invalidation, undo/clean-state semantics,
