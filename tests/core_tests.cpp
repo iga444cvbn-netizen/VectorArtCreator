@@ -939,7 +939,7 @@ void CoreTests::postPathEffectsFollowArcLengthTraversal()
 
     WaveEffect wave;
     wave.amplitude = 1.0;
-    wave.frequency = 0.5;
+    wave.frequency = 0.25;
     wave.phase = 0.0;
 
     auto applyPath = [&](VectorGeometry* geometry,
@@ -1124,7 +1124,9 @@ void CoreTests::postPathEffectsFollowArcLengthTraversal()
             QVERIFY(!piece.hasEffectReferenceProgress);
         }
         QVERIFY(std::abs(displacements.at(0)) < 1.0e-6);
-        QVERIFY(std::abs(displacements.at(1) - ordinary.referenceHeight) < 1.0e-6);
+        const qreal expectedSecond = ordinary.referenceHeight
+            * std::sin(6.28318530717958647692 * wave.frequency * 0.5);
+        QVERIFY(std::abs(displacements.at(1) - expectedSecond) < 1.0e-6);
     }
 }
 
