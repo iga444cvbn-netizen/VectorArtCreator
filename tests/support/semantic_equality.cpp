@@ -118,7 +118,11 @@ bool compareTextObjects(const TextObject& expected, const TextObject& actual,
         || !equalValue(expected.effectStackStrength, actual.effectStackStrength,
                        path + QStringLiteral(".effectStackStrength"), difference)
         || !compareDeformation(expected.deformation, actual.deformation,
-                               path + QStringLiteral(".deformation"), difference)
+                                path + QStringLiteral(".deformation"), difference)
+        || !equalValue(expected.path, actual.path,
+                       path + QStringLiteral(".path"), difference)
+        || !equalValue(expected.pathLayout, actual.pathLayout,
+                       path + QStringLiteral(".pathLayout"), difference)
         || !equalValue(expected.transform.position, actual.transform.position,
                        path + QStringLiteral(".transform.position"), difference)
         || !equalValue(expected.transform.rotation, actual.transform.rotation,

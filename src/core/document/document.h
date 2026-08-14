@@ -2,6 +2,7 @@
 
 #include "core/effects/effect_stack.h"
 #include "core/deformation/manual_deformation.h"
+#include "core/path/path_geometry.h"
 #include "core/text/font_descriptor.h"
 
 #include <QColor>
@@ -13,6 +14,7 @@
 #include <QVector>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace vt {
@@ -47,6 +49,11 @@ struct TextObject {
     // stack.  Individual effect Master Strength remains untouched.
     qreal effectStackStrength = 1.0;
     ManualDeformation deformation;
+    // A path is owned by this text object. Ordinary value copies preserve its
+    // identity; explicit duplicate/paste workflows freshen it together with
+    // the object ID and rewrite pathLayout.pathId.
+    std::optional<PathGeometry> path;
+    PathTypographyProperties pathLayout;
     ObjectTransform transform;
     bool visible = true;
 
@@ -96,7 +103,7 @@ struct Page {
 
 class Document {
 public:
-    static constexpr int CurrentFormatVersion = 6;
+    static constexpr int CurrentFormatVersion = 7;
 
     int formatVersion = CurrentFormatVersion;
     QString title = QStringLiteral("Untitled Vector Typography Project");

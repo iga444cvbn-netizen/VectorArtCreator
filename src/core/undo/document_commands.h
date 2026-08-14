@@ -474,4 +474,58 @@ private:
     qreal m_newStrength = 1.0;
 };
 
+class SetPathTypographyCommand final : public DocumentCommand {
+public:
+    SetPathTypographyCommand(Document& document,
+                             QString objectId,
+                             std::optional<PathGeometry> oldPath,
+                             PathTypographyProperties oldLayout,
+                             std::optional<PathGeometry> newPath,
+                             PathTypographyProperties newLayout,
+                             DocumentChangeCallback onChanged,
+                             QString description = QStringLiteral("Change text path"));
+
+    void undo() override;
+    void redo() override;
+
+private:
+    void apply(const std::optional<PathGeometry>& path,
+               const PathTypographyProperties& layout);
+
+    std::optional<PathGeometry> m_oldPath;
+    PathTypographyProperties m_oldLayout;
+    std::optional<PathGeometry> m_newPath;
+    PathTypographyProperties m_newLayout;
+};
+
+enum class PathOffsetProperty {
+    Start,
+    Baseline,
+};
+
+class SetPathOffsetCommand final : public DocumentCommand {
+public:
+    SetPathOffsetCommand(Document& document,
+                         QString objectId,
+                         PathOffsetProperty property,
+                         qreal oldValue,
+                         qreal newValue,
+                         quint64 mergeToken,
+                         DocumentChangeCallback onChanged,
+                         QString description);
+
+    void undo() override;
+    void redo() override;
+    [[nodiscard]] int id() const override;
+    bool mergeWith(const QUndoCommand* other) override;
+
+private:
+    void apply(qreal value);
+
+    PathOffsetProperty m_property = PathOffsetProperty::Start;
+    qreal m_oldValue = 0.0;
+    qreal m_newValue = 0.0;
+    quint64 m_mergeToken = 0;
+};
+
 } // namespace vt

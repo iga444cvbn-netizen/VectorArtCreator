@@ -12,13 +12,14 @@ MainWindow / canvas / panels
 EditorController + SelectionModel + QUndoStack
               |
 Document -> Page -> Layer -> TextObject -> FontDescriptor + TypographyProperties
+                                                    + PathGeometry + PathTypographyProperties
                                                     + EffectStack + ManualDeformation
               |
 immutable Page snapshot -> SceneEvaluator (QThreadPool) -> SceneGeometry
               |
 TextEngine -> ShapedText -> GlyphGeometryBuilder -> VectorGeometry
                                                        |
-                              EffectStack -> ManualDeformation -> final geometry
+                              PATH LAYOUT -> EffectStack -> ManualDeformation -> final geometry
                                                        /                    \
                                               EditorCanvas              SvgExporter
 ```
@@ -38,6 +39,10 @@ TextEngine -> ShapedText -> GlyphGeometryBuilder -> VectorGeometry
   procedural families currently provide the Phase 3 effect set.
 * `ManualDeformation` is a later nondestructive geometry stage. It stores spatial
   brush samples and reevaluates them after shaping and every effect-stack change.
+* `PathGeometry` and `PathTypographyProperties` are persistent, object-owned
+  layout state. A path is edited in object-local coordinates; copy construction
+  preserves its identity, while duplicate, paste, and page-clone workflows
+  explicitly freshen the path and every node identity.
 * `DeformationToolState` is UI interaction state, not document state. `Select` is
   an inactive canvas tool and never creates a `DeformationStroke`; brush tools are
   mapped to `BrushMode` only when a real stroke is started.
@@ -84,11 +89,21 @@ which are evaluated as nondestructive geometric attenuation and are undoable.
    fallback and bidi run boundaries cannot consume or truncate another cluster.
 3. `GlyphGeometryBuilder` creates positioned `GeometryPiece` paths from physical
    glyph outlines. A source glyph may produce zero, one, or multiple pieces.
-4. `EffectStack` applies enabled procedural effects in explicit user order and
+4. `PathLayoutEngine` optionally maps glyph origins and advances through a
+   bounded arc-length table. Open paths use whole-glyph clipping; closed paths
+   wrap by total length. Reverse traversal, baseline offset, side flip, tangent
+   following, and line metadata are applied here, before any visual effect.
+5. `EffectStack` applies enabled procedural effects in explicit user order and
    filters text-range scopes by source-cluster metadata.
-5. `ManualDeformation` evaluates persistent strokes on the post-effect geometry.
-6. `SceneEvaluator` applies object transforms and layer visibility/lock state,
+6. `ManualDeformation` evaluates persistent strokes on the post-effect geometry.
+7. `SceneEvaluator` applies object transforms and layer visibility/lock state,
    then returns immutable scene geometry for canvas or SVG use.
+
+The authoritative order is `source text -> shaping -> glyph geometry -> path
+layout -> effects -> deformation -> transform -> scene/export`. Path previews are
+canvas-only state. A committed node edit carries the canvas spatial revision; the
+controller rejects it if the document or authoritative object frame changed while
+the gesture was active.
 
 `ObjectFrame` is the single object/page-space mapper.  Its legacy-compatible
 matrix is `T(position) * T(pivotLocal) * R(rotation) * S(scale) *
@@ -179,21 +194,25 @@ enabled for a useful preview.
 
 ## Serialization and migration
 
-Projects are versioned JSON. The current project format is version 6. Version 1
+Projects are versioned JSON. The current project format is version 7. Version 1
 tracking is migrated to `trackingEm`; versions 1-3 flat object arrays migrate to
 one page and one layer while preserving object order and assigning deterministic
 path-derived page/layer/object/effect IDs. Version 2/3 projects that
 have no `deformation` object receive the default enabled deformation model with
-no strokes. The next save writes version 6 with pages, layers, stable IDs, object
-transforms, and active IDs. Deformation JSON is validated for finite coordinates,
-bounded sample/stroke counts, and bounded radius/strength/hardness/pressure.
+no strokes. The next save writes version 7 with pages, layers, stable IDs, object
+transforms, active IDs, and optional object-owned path geometry. Version 6
+objects migrate with path layout disabled. Path and path-layout JSON is validated
+for finite coordinates, stable identities, bounded nodes/segments, and supported
+overflow values. Deformation JSON is validated for finite coordinates, bounded
+sample/stroke counts, and bounded radius/strength/hardness/pressure.
 
-Current v4-v6 files must supply globally unique page/layer/object/effect IDs and
+Current v4-v7 files must supply globally unique page/layer/object/effect/path/node IDs and
 hierarchically local active IDs; malformed input is rejected transactionally
 with a JSON path. The serializer validates project/clipboard bytes and aggregate
-page, layer, object, text, effect, mask-point, deformation-sample, and estimated
-work limits before constructing or replacing a document. Save applies the same
-authoritative hierarchy/resource contract before its atomic commit. Transient
+page, layer, object, text, effect, path-node, cubic-segment, path-work,
+mask-point, deformation-sample, and estimated-work limits before constructing or
+replacing a document. Save applies the same authoritative hierarchy/resource
+contract before its atomic commit. Transient
 page-input coordinates are never a legal persisted deformation value. Estimated
 object work uses saturating `qint64` arithmetic over source units times combined
 effect/mask/deformation units, so overflow is rejection rather than wraparound.

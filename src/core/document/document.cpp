@@ -80,6 +80,8 @@ TextObject::TextObject(const TextObject& other)
     , effects(other.effects)
     , effectStackStrength(other.effectStackStrength)
     , deformation(other.deformation)
+    , path(other.path)
+    , pathLayout(other.pathLayout)
     , transform(other.transform)
     , visible(other.visible)
     , futureData(other.futureData)
@@ -99,6 +101,8 @@ TextObject& TextObject::operator=(const TextObject& other)
     effects = other.effects;
     effectStackStrength = other.effectStackStrength;
     deformation = other.deformation;
+    path = other.path;
+    pathLayout = other.pathLayout;
     transform = other.transform;
     visible = other.visible;
     futureData = other.futureData;

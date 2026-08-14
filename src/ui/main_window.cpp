@@ -199,6 +199,7 @@ MainWindow::MainWindow(QWidget* parent)
         m_canvas->setTool(tool);
         m_toolPalette->setActiveTool(tool);
         m_deformationPanel->setTool(tool);
+        refreshPathCapability();
     });
     connect(m_controller, &EditorController::brushSettingsChanged,
             this, [this](BrushMode mode, BrushTarget target, qreal radius, qreal strength, qreal hardness) {
@@ -215,6 +216,7 @@ MainWindow::MainWindow(QWidget* parent)
                            m_controller->selectedObjectIds(),
                            m_controller->selectionModel()->activeObjectId());
         refreshEffectMaskCapability();
+        refreshPathCapability();
     });
     connect(m_controller, &EditorController::documentChanged, this, [this] {
         // Commands mutate the document synchronously while scene evaluation is
@@ -345,6 +347,14 @@ MainWindow::MainWindow(QWidget* parent)
             });
     connect(m_canvas, &EditorCanvas::effectMaskPreviewCleared,
             m_controller, &EditorController::clearEffectMaskPreview);
+    connect(m_canvas, &EditorCanvas::pathGeometryCommitted, this,
+            [this](const QString& objectId, const PathGeometry& path, quint64 spatialRevision) {
+                m_controller->setPathGeometry(objectId, path, spatialRevision);
+                refreshUi();
+            });
+    connect(m_canvas, &EditorCanvas::pathEditCancelled, this, [this] {
+        refreshUi();
+    });
 
     const auto finishCanvasTextEditingForInspector = [this] {
         if (m_canvas->isTextEditing()) m_canvas->finishTextEditing();
@@ -391,6 +401,46 @@ MainWindow::MainWindow(QWidget* parent)
             [this, finishCanvasTextEditingForInspector](qreal spacing) {
                 finishCanvasTextEditingForInspector(); m_controller->setLineSpacing(spacing);
             });
+    connect(m_typographyPanel, &TypographyPanel::pathLayoutEnabledChanged, this,
+            [this, finishCanvasTextEditingForInspector](bool enabled) {
+                finishCanvasTextEditingForInspector();
+                m_controller->setPathLayoutEnabled(enabled);
+                if (enabled && m_controller->activePath()) {
+                    m_controller->setTool(EditorTool::PathEdit);
+                }
+            });
+    connect(m_typographyPanel, &TypographyPanel::pathStartOffsetChanged, this,
+            [this](qreal offset) { m_controller->setPathStartOffset(offset); });
+    connect(m_typographyPanel, &TypographyPanel::pathStartOffsetInteractionStarted,
+            m_controller, &EditorController::beginPathStartOffsetGesture);
+    connect(m_typographyPanel, &TypographyPanel::pathStartOffsetInteractionFinished,
+            m_controller, &EditorController::endPathStartOffsetGesture);
+    connect(m_typographyPanel, &TypographyPanel::pathBaselineOffsetChanged, this,
+            [this](qreal offset) { m_controller->setPathBaselineOffset(offset); });
+    connect(m_typographyPanel, &TypographyPanel::pathBaselineOffsetInteractionStarted,
+            m_controller, &EditorController::beginPathBaselineOffsetGesture);
+    connect(m_typographyPanel, &TypographyPanel::pathBaselineOffsetInteractionFinished,
+            m_controller, &EditorController::endPathBaselineOffsetGesture);
+    connect(m_typographyPanel, &TypographyPanel::pathReverseChanged, this,
+            [this](bool reverse) { m_controller->setPathReverse(reverse); });
+    connect(m_typographyPanel, &TypographyPanel::pathFlipChanged, this,
+            [this](bool flip) { m_controller->setPathFlip(flip); });
+    connect(m_typographyPanel, &TypographyPanel::pathFollowTangentChanged, this,
+            [this](bool followTangent) { m_controller->setPathFollowTangent(followTangent); });
+    connect(m_typographyPanel, &TypographyPanel::pathClosedChanged, this,
+            [this](bool closed) { m_controller->setPathClosed(closed); });
+    connect(m_typographyPanel, &TypographyPanel::createPathRequested, this, [this] {
+        m_controller->setPathLayoutEnabled(true);
+        if (m_controller->activePath()) {
+            m_controller->setTool(EditorTool::PathEdit);
+        }
+    });
+    connect(m_typographyPanel, &TypographyPanel::removePathRequested, this, [this] {
+        m_controller->setTool(EditorTool::Select);
+        m_controller->removePathLayout();
+    });
+    connect(m_typographyPanel, &TypographyPanel::reversePathRequested,
+            m_controller, &EditorController::reversePath);
     connect(m_typographyPanel, &TypographyPanel::fillColorChanged, this,
             [this, finishCanvasTextEditingForInspector](const QColor& color) {
                 finishCanvasTextEditingForInspector(); m_controller->setFillColor(color);
@@ -545,6 +595,7 @@ MainWindow::MainWindow(QWidget* parent)
             {EditorTool::Pinch, QStringLiteral("tool.pinch")},
             {EditorTool::Smooth, QStringLiteral("tool.smooth")},
             {EditorTool::EffectMask, QStringLiteral("tool.effectMask")},
+            {EditorTool::PathEdit, QStringLiteral("tool.pathEdit")},
         };
         for (const auto& [tool, command] : toolCommands) {
             m_toolPalette->setToolShortcut(tool, m_shortcutManager->shortcut(command));
@@ -603,6 +654,7 @@ void MainWindow::refreshUi()
         m_controller->setSelectedEffectId(m_effectsPanel->selectedEffectId());
     }
     refreshEffectMaskCapability();
+    refreshPathCapability();
     m_effectsPanel->setTextRange(m_controller->selectionModel()->textRange().first,
                                  m_controller->selectionModel()->textRange().second);
     m_deformationPanel->refresh(object ? &object->deformation : nullptr);
@@ -672,6 +724,34 @@ void MainWindow::refreshEffectMaskCapability()
     m_toolPalette->setToolEnabled(EditorTool::EffectMask, supportsMask);
     if (QAction* action = m_actions.value(QStringLiteral("tool.effectMask"), nullptr)) {
         action->setEnabled(supportsMask && !m_canvas->isTextEditing());
+    }
+}
+
+void MainWindow::refreshPathCapability()
+{
+    const TextObject* object = m_controller->activeObject();
+    const SceneObjectGeometry* sceneObject = object
+        ? m_controller->sceneGeometry().objectById(object->id) : nullptr;
+    const bool available = object && object->path.has_value();
+    const bool sceneCurrent = m_controller->sceneGeometry().spatialRevision
+        == m_controller->spatialRevision();
+    if (!available && m_controller->tool() == EditorTool::PathEdit) {
+        m_controller->setTool(EditorTool::Select);
+    }
+    m_toolPalette->setToolEnabled(EditorTool::PathEdit, available);
+    if (QAction* action = m_actions.value(QStringLiteral("tool.pathEdit"), nullptr)) {
+        action->setEnabled(available && !m_canvas->isTextEditing());
+    }
+    if (available && sceneCurrent && sceneObject
+        && sceneObject->frame.spatialRevision == m_controller->spatialRevision()
+        && m_controller->tool() == EditorTool::PathEdit) {
+        m_canvas->setPathEditor(object->id,
+                                &*object->path,
+                                sceneObject->frame,
+                                m_controller->sceneGeometry().spatialRevision,
+                                true);
+    } else {
+        m_canvas->setPathEditor({}, nullptr, ObjectFrame(), 0, false);
     }
 }
 
@@ -937,13 +1017,14 @@ void MainWindow::createActions()
         {EditorTool::Pinch, {QStringLiteral("tool.pinch"), QStringLiteral("Pinch Tool")} },
         {EditorTool::Smooth, {QStringLiteral("tool.smooth"), QStringLiteral("Smooth Tool")} },
         {EditorTool::EffectMask, {QStringLiteral("tool.effectMask"), QStringLiteral("Effect Mask Tool")} },
+        {EditorTool::PathEdit, {QStringLiteral("tool.pathEdit"), QStringLiteral("Edit Text Path Tool")} },
     };
     const QVector<QKeySequence> defaults = {
         QKeySequence(QStringLiteral("V")), QKeySequence(QStringLiteral("M")),
         QKeySequence(QStringLiteral("T")), QKeySequence(QStringLiteral("B")),
         QKeySequence(QStringLiteral("P")), QKeySequence(QStringLiteral("I")),
         QKeySequence(QStringLiteral("N")), QKeySequence(QStringLiteral("S")),
-        QKeySequence(QStringLiteral("E"))};
+        QKeySequence(QStringLiteral("E")), QKeySequence(QStringLiteral("H"))};
     for (int index = 0; index < tools.size(); ++index) {
         const auto& [tool, command] = tools[index];
         QAction* action = registerAction(command.first,

@@ -46,6 +46,23 @@ void assignFreshEffectInstanceIds(EffectStack* stack)
     }
 }
 
+void assignFreshPathIdentity(TextObject* object)
+{
+    if (!object) {
+        return;
+    }
+    if (!object->path.has_value()) {
+        object->pathLayout = PathTypographyProperties();
+        return;
+    }
+    PathGeometry& path = *object->path;
+    path.id = createStableId(QStringLiteral("path"));
+    for (PathNode& node : path.nodes) {
+        node.id = createStableId(QStringLiteral("path-node"));
+    }
+    object->pathLayout.pathId = path.id;
+}
+
 bool effectStacksEqual(const EffectStack& left, const EffectStack& right)
 {
     return QJsonDocument(left.toJson()).toJson(QJsonDocument::Compact)
@@ -113,6 +130,7 @@ EditorController::EditorController(QObject* parent)
         // A held style gesture belongs to the object selected at press time.
         // Selection changes commit that transaction before authority moves.
         endEffectStackStrengthGesture();
+        endPathOffsetGesture();
         const QString previousObjectId = m_document.activeObjectId;
         if (!m_selectionModel->activeObjectId().isEmpty()) {
             if (TextObject* object = m_document.objectById(m_selectionModel->activeObjectId())) {
@@ -273,6 +291,18 @@ QString EditorController::selectedEffectId() const
     return m_selectedEffectId;
 }
 
+bool EditorController::pathLayoutEnabled() const
+{
+    const TextObject* object = activeObject();
+    return object && object->pathLayout.enabled && object->path.has_value();
+}
+
+const PathGeometry* EditorController::activePath() const
+{
+    const TextObject* object = activeObject();
+    return object && object->path.has_value() ? &*object->path : nullptr;
+}
+
 QStringList EditorController::selectedObjectIds() const
 {
     return m_selectionModel ? m_selectionModel->selectedObjectIds() : QStringList();
@@ -355,6 +385,7 @@ void EditorController::newDocument()
 {
     m_effectStackStrengthGestureActive = false;
     m_effectStackStrengthGestureObjectId.clear();
+    endPathOffsetGesture();
     m_document = Document();
     resetTransientPreviews();
     m_undoStack.clear();
@@ -591,6 +622,248 @@ void EditorController::setFillColor(const QColor& color)
         [this] { onCommandChanged(); }));
 }
 
+void EditorController::setPathLayoutEnabled(bool enabled)
+{
+    TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    std::optional<PathGeometry> path = object->path;
+    PathTypographyProperties layout = object->pathLayout;
+    if (enabled && !path.has_value()) {
+        const ObjectFrame frame = SceneEvaluator::evaluateObjectFrame(
+            *object, m_spatialRevision);
+        const qreal width = qMax<qreal>(120.0, frame.baseLocalBounds.width());
+        path = PathGeometry::makeDefault(width, 0.0);
+        layout.pathId = path->id;
+    } else if (path.has_value()) {
+        layout.pathId = path->id;
+    }
+    layout.enabled = enabled;
+    pushPathState(object->id, std::move(path), layout,
+                  enabled ? QStringLiteral("Enable text on path")
+                          : QStringLiteral("Disable text on path"));
+}
+
+void EditorController::removePathLayout()
+{
+    TextObject* object = editableActiveObject();
+    if (!object) {
+        return;
+    }
+    pushPathState(object->id, std::nullopt, PathTypographyProperties(),
+                  QStringLiteral("Remove text path"));
+}
+
+void EditorController::setPathStartOffset(qreal offset)
+{
+    TextObject* object = editableActiveObject();
+    if (!object) return;
+    PathTypographyProperties layout = object->pathLayout;
+    const qreal bounded = qBound<qreal>(-PathGeometry::MaximumCoordinate,
+                                        offset, PathGeometry::MaximumCoordinate);
+    if (nearlyEqual(layout.startOffset, bounded)) return;
+    const quint64 mergeToken = m_pathOffsetGestureActive
+            && m_pathOffsetGestureProperty == PathOffsetProperty::Start
+            && m_pathOffsetGestureObjectId == object->id
+        ? m_pathOffsetGestureToken
+        : 0;
+    m_undoStack.push(new SetPathOffsetCommand(
+        m_document, object->id, PathOffsetProperty::Start,
+        layout.startOffset, bounded, mergeToken,
+        [this] { onCommandChanged(); },
+        QStringLiteral("Change path start offset")));
+}
+
+void EditorController::setPathBaselineOffset(qreal offset)
+{
+    TextObject* object = editableActiveObject();
+    if (!object) return;
+    PathTypographyProperties layout = object->pathLayout;
+    const qreal bounded = qBound<qreal>(-PathGeometry::MaximumCoordinate,
+                                        offset, PathGeometry::MaximumCoordinate);
+    if (nearlyEqual(layout.baselineOffset, bounded)) return;
+    const quint64 mergeToken = m_pathOffsetGestureActive
+            && m_pathOffsetGestureProperty == PathOffsetProperty::Baseline
+            && m_pathOffsetGestureObjectId == object->id
+        ? m_pathOffsetGestureToken
+        : 0;
+    m_undoStack.push(new SetPathOffsetCommand(
+        m_document, object->id, PathOffsetProperty::Baseline,
+        layout.baselineOffset, bounded, mergeToken,
+        [this] { onCommandChanged(); },
+        QStringLiteral("Change path baseline offset")));
+}
+
+void EditorController::beginPathStartOffsetGesture()
+{
+    beginPathOffsetGesture(PathOffsetProperty::Start);
+}
+
+void EditorController::endPathStartOffsetGesture()
+{
+    endPathOffsetGesture();
+}
+
+void EditorController::beginPathBaselineOffsetGesture()
+{
+    beginPathOffsetGesture(PathOffsetProperty::Baseline);
+}
+
+void EditorController::endPathBaselineOffsetGesture()
+{
+    endPathOffsetGesture();
+}
+
+void EditorController::beginPathOffsetGesture(PathOffsetProperty property)
+{
+    TextObject* object = editableActiveObject();
+    if (!object) return;
+    endPathOffsetGesture();
+    m_pathOffsetGestureActive = true;
+    m_pathOffsetGestureProperty = property;
+    m_pathOffsetGestureObjectId = object->id;
+    m_pathOffsetGestureToken = ++m_pathOffsetGestureSerial;
+}
+
+void EditorController::endPathOffsetGesture()
+{
+    if (!m_pathOffsetGestureActive) return;
+    m_pathOffsetGestureActive = false;
+    m_pathOffsetGestureObjectId.clear();
+    m_pathOffsetGestureToken = 0;
+}
+
+void EditorController::setPathReverse(bool reverse)
+{
+    TextObject* object = editableActiveObject();
+    if (!object) return;
+    PathTypographyProperties layout = object->pathLayout;
+    layout.reverse = reverse;
+    pushPathState(object->id, object->path, layout, QStringLiteral("Reverse path text direction"));
+}
+
+void EditorController::setPathFlip(bool flip)
+{
+    TextObject* object = editableActiveObject();
+    if (!object) return;
+    PathTypographyProperties layout = object->pathLayout;
+    layout.flip = flip;
+    pushPathState(object->id, object->path, layout, QStringLiteral("Flip path text side"));
+}
+
+void EditorController::setPathFollowTangent(bool followTangent)
+{
+    TextObject* object = editableActiveObject();
+    if (!object) return;
+    PathTypographyProperties layout = object->pathLayout;
+    layout.followTangent = followTangent;
+    pushPathState(object->id, object->path, layout,
+                  QStringLiteral("Change path tangent following"));
+}
+
+void EditorController::setPathOverflow(PathOverflowMode overflow)
+{
+    TextObject* object = editableActiveObject();
+    if (!object || overflow != PathOverflowMode::Clip) return;
+    PathTypographyProperties layout = object->pathLayout;
+    layout.overflow = overflow;
+    pushPathState(object->id, object->path, layout, QStringLiteral("Change path overflow"));
+}
+
+void EditorController::reversePath()
+{
+    TextObject* object = editableActiveObject();
+    if (!object || !object->path.has_value()) return;
+    PathGeometry path = *object->path;
+    path.reverseDirection();
+    pushPathState(object->id, std::move(path), object->pathLayout,
+                  QStringLiteral("Reverse editable path"));
+}
+
+void EditorController::setPathClosed(bool closed)
+{
+    TextObject* object = editableActiveObject();
+    if (!object || !object->path.has_value()) return;
+    PathGeometry path = *object->path;
+    path.closed = closed;
+    QString validationError;
+    if (!path.validate(&validationError)) {
+        publishError(validationError);
+        return;
+    }
+    pushPathState(object->id, std::move(path), object->pathLayout,
+                  closed ? QStringLiteral("Close editable path")
+                         : QStringLiteral("Open editable path"));
+}
+
+void EditorController::setPathGeometry(const QString& objectId,
+                                       const PathGeometry& path,
+                                       quint64 inputSpatialRevision)
+{
+    if (!pathInputRevisionIsCurrent(objectId, inputSpatialRevision)) {
+        return;
+    }
+    TextObject* object = m_document.objectById(objectId);
+    if (!object || !currentPageLayerForObject(m_document, objectId)) {
+        return;
+    }
+    QString validationError;
+    if (!path.validate(&validationError)) {
+        publishError(validationError);
+        return;
+    }
+    if (object->path.has_value() && object->path->id != path.id) {
+        publishError(QStringLiteral("The path edit targets a different path identity."));
+        return;
+    }
+    PathTypographyProperties layout = object->pathLayout;
+    layout.pathId = path.id;
+    pushPathState(objectId, path, layout, QStringLiteral("Edit text path"));
+}
+
+void EditorController::pushPathState(const QString& objectId,
+                                     std::optional<PathGeometry> path,
+                                     PathTypographyProperties layout,
+                                     const QString& description)
+{
+    endPathOffsetGesture();
+    TextObject* object = m_document.objectById(objectId);
+    const Layer* layer = currentPageLayerForObject(m_document, objectId);
+    if (!object || !layer || !layer->visible || layer->locked) {
+        return;
+    }
+    if (object->path == path && object->pathLayout == layout) {
+        return;
+    }
+    m_undoStack.push(new SetPathTypographyCommand(
+        m_document, objectId, object->path, object->pathLayout,
+        std::move(path), std::move(layout),
+        [this] { onCommandChanged(); }, description));
+}
+
+bool EditorController::pathInputRevisionIsCurrent(const QString& objectId,
+                                                   quint64 inputSpatialRevision)
+{
+    if (inputSpatialRevision != 0 && inputSpatialRevision != m_spatialRevision) {
+        publishError(QStringLiteral(
+            "The object changed while the path gesture was active; try the gesture again."));
+        return false;
+    }
+    const TextObject* object = m_document.objectById(objectId);
+    const Layer* layer = currentPageLayerForObject(m_document, objectId);
+    if (!object || !layer || !layer->visible || layer->locked
+        || !object->path.has_value()) {
+        return false;
+    }
+    const std::optional<ObjectFrame> frame = authoritativeObjectFrame(objectId);
+    if (!frame.has_value()) {
+        publishError(QStringLiteral("Could not obtain a current frame for the path gesture."));
+        return false;
+    }
+    return true;
+}
+
 void EditorController::selectObject(const QString& objectId, bool additive)
 {
     // Commit a held control transaction before SelectionModel changes.  Its
@@ -598,6 +871,7 @@ void EditorController::selectObject(const QString& objectId, bool additive)
     // selectionChanged callback can otherwise restore the previous active ID
     // and discard the user's new selection.
     endEffectStackStrengthGesture();
+    endPathOffsetGesture();
     const SceneObjectGeometry* sceneObject = m_sceneGeometry.objectById(objectId);
     if (!sceneObject || !sceneObject->visible || sceneObject->locked) {
         return;
@@ -615,6 +889,7 @@ void EditorController::selectObject(const QString& objectId, bool additive)
 void EditorController::toggleObjectSelection(const QString& objectId)
 {
     endEffectStackStrengthGesture();
+    endPathOffsetGesture();
     const SceneObjectGeometry* sceneObject = m_sceneGeometry.objectById(objectId);
     if (!sceneObject || !sceneObject->visible || sceneObject->locked) {
         return;
@@ -629,6 +904,7 @@ void EditorController::toggleObjectSelection(const QString& objectId)
 void EditorController::clearSelection()
 {
     endEffectStackStrengthGesture();
+    endPathOffsetGesture();
     m_selectionModel->clear();
     emit sceneChanged();
 }
@@ -636,6 +912,7 @@ void EditorController::clearSelection()
 void EditorController::selectObjectsInRect(const QRectF& rect, bool additive)
 {
     endEffectStackStrengthGesture();
+    endPathOffsetGesture();
     QStringList ids = additive ? m_selectionModel->selectedObjectIds() : QStringList();
     QPainterPath marquee;
     marquee.addRect(rect.normalized());
@@ -705,6 +982,9 @@ void EditorController::cancelNewTextObject(const QString& objectId)
 
 void EditorController::deleteObject(const QString& objectId)
 {
+    if (m_pathOffsetGestureActive && m_pathOffsetGestureObjectId == objectId) {
+        endPathOffsetGesture();
+    }
     if (m_effectStackStrengthGestureActive
         && m_effectStackStrengthGestureObjectId == objectId) {
         endEffectStackStrengthGesture();
@@ -737,6 +1017,7 @@ void EditorController::deleteObject(const QString& objectId)
 
 void EditorController::deleteSelectedObjects()
 {
+    endPathOffsetGesture();
     const QStringList ids = selectedObjectIds();
     if (ids.isEmpty()) {
         return;
@@ -788,6 +1069,7 @@ void EditorController::duplicateSelectedObjects()
         TextObject duplicate(*source);
         duplicate.id = createStableId(QStringLiteral("text"));
         assignFreshEffectInstanceIds(&duplicate.effects);
+        assignFreshPathIdentity(&duplicate);
         duplicate.transform.position += QPointF(24.0, 24.0);
         duplicateIds.push_back(duplicate.id);
         m_undoStack.push(new AddTextObjectCommand(
@@ -940,6 +1222,7 @@ void EditorController::duplicateCurrentPage()
             if (object) {
                 object->id = createStableId(QStringLiteral("text"));
                 assignFreshEffectInstanceIds(&object->effects);
+                assignFreshPathIdentity(object.get());
             }
         }
     }
@@ -1002,6 +1285,7 @@ void EditorController::removeCurrentPage()
 void EditorController::switchPage(const QString& pageId)
 {
     endEffectStackStrengthGesture();
+    endPathOffsetGesture();
     Page* page = m_document.pageById(pageId);
     if (!page || pageId == m_document.currentPageId) {
         return;
@@ -1771,6 +2055,7 @@ void EditorController::pasteObjects()
     for (TextObject& object : parsedObjects) {
         object.id = createStableId(QStringLiteral("text"));
         assignFreshEffectInstanceIds(&object.effects);
+        assignFreshPathIdentity(&object);
         object.transform.position += QPointF(24.0, 24.0);
         pastedIds.push_back(object.id);
         m_undoStack.push(new AddTextObjectCommand(
@@ -1926,6 +2211,7 @@ bool EditorController::deletePreset(const QString& name, QString* error)
 bool EditorController::saveProject(const QString& filePath, QString* error)
 {
     endEffectStackStrengthGesture();
+    endPathOffsetGesture();
     if (!ProjectSerializer::saveToFile(m_document, filePath, error)) {
         return false;
     }
@@ -1943,6 +2229,7 @@ bool EditorController::openProject(const QString& filePath, QString* error)
     }
     m_effectStackStrengthGestureActive = false;
     m_effectStackStrengthGestureObjectId.clear();
+    endPathOffsetGesture();
     m_document = std::move(loaded);
     resetTransientPreviews();
     m_undoStack.clear();

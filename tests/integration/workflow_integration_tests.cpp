@@ -60,6 +60,7 @@ private slots:
     void effectReorderDeleteUndoRestoresSemanticOrder();
     void legacyV1V2V3MigrationSurvivesSaveReloadAndUndoRedo();
     void malformedOrOversizedClipboardPasteIsTransactional();
+    void pathTypographySeededWorkflow();
     void seededValidWorkflows_data();
     void seededValidWorkflows();
 };
@@ -590,6 +591,7 @@ void WorkflowIntegrationTests::duplicatePageFreshensEntireIdentityHierarchy()
 {
     EditorController controller;
     const QString originalObjectId = controller.createTextObject(QPointF(50, 60), QStringLiteral("duplicate semantics"));
+    controller.setPathLayoutEnabled(true);
     controller.addEffect(QStringLiteral("wave"));
     controller.addEffect(QStringLiteral("echo"));
     controller.setEffectStackStrength(1.6);
@@ -601,6 +603,12 @@ void WorkflowIntegrationTests::duplicatePageFreshensEntireIdentityHierarchy()
         originalIds.insert(layer->id);
         for (const auto& object : layer->objects) {
             originalIds.insert(object->id);
+            if (object->path.has_value()) {
+                originalIds.insert(object->path->id);
+                for (const PathNode& node : object->path->nodes) {
+                    originalIds.insert(node.id);
+                }
+            }
             for (int index = 0; index < object->effects.size(); ++index) {
                 originalIds.insert(object->effects.at(index)->instanceId);
             }
@@ -617,6 +625,12 @@ void WorkflowIntegrationTests::duplicatePageFreshensEntireIdentityHierarchy()
         duplicatedIds << layer->id;
         for (const auto& object : layer->objects) {
             duplicatedIds << object->id;
+            if (object->path.has_value()) {
+                duplicatedIds << object->path->id;
+                for (const PathNode& node : object->path->nodes) {
+                    duplicatedIds << node.id;
+                }
+            }
             for (int index = 0; index < object->effects.size(); ++index) {
                 duplicatedIds << object->effects.at(index)->instanceId;
             }
@@ -640,6 +654,15 @@ void WorkflowIntegrationTests::duplicatePageFreshensEntireIdentityHierarchy()
             TextObject& normalizedObject = *normalizedLayer.objects[objectIndex];
             const TextObject& originalObject = *originalLayer.objects[objectIndex];
             normalizedObject.id = originalObject.id;
+            if (normalizedObject.path.has_value() && originalObject.path.has_value()) {
+                normalizedObject.path->id = originalObject.path->id;
+                for (int nodeIndex = 0;
+                     nodeIndex < normalizedObject.path->nodes.size(); ++nodeIndex) {
+                    normalizedObject.path->nodes[nodeIndex].id =
+                        originalObject.path->nodes.at(nodeIndex).id;
+                }
+                normalizedObject.pathLayout.pathId = normalizedObject.path->id;
+            }
             for (int effectIndex = 0; effectIndex < normalizedObject.effects.size(); ++effectIndex) {
                 normalizedObject.effects.at(effectIndex)->instanceId =
                     originalObject.effects.at(effectIndex)->instanceId;
@@ -906,9 +929,11 @@ void WorkflowIntegrationTests::duplicatePasteAndPresetFreshenEffectIdentities()
 {
     EditorController controller;
     const QString originalId = controller.createTextObject(QPointF(100, 100), QStringLiteral("clone matrix"));
+    controller.setPathLayoutEnabled(true);
     controller.addEffect(QStringLiteral("wave"));
     controller.addEffect(QStringLiteral("echo"));
     const TextObject originalSnapshot(*controller.document().objectById(originalId));
+    QVERIFY(originalSnapshot.path.has_value());
 
     controller.duplicateSelectedObjects();
     const auto afterDuplicate = controller.document().objectsOnCurrentPage();
@@ -916,6 +941,10 @@ void WorkflowIntegrationTests::duplicatePasteAndPresetFreshenEffectIdentities()
     TextObject* duplicate = afterDuplicate.at(0)->id == originalId
         ? afterDuplicate.at(1) : afterDuplicate.at(0);
     QVERIFY(duplicate->id != originalId);
+    QVERIFY(duplicate->path.has_value());
+    QVERIFY(duplicate->path->id != originalSnapshot.path->id);
+    QCOMPARE(duplicate->pathLayout.pathId, duplicate->path->id);
+    QVERIFY(duplicate->path->nodes.front().id != originalSnapshot.path->nodes.front().id);
     for (int index = 0; index < duplicate->effects.size(); ++index) {
         QVERIFY(duplicate->effects.at(index)->instanceId
                 != originalSnapshot.effects.at(index)->instanceId);
@@ -938,14 +967,23 @@ void WorkflowIntegrationTests::duplicatePasteAndPresetFreshenEffectIdentities()
     QCOMPARE(afterPaste.size(), 3);
     QSet<QString> objectIds;
     QSet<QString> effectIds;
+    QSet<QString> pathIds;
+    QSet<QString> pathNodeIds;
     for (const TextObject* object : afterPaste) {
         objectIds.insert(object->id);
+        QVERIFY(object->path.has_value());
+        pathIds.insert(object->path->id);
+        for (const PathNode& node : object->path->nodes) {
+            pathNodeIds.insert(node.id);
+        }
         for (int index = 0; index < object->effects.size(); ++index) {
             effectIds.insert(object->effects.at(index)->instanceId);
         }
     }
     QCOMPARE(objectIds.size(), 3);
     QCOMPARE(effectIds.size(), 6);
+    QCOMPARE(pathIds.size(), 3);
+    QCOMPARE(pathNodeIds.size(), 3 * originalSnapshot.path->nodes.size());
     QString error;
     controller.selectObject(originalId);
     QVERIFY2(controller.applyPresetById(QStringLiteral("builtin.whisper.v1"), &error), qPrintable(error));
@@ -1115,6 +1153,78 @@ void WorkflowIntegrationTests::malformedOrOversizedClipboardPasteIsTransactional
     assertUnchanged();
 }
 
+void WorkflowIntegrationTests::pathTypographySeededWorkflow()
+{
+    EditorController controller;
+    const QString objectId = controller.createTextObject(
+        QPointF(120.0, 90.0), QStringLiteral("seeded path workflow"));
+    QVERIFY(!objectId.isEmpty());
+    controller.setPathLayoutEnabled(true);
+    QVERIFY(controller.document().objectById(objectId)->path.has_value());
+
+    QRandomGenerator random(20260813u);
+    const auto context = [&controller](int step) {
+        return QStringLiteral("path step=%1 object=%2")
+            .arg(step)
+            .arg(controller.document().activeObjectId);
+    };
+
+    for (int step = 0; step < 48; ++step) {
+        TextObject* object = controller.document().objectById(objectId);
+        QVERIFY(object && object->path.has_value());
+        switch (random.bounded(6)) {
+        case 0:
+            controller.setPathLayoutEnabled(!object->pathLayout.enabled);
+            break;
+        case 1:
+            controller.setPathStartOffset(-90.0 + random.generateDouble() * 180.0);
+            controller.setPathBaselineOffset(-30.0 + random.generateDouble() * 60.0);
+            controller.setPathFlip(step % 2 == 0);
+            break;
+        case 2:
+            controller.reversePath();
+            break;
+        case 3:
+            controller.setPathClosed(!object->path->closed);
+            break;
+        case 4: {
+            PathGeometry candidate = *object->path;
+            candidate.nodes.front().anchor += QPointF(
+                -5.0 + random.generateDouble() * 10.0,
+                -5.0 + random.generateDouble() * 10.0);
+            controller.setPathGeometry(objectId, candidate, controller.spatialRevision());
+            break;
+        }
+        case 5:
+            controller.removePathLayout();
+            controller.setPathLayoutEnabled(true);
+            break;
+        default:
+            Q_UNREACHABLE();
+        }
+
+        QCoreApplication::processEvents();
+        const auto report = test::checkInvariants(controller.document(), nullptr,
+                                                   controller.selectedObjectIds(),
+                                                   controller.selectionModel()->activeObjectId());
+        QVERIFY2(report.ok(), qPrintable(context(step) + QLatin1Char('\n') + report.summary()));
+
+        if (step % 8 == 7 && controller.undoStack()->canUndo()) {
+            const QString beforeUndo = test::semanticFingerprint(controller.document());
+            controller.undoStack()->undo();
+            const auto undoReport = test::checkInvariants(
+                controller.document(), nullptr, controller.selectedObjectIds(),
+                controller.selectionModel()->activeObjectId());
+            QVERIFY2(undoReport.ok(), qPrintable(context(step) + QLatin1Char('\n')
+                                                   + undoReport.summary()));
+            controller.undoStack()->redo();
+            QVERIFY2(test::semanticFingerprint(controller.document()) == beforeUndo,
+                     qPrintable(context(step)
+                                + QStringLiteral("\npath undo/redo did not restore the document")));
+        }
+    }
+}
+
 void WorkflowIntegrationTests::seededValidWorkflows_data()
 {
     QTest::addColumn<quint32>("seed");
@@ -1167,6 +1277,9 @@ void WorkflowIntegrationTests::seededValidWorkflows()
     };
 
     for (int step = 0; step < steps; ++step) {
+        // Keep the long-lived seeded workflow stream stable. Path-specific
+        // fuzzing lives in its own deterministic path workflow below so that
+        // adding a new action cannot reshuffle unrelated page/layer coverage.
         const int action = random.bounded(31);
         if (action == 0 || currentObjects().isEmpty()) {
             const QString id = controller.createTextObject(QPointF(random.bounded(500), random.bounded(300)),
@@ -1416,7 +1529,8 @@ void WorkflowIntegrationTests::seededValidWorkflows()
                                                            controller.selectionModel()->activeObjectId());
             QVERIFY2(undoReport.ok(), qPrintable(context(step) + QLatin1Char('\n') + undoReport.summary()));
             controller.undoStack()->redo();
-            QCOMPARE(test::semanticFingerprint(controller.document()), beforeUndo);
+            QVERIFY2(test::semanticFingerprint(controller.document()) == beforeUndo,
+                     qPrintable(context(step) + QStringLiteral("\nredo did not restore the semantic document fingerprint")));
         }
     }
 }

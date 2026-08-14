@@ -30,6 +30,12 @@ struct ProjectResourceLimits {
     qint64 maximumDeformationStrokes = 32'768;
     int maximumDeformationSamplesPerStroke = 4096;
     qint64 maximumDeformationSamples = 1'048'576;
+    int maximumPathsPerObject = 1;
+    qint64 maximumPaths = 4096;
+    int maximumPathNodesPerPath = 4096;
+    qint64 maximumPathNodes = 1'048'576;
+    qint64 maximumCubicSegments = 1'048'576;
+    qint64 maximumPathWork = 4'000'000;
     qint64 maximumEstimatedWork = 8'000'000;
 };
 

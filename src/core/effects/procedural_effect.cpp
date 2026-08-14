@@ -25,6 +25,50 @@ qreal randomUnit(quint32 seed, int index, quint64 salt)
     return static_cast<qreal>((mix(input) >> 11U) * (1.0 / 9007199254740992.0));
 }
 
+bool modeUsesProgress(ProceduralEffect::Mode mode)
+{
+    switch (mode) {
+    case ProceduralEffect::Mode::Bounce:
+    case ProceduralEffect::Mode::Staircase:
+    case ProceduralEffect::Mode::HorizontalSpread:
+    case ProceduralEffect::Mode::VerticalSpread:
+    case ProceduralEffect::Mode::Arc:
+    case ProceduralEffect::Mode::Zigzag:
+    case ProceduralEffect::Mode::SineRotation:
+    case ProceduralEffect::Mode::Crescendo:
+    case ProceduralEffect::Mode::Shrink:
+    case ProceduralEffect::Mode::ExpandCenter:
+    case ProceduralEffect::Mode::SqueezeCenter:
+    case ProceduralEffect::Mode::BaselineDrift:
+        return true;
+    case ProceduralEffect::Mode::RandomOffset:
+    case ProceduralEffect::Mode::RandomRotation:
+    case ProceduralEffect::Mode::RandomScale:
+    case ProceduralEffect::Mode::Skew:
+    case ProceduralEffect::Mode::Compression:
+    case ProceduralEffect::Mode::AlternatingTilt:
+        return false;
+    }
+    return false;
+}
+
+qreal normalizedProgress(const GeometryPiece& piece,
+                         const QRectF& referenceBounds,
+                         qreal width)
+{
+    if (piece.hasEffectReferenceProgress
+        && std::isfinite(piece.effectReferenceProgress)) {
+        return qBound<qreal>(0.0, piece.effectReferenceProgress, 1.0);
+    }
+
+    const QPointF effectAnchor = piece.hasEffectReferenceAnchor
+        ? piece.effectReferenceAnchor : piece.originalAnchor;
+    return qBound<qreal>(
+        0.0,
+        (effectAnchor.x() - referenceBounds.left()) / width,
+        1.0);
+}
+
 } // namespace
 
 ProceduralEffect::ProceduralEffect(QString typeId, QString displayName, Mode mode)
@@ -111,6 +155,7 @@ void ProceduralEffect::apply(VectorGeometry& geometry, const EffectContext& cont
     }
     const qreal width = qMax<qreal>(1.0, context.referenceBounds.width());
     const qreal height = qMax<qreal>(1.0, context.referenceHeight);
+    const bool usesProgress = modeUsesProgress(m_mode);
     constexpr qreal pi = 3.14159265358979323846;
     constexpr qreal twoPi = 2.0 * pi;
 
@@ -120,10 +165,8 @@ void ProceduralEffect::apply(VectorGeometry& geometry, const EffectContext& cont
         }
         GeometryPiece& piece = geometry.pieces[index];
         const int glyphIndex = piece.sourceGlyphIndex >= 0 ? piece.sourceGlyphIndex : index;
-        const qreal progress = qBound<qreal>(
-            0.0,
-            (piece.originalAnchor.x() - context.referenceBounds.left()) / width,
-            1.0);
+        const qreal progress = usesProgress
+            ? normalizedProgress(piece, context.referenceBounds, width) : 0.0;
         const qreal phase = twoPi * (progress * m_frequency);
         const qreal signedRandom = randomUnit(m_seed, glyphIndex, 0x7134ULL) * 2.0 - 1.0;
         const qreal positiveRandom = randomUnit(m_seed, glyphIndex, 0x9411ULL);

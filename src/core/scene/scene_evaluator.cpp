@@ -1,6 +1,7 @@
 #include "core/scene/scene_evaluator.h"
 
 #include "core/text/text_engine.h"
+#include "core/path/path_layout.h"
 
 #include <QCryptographicHash>
 #include <QHash>
@@ -44,6 +45,8 @@ struct CachedObjectStages {
     ShapedText shaped;
     QByteArray baseKey;
     VectorGeometry baseGeometry;
+    QByteArray pathKey;
+    VectorGeometry pathGeometry;
     QByteArray effectKey;
     VectorGeometry effectGeometry;
     QByteArray deformationKey;
@@ -111,6 +114,17 @@ QByteArray effectsKey(const TextObject& object)
     return hashKey(key);
 }
 
+QByteArray pathLayoutKey(const TextObject& object)
+{
+    QByteArray key = QJsonDocument(object.pathLayout.toJson())
+                         .toJson(QJsonDocument::Compact);
+    key += QByteArrayLiteral("|path=");
+    if (object.path.has_value()) {
+        key += QJsonDocument(object.path->toJson()).toJson(QJsonDocument::Compact);
+    }
+    return hashKey(key);
+}
+
 QByteArray deformationKey(const TextObject& object)
 {
     return hashKey(QJsonDocument(object.deformation.toJson()).toJson(QJsonDocument::Compact));
@@ -156,6 +170,7 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
         cache.shaped = std::move(shaped);
         cache.shapingKey = currentShapingKey;
         cache.baseKey.clear();
+        cache.pathKey.clear();
         cache.effectKey.clear();
         cache.deformationKey.clear();
     }
@@ -176,16 +191,56 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
         }
         cache.baseGeometry = std::move(baseGeometry);
         cache.baseKey = currentBaseKey;
+        cache.pathKey.clear();
         cache.effectKey.clear();
         cache.deformationKey.clear();
     }
 
-    const QByteArray currentEffectKey = hashKey(cache.baseKey + effectsKey(object));
-    if (cache.effectKey != currentEffectKey) {
-        if (!work.consume(geometryWorkUnits(cache.baseGeometry))) {
+    const QByteArray currentPathKey = hashKey(cache.baseKey + pathLayoutKey(object));
+    if (cache.pathKey != currentPathKey) {
+        VectorGeometry pathGeometry = cache.baseGeometry;
+        if (object.pathLayout.enabled) {
+            if (!object.path.has_value()
+                || object.pathLayout.pathId.isEmpty()
+                || object.path->id != object.pathLayout.pathId) {
+                evaluated.error = QStringLiteral("Path typography references a missing or unrelated path.");
+                cache.pathKey.clear();
+                return evaluated;
+            }
+            QString pathError;
+            if (!PathLayoutEngine::apply(&pathGeometry,
+                                         cache.shaped,
+                                         *object.path,
+                                         object.pathLayout,
+                                         &pathError,
+                                         work)) {
+                if (!work.isRunning()) {
+                    cache.pathKey.clear();
+                    return evaluated;
+                }
+                evaluated.error = pathError.isEmpty()
+                    ? QStringLiteral("Path typography could not be evaluated.")
+                    : pathError;
+                cache.pathKey.clear();
+                return evaluated;
+            }
+        }
+        if (!work.isRunning()) {
+            cache.pathKey.clear();
             return evaluated;
         }
-        cache.effectGeometry = cache.baseGeometry;
+        cache.pathGeometry = std::move(pathGeometry);
+        cache.pathKey = currentPathKey;
+        cache.effectKey.clear();
+        cache.deformationKey.clear();
+    }
+
+    const QByteArray currentEffectKey = hashKey(cache.pathKey + effectsKey(object));
+    if (cache.effectKey != currentEffectKey) {
+        if (!work.consume(geometryWorkUnits(cache.pathGeometry))) {
+            return evaluated;
+        }
+        cache.effectGeometry = cache.pathGeometry;
         object.effects.apply(cache.effectGeometry, object.effectStackStrength, work);
         if (!work.isRunning()) {
             cache.effectKey.clear();
@@ -212,7 +267,7 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
     // Empty text is still an object.  Its local frame is deliberately
     // independent from glyph visibility so it can be selected, moved and
     // edited later.
-    QRectF baseBounds = cache.baseGeometry.referenceBounds;
+    QRectF baseBounds = cache.pathGeometry.referenceBounds;
     if (baseBounds.isNull() || baseBounds.isEmpty()) {
         baseBounds = QRectF(0.0,
                             -object.typography.fontSize * 0.8,
@@ -276,9 +331,11 @@ SceneGeometry SceneEvaluator::evaluate(const Page& page,
         const TextObject* object = nullptr;
         bool locked = false;
     };
+    bool interruptedDuringCollection = false;
     QVector<Task> tasks;
     for (const auto& layer : page.layers) {
         if (!work.consume()) {
+            interruptedDuringCollection = true;
             break;
         }
         if (!layer || !layer->visible) {
@@ -286,12 +343,16 @@ SceneGeometry SceneEvaluator::evaluate(const Page& page,
         }
         for (const auto& object : layer->objects) {
             if (!work.consume()) {
+                interruptedDuringCollection = true;
                 break;
             }
             if (!object || !object->visible) {
                 continue;
             }
             tasks.push_back({layer->id, object.get(), layer->locked});
+        }
+        if (interruptedDuringCollection) {
+            break;
         }
     }
     // EditorController schedules a complete page evaluation.  Do not queue
@@ -300,6 +361,7 @@ SceneGeometry SceneEvaluator::evaluate(const Page& page,
     // ordered and sequential within that outer worker.
     for (const Task& task : tasks) {
         if (!work.consume() || !task.object) {
+            interruptedDuringCollection = true;
             break;
         }
         result.objects.push_back(evaluateObjectTask(
@@ -308,7 +370,7 @@ SceneGeometry SceneEvaluator::evaluate(const Page& page,
             break;
         }
     }
-    if (!work.isRunning()) {
+    if (interruptedDuringCollection || !work.isRunning()) {
         result.objects.clear();
         result.bounds = {};
         result.evaluationStatus = work.status() == WorkControlStatus::Cancelled

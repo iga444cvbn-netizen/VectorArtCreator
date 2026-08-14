@@ -19,6 +19,7 @@ enum class EditorTool {
     Pinch,
     Smooth,
     EffectMask,
+    PathEdit,
 };
 
 class DeformationToolState {
@@ -38,7 +39,7 @@ public:
     [[nodiscard]] bool acceptsCanvasStroke() const
     {
         return m_tool != EditorTool::Select && m_tool != EditorTool::Move
-            && m_tool != EditorTool::Text;
+            && m_tool != EditorTool::Text && m_tool != EditorTool::PathEdit;
     }
 
     [[nodiscard]] bool targetSelectionEnabled() const
@@ -62,6 +63,7 @@ public:
         case EditorTool::Select:
         case EditorTool::Move:
         case EditorTool::Text:
+        case EditorTool::PathEdit:
             return std::nullopt;
         case EditorTool::Push:
             return BrushMode::Push;

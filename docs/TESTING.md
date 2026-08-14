@@ -8,7 +8,8 @@ contracts, not just isolated helper functions. A green core suite alone does
 ## Test architecture
 
 - `vector_typography_core_tests` (`core;serialization;undo;geometry`) keeps
-  deterministic model, geometry, serializer, cache and command contracts.
+  deterministic model, geometry, path-layout, serializer, cache and command
+  contracts.
 - `vector_typography_effect_contract_tests` (`core;integration;effects`)
   validates every public `EffectRegistry` descriptor and every built-in preset.
   It now proves exact zero/disabled identity, descriptor claims, deterministic
@@ -52,9 +53,10 @@ Shared helpers live in `tests/support`:
   coordinates, glyph/cluster identity, anchors, opacity, and generator lineage.
   Its comparator reports the first differing field; its digest is only for
   compact logs.
-- `semantic_equality` enumerates every persistent `TextObject`, effect, mask,
-  deformation, transform, layer and page field. Ordinary C++ copies preserve
-  stable IDs; only explicit duplication paths are allowed to freshen them.
+- `semantic_equality` enumerates every persistent `TextObject`, path, effect,
+  mask, deformation, transform, layer and page field. Ordinary C++ copies
+  preserve stable IDs; only explicit duplication paths are allowed to freshen
+  them.
 - `state_fingerprint` is a canonical persistent-only JSON representation; it
   omits dates, active-widget state and async/cache state.
 - `invariant_checker` checks global ID uniqueness, hierarchical page/layer/
@@ -115,6 +117,12 @@ path if it is exposed in the panel.  Every persistent property needs model and
 save/load coverage, plus undo if editable.  Every spatial tool must cover a
 non-identity zoom or transform.
 
+Text-on-path additions additionally require distance-based straight/cubic math,
+open/closed/degenerate overflow cases, cancellation and aggregate path limits,
+post-layout effect/deformation ordering, current-schema identity validation,
+duplicate/paste freshening, stale spatial-revision rejection, and a real-widget
+inspector/canvas handoff test.
+
 ## Random workflow replay
 
 `seededValidWorkflows` runs seeds `1`, `7`, `42`, `99`, `1337`, `65537`,
@@ -122,7 +130,8 @@ non-identity zoom or transform.
 The state-aware alphabet covers creation/editing, Cyrillic/multiline text,
 font family/style and other typography, transforms, selection/clear/multiselect,
 effects/parameters/range/mask/order, built-in presets, generator and deformation
-state, duplication/deletion/copy/paste, pages/layers, visibility/locking,
+state, path creation/editing/reversal/closure/offsets and duplicate path
+identities, duplication/deletion/copy/paste, pages/layers, visibility/locking,
 SVG eligibility/output, undo/redo and periodic semantic round trips. A failure
 prints the seed, action, page/layer/object IDs, selection, effect/tool and replay history.
 Replay one seed (and optionally change its scale) with:
@@ -174,6 +183,9 @@ The permanent checks are intentionally mapped to the user-visible bug class:
 | Held Style Intensity mutates while “clean” (P2-06) | `styleIntensityGestureHasImmediateDirtyTruthAndOneUndoStep`, including multi-value gesture merge, separate gestures, selection handoff, save/clean boundary, and fingerprint undo/redo |
 | Rotated marquee selects empty AABB corners (P2-07) | `rotatedMarqueeUsesInkAsNarrowPhase` |
 | Equal-value objects deduplicated from plain text (P2-08) | `exportPlainTextPreservesEqualObjectMultiplicity` |
+| Path layout spacing, clipping, degeneracy, and cluster preservation | `pathArcLengthMatchesIndependentDenseOracle`, `pathSubdivisionAndDegenerateGeometryStayBounded`, `pathLayoutClipsOpenOverflowWithoutEndpointPileup`, `pathLayoutPreservesClustersThroughEffects` |
+| Path identity, malformed persistence, stale gestures, and object-targeted undo | `pathSerializationRejectsCorruptionAndBudgets`, `pathControllerDuplicateAndStaleGestureKeepIdentitySafe`, `pathUndoTargetsExplicitObjectAndRestoresFingerprint` |
+| Real-widget path creation, tool dispatch, anchor gesture, offsets, and disable/undo | `pathTypographyControlsAndAnchorGesture` |
 | Stale scene frame authorizes page-space mutation (P1-03) | `staleFrameCannotAuthorizeSpatialMutation` holds revision N, maps mask/deformation through N+1, and proves stale-transform fingerprint/undo neutrality; `transientPreviewNeverBecomesDocumentOrFrameAuthority` proves preview geometry differs without becoming document/frame/cache authority |
 | Aggregate hostile workload / noncancellable work (P1-05) | `serializedResourceBudgetsHaveExactBoundaries` including saturating overflow/composite limits, `workControlHasExactSharedTerminalBoundaries`, `evaluationCancellationDoesNotPoisonWorkerCaches`, `cooperativeWorkBudgetAndCancellationAreDeterministic`, `cancelledSvgNeverCommitsPartialOutput`, Windows `cancellationStopsBeforeClipboardPublication` |
 | Per-run UTF-16 cluster span consumes the rest of a line (P2-01) | deterministic `logicalClusterSpansUseWholeLineContext`; real `mixedUtf16ShapingUsesGlobalClusterSpans`; downstream `mixedUtf16ClustersSurviveEffectsPersistenceAndExport` |

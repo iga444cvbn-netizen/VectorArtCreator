@@ -37,6 +37,7 @@ QString toolName(EditorTool tool)
     case EditorTool::Pinch: return QStringLiteral("Pinch");
     case EditorTool::Smooth: return QStringLiteral("Smooth");
     case EditorTool::EffectMask: return QStringLiteral("Effect mask / eraser");
+    case EditorTool::PathEdit: return QStringLiteral("Edit text path");
     }
     return QStringLiteral("Tool");
 }

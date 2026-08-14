@@ -23,8 +23,8 @@ covered at the lowest useful test layer.
 
 ## 2. Identity and hierarchy
 
-- Page, layer, text-object, and effect-instance IDs MUST be nonempty and globally
-  unique within a document.
+- Page, layer, text-object, effect-instance, path, and path-node IDs MUST be
+  nonempty and globally unique within a document.
 - `currentPageId` MUST identify a page in the document. `activeLayerId` MUST
   identify a layer on that current page. Active and selected object IDs MUST
   identify objects on that current page. A selected effect ID MUST identify an
@@ -42,6 +42,9 @@ covered at the lowest useful test layer.
 - Duplication, paste, preset application, and page cloning MUST state which
   identities are preserved and which are freshened. The rule MUST be consistent
   at every hierarchy depth.
+- A text path is owned by exactly one text object. `pathLayout.pathId` MUST be
+  empty when no path is present and MUST match the owned path ID otherwise.
+  Path-node IDs participate in the same global identity contract.
 
 ## 3. Undo, dirty state, and gestures
 
@@ -108,6 +111,10 @@ covered at the lowest useful test layer.
   appropriate narrow-phase test against the transformed frame or actual contour.
 - Geometry must remain finite and bounded after every stage. Generator and
   subdivision caps are part of the public effect/deformation contract.
+- If enabled, path layout MUST run after glyph geometry and before effects. Its
+  arc-length sampling MUST be bounded, distance-based, and cooperative with the
+  shared work budget. Open overflow MUST clip complete glyph pieces; degenerate
+  paths MUST NOT pile all glyphs onto one endpoint.
 
 ## 6. Text, fonts, and source ranges
 
@@ -122,6 +129,8 @@ covered at the lowest useful test layer.
 - Tracking order and direction MUST have one documented visual/logical contract
   across multiple glyph runs. Line breaks MUST reset only the state that contract
   says they reset.
+- Path layout MUST consume preserved glyph advance, source-cluster, and line
+  metadata without rewriting UTF-16 cluster ownership.
 - Missing family, missing style, and per-glyph fallback are distinct states and
   MUST remain distinguishable to the user.
 - Project rerendering is system-font dependent until font fingerprints or embedded
@@ -164,7 +173,7 @@ covered at the lowest useful test layer.
   All arrays and input byte sizes MUST have per-container and aggregate limits.
 - Bounds MUST cover combined processing cost, not only independent child counts.
   Project and private-clipboard bytes and aggregate hierarchy/text/effect/mask/
-  deformation products MUST be rejected before constructing the live model.
+  deformation/path products MUST be rejected before constructing the live model.
   Composite estimates MUST use saturating arithmetic; no count product may wrap
   into an admissible value.
 - Migrations MUST be deterministic, idempotent at the current schema, and covered
@@ -189,6 +198,8 @@ covered at the lowest useful test layer.
   incompatible native session synchronously, before an async scene refresh.
 - UI enablement MUST derive from the same capabilities enforced in the controller;
   disabling only the widget is insufficient.
+- Path-node gestures MUST carry the captured spatial revision and stable object/
+  path identity; stale or locked gestures MUST be rejected without mutation.
 - Success messages MUST describe what actually succeeded. Partial platform output
   failures MUST be surfaced as warnings.
 
@@ -229,7 +240,10 @@ For every new persisted field or public workflow, add the applicable gates:
 8. real-widget handoff test when multiple controls edit the same state;
 9. export/clipboard contract test when output is affected; and
 10. invariant check after duplicate, paste, delete, page/layer move, undo, and redo.
-11. deterministic semantic-work cancellation when the workflow can be expensive.
+11. deterministic semantic-work cancellation when the workflow can be expensive;
+12. path geometry and layout: arc-length math, overflow/degenerate behavior,
+    path-schema migration, identity freshening, undo/redo, stale gestures, and
+    post-layout effect/deformation ordering.
 
 All first-party MSVC targets MUST build warning-clean under `/W4 /WX`. External
 dependency headers MAY be demoted through the compiler's external-header policy;

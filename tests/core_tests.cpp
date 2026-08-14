@@ -8,12 +8,15 @@
 #include "core/effects/text_range_rebaser.h"
 #include "core/effects/procedural_effect.h"
 #include "core/effects/stretch_effect.h"
+#include "core/effects/geometry_warp_effect.h"
+#include "core/effects/trail_effect.h"
 #include "core/effects/wave_effect.h"
 #include "core/export/svg_exporter.h"
 #include "core/export/export_payload_builder.h"
 #include "core/presets/preset.h"
 #include "core/presets/preset_manager.h"
 #include "core/presets/preset_catalog.h"
+#include "core/path/path_layout.h"
 #include "core/serialization/project_serializer.h"
 #include "core/scene/scene_evaluator.h"
 #include "core/scene/object_frame.h"
@@ -24,6 +27,7 @@
 #include "ui/selection_model.h"
 #include "ui/shortcut_manager.h"
 #include "tests/support/semantic_geometry.h"
+#include "tests/support/state_fingerprint.h"
 
 #include <QAction>
 #include <QCoreApplication>
@@ -35,6 +39,7 @@
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QLineF>
 #include <QPainterPath>
 #include <QPolygonF>
 #include <QSet>
@@ -47,6 +52,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 using namespace vt;
 
@@ -162,6 +168,113 @@ QPointF firstPathElement(const QPainterPath& path)
     return QPointF(element.x, element.y);
 }
 
+VectorGeometry pathEffectFixture(const QVector<qreal>& offsets,
+                                 qreal advance = 8.0)
+{
+    VectorGeometry geometry;
+    qreal maximumOffset = 0.0;
+    for (int index = 0; index < offsets.size(); ++index) {
+        const qreal offset = offsets.at(index);
+        maximumOffset = qMax(maximumOffset, offset);
+        GeometryPiece piece;
+        piece.path.addRect(QRectF(offset - 4.0, -4.0, 8.0, 8.0));
+        piece.anchor = QPointF(offset, 0.0);
+        piece.originalAnchor = piece.anchor;
+        piece.layoutOrigin = piece.anchor;
+        piece.layoutAdvance = advance;
+        piece.sourceGlyphIndex = index;
+        piece.sourceClusterStart = index;
+        geometry.pieces.push_back(std::move(piece));
+    }
+    geometry.setReferenceBounds(QRectF(0.0, -8.0,
+                                       maximumOffset + advance, 16.0));
+    geometry.recomputeBounds();
+    return geometry;
+}
+
+QVector<qreal> effectAnchorDisplacements(VectorGeometry geometry,
+                                         const Effect& effect)
+{
+    QVector<qreal> before;
+    before.reserve(geometry.pieces.size());
+    for (const GeometryPiece& piece : geometry.pieces) {
+        before.push_back(piece.anchor.y());
+    }
+    effect.apply(geometry, {geometry.referenceBounds, geometry.referenceHeight});
+
+    QVector<qreal> result;
+    result.reserve(geometry.pieces.size());
+    for (int index = 0; index < geometry.pieces.size(); ++index) {
+        result.push_back(geometry.pieces.at(index).anchor.y() - before.at(index));
+    }
+    return result;
+}
+
+PathGeometry verticalEffectPath()
+{
+    PathGeometry path;
+    path.id = QStringLiteral("effect-vertical");
+    path.nodes = {
+        {QStringLiteral("vertical-start"), QPointF(500.0, 100.0), {}, {}, false, false},
+        {QStringLiteral("vertical-end"), QPointF(500.0, 700.0), {}, {}, false, false},
+    };
+    return path;
+}
+
+PathGeometry backtrackingEffectPath()
+{
+    PathGeometry path;
+    path.id = QStringLiteral("effect-backtracking");
+    path.nodes = {
+        {QStringLiteral("backtracking-0"), QPointF(0.0, 0.0), {}, {}, false, false},
+        {QStringLiteral("backtracking-1"), QPointF(200.0, 0.0), {}, {}, false, false},
+        {QStringLiteral("backtracking-2"), QPointF(0.0, 200.0), {}, {}, false, false},
+        {QStringLiteral("backtracking-3"), QPointF(200.0, 200.0), {}, {}, false, false},
+    };
+    return path;
+}
+
+PathGeometry curvedClosedEffectPath()
+{
+    PathGeometry path;
+    path.id = QStringLiteral("effect-curved-closed");
+    PathNode first;
+    first.id = QStringLiteral("curved-0");
+    first.anchor = QPointF(0.0, 0.0);
+    first.incomingHandle = QPointF(-80.0, 100.0);
+    first.hasIncomingHandle = true;
+    first.outgoingHandle = QPointF(100.0, -80.0);
+    first.hasOutgoingHandle = true;
+
+    PathNode second;
+    second.id = QStringLiteral("curved-1");
+    second.anchor = QPointF(400.0, 0.0);
+    second.incomingHandle = QPointF(300.0, -80.0);
+    second.hasIncomingHandle = true;
+    second.outgoingHandle = QPointF(480.0, 100.0);
+    second.hasOutgoingHandle = true;
+
+    PathNode third;
+    third.id = QStringLiteral("curved-2");
+    third.anchor = QPointF(400.0, 400.0);
+    third.incomingHandle = QPointF(480.0, 300.0);
+    third.hasIncomingHandle = true;
+    third.outgoingHandle = QPointF(300.0, 480.0);
+    third.hasOutgoingHandle = true;
+
+    PathNode fourth;
+    fourth.id = QStringLiteral("curved-3");
+    fourth.anchor = QPointF(0.0, 400.0);
+    fourth.incomingHandle = QPointF(100.0, 480.0);
+    fourth.hasIncomingHandle = true;
+    fourth.outgoingHandle = QPointF(-80.0, 300.0);
+    fourth.hasOutgoingHandle = true;
+
+    path.nodes = {first, second, third, fourth};
+    path.closed = true;
+    return path;
+}
+
 } // namespace
 
 class CoreTests final : public QObject {
@@ -169,6 +282,22 @@ class CoreTests final : public QObject {
 
 private slots:
     void projectSerializationRoundTrip();
+    void pathGeometryRoundTripAndReverseIsInvolutive();
+    void pathArcLengthUsesBoundedDistanceQueries();
+    void pathArcLengthMatchesIndependentDenseOracle();
+    void pathClosedSeamTransformAndSideSemantics();
+    void pathSubdivisionAndDegenerateGeometryStayBounded();
+    void pathLayoutClipsOpenOverflowWithoutEndpointPileup();
+    void pathLayoutPreservesClustersThroughEffects();
+    void postPathEffectsFollowPathProgressInsteadOfSourceAnchors();
+    void postPathEffectsFollowArcLengthTraversal();
+    void complexShapingPlacementHasFiniteAdvancesAndClusters();
+    void pathPipelineAppliesEffectsAndDeformationToFinalGeometry();
+    void pathLayoutHonorsCancellationBudget();
+    void pathCancellationThresholdsDoNotPoisonPathStageCaches();
+    void pathControllerDuplicateAndStaleGestureKeepIdentitySafe();
+    void pathSerializationRejectsCorruptionAndBudgets();
+    void pathUndoTargetsExplicitObjectAndRestoresFingerprint();
     void projectV1TrackingMigrates();
     void projectV2DeformationDefaults();
     void presetSerializationRoundTrip();
@@ -258,6 +387,13 @@ void CoreTests::projectSerializationRoundTrip()
     original.title = QStringLiteral("Round trip");
     TextObject& object = original.primaryTextObject();
     object = configuredText();
+    object.path = PathGeometry::makeDefault(420.0, 0.0);
+    object.pathLayout.enabled = true;
+    object.pathLayout.pathId = object.path->id;
+    object.pathLayout.startOffset = 12.5;
+    object.pathLayout.baselineOffset = -4.0;
+    object.pathLayout.reverse = true;
+    object.pathLayout.flip = true;
     original.activeObjectId = object.id;
 
     auto wave = std::make_unique<WaveEffect>();
@@ -299,6 +435,9 @@ void CoreTests::projectSerializationRoundTrip()
     QVERIFY(restored.primaryTextObject().font == object.font);
     QCOMPARE(restored.primaryTextObject().typography.fontSize, object.typography.fontSize);
     QCOMPARE(restored.primaryTextObject().typography.trackingEm, object.typography.trackingEm);
+    QVERIFY(restored.primaryTextObject().path.has_value());
+    QVERIFY(restored.primaryTextObject().path.value() == object.path.value());
+    QVERIFY(restored.primaryTextObject().pathLayout == object.pathLayout);
     QCOMPARE(restored.primaryTextObject().fill, object.fill);
     QCOMPARE(restored.primaryTextObject().effects.size(), 2);
     QCOMPARE(restored.primaryTextObject().effects.at(0)->typeId(), QStringLiteral("wave"));
@@ -308,6 +447,1246 @@ void CoreTests::projectSerializationRoundTrip()
     const auto* restoredJitter = dynamic_cast<const GlyphJitterEffect*>(restored.primaryTextObject().effects.at(1));
     QVERIFY(restoredJitter);
     QCOMPARE(restoredJitter->seed, 987654321U);
+}
+
+void CoreTests::pathGeometryRoundTripAndReverseIsInvolutive()
+{
+    PathGeometry path;
+    path.id = QStringLiteral("path-test");
+    path.closed = true;
+    PathNode first;
+    first.id = QStringLiteral("node-a");
+    first.anchor = QPointF(0.0, 0.0);
+    first.hasOutgoingHandle = true;
+    first.outgoingHandle = QPointF(25.0, 60.0);
+    PathNode second;
+    second.id = QStringLiteral("node-b");
+    second.anchor = QPointF(100.0, 0.0);
+    second.hasIncomingHandle = true;
+    second.incomingHandle = QPointF(75.0, 60.0);
+    PathNode third;
+    third.id = QStringLiteral("node-c");
+    third.anchor = QPointF(100.0, 100.0);
+    path.nodes = {first, second, third};
+    QVERIFY(path.validate());
+
+    PathGeometry restored;
+    QString error;
+    QVERIFY2(PathGeometry::fromJson(path.toJson(), &restored, &error), qPrintable(error));
+    QVERIFY(restored == path);
+    restored.reverseDirection();
+    QVERIFY(restored != path);
+    restored.reverseDirection();
+    QVERIFY(restored == path);
+}
+
+void CoreTests::pathArcLengthUsesBoundedDistanceQueries()
+{
+    const PathGeometry line = PathGeometry::makeDefault(100.0);
+    const std::optional<PathArcLengthTable> lineTable = PathArcLengthTable::build(line);
+    QVERIFY(lineTable.has_value());
+    QVERIFY(std::abs(lineTable->totalLength() - 100.0) < 1.0e-6);
+    const PathPosition quarter = lineTable->positionAt(25.0, false);
+    QVERIFY(quarter.valid);
+    QVERIFY(std::abs(quarter.point.x() - 25.0) < 1.0e-6);
+    QVERIFY(std::abs(quarter.point.y()) < 1.0e-6);
+    QVERIFY(std::abs(quarter.tangent.x() - 1.0) < 1.0e-6);
+    QVERIFY(std::abs(quarter.tangent.y()) < 1.0e-6);
+    QVERIFY(!lineTable->positionAt(101.0, false).valid);
+    const PathPosition wrapped = lineTable->positionAt(-25.0, true);
+    QVERIFY(wrapped.valid);
+    QVERIFY(std::abs(wrapped.point.x() - 75.0) < 1.0e-6);
+
+    PathGeometry cubic;
+    cubic.id = QStringLiteral("cubic-test");
+    PathNode start;
+    start.id = QStringLiteral("cubic-start");
+    start.anchor = QPointF(0.0, 0.0);
+    start.hasOutgoingHandle = true;
+    start.outgoingHandle = QPointF(0.0, 100.0);
+    PathNode end;
+    end.id = QStringLiteral("cubic-end");
+    end.anchor = QPointF(100.0, 0.0);
+    end.hasIncomingHandle = true;
+    end.incomingHandle = QPointF(100.0, 100.0);
+    cubic.nodes = {start, end};
+    const std::optional<PathArcLengthTable> cubicTable = PathArcLengthTable::build(cubic);
+    QVERIFY(cubicTable.has_value());
+    QVERIFY(cubicTable->totalLength() > 100.0);
+    const PathPosition endPosition = cubicTable->positionAt(cubicTable->totalLength(), false);
+    QVERIFY(endPosition.valid);
+    QVERIFY(QLineF(endPosition.point, end.anchor).length() < 1.0e-5);
+}
+
+void CoreTests::pathArcLengthMatchesIndependentDenseOracle()
+{
+    PathGeometry path;
+    path.id = QStringLiteral("dense-oracle");
+    PathNode start;
+    start.id = QStringLiteral("dense-start");
+    start.anchor = QPointF(0.0, 0.0);
+    start.hasOutgoingHandle = true;
+    start.outgoingHandle = QPointF(10.0, 160.0);
+    PathNode end;
+    end.id = QStringLiteral("dense-end");
+    end.anchor = QPointF(220.0, 0.0);
+    end.hasIncomingHandle = true;
+    end.incomingHandle = QPointF(210.0, -160.0);
+    path.nodes = {start, end};
+
+    const std::optional<PathArcLengthTable> table = PathArcLengthTable::build(path);
+    QVERIFY(table.has_value());
+
+    // This is intentionally a dense fixed-parameter polyline oracle. It does
+    // not reuse the production subdivision or distance inversion code.
+    const QPainterPath painterPath = path.toPainterPath();
+    constexpr int DenseSamples = 20000;
+    QVector<QPointF> points;
+    QVector<qreal> distances;
+    points.reserve(DenseSamples + 1);
+    distances.reserve(DenseSamples + 1);
+    points.push_back(painterPath.pointAtPercent(0.0));
+    distances.push_back(0.0);
+    for (int index = 1; index <= DenseSamples; ++index) {
+        const QPointF point = painterPath.pointAtPercent(
+            static_cast<qreal>(index) / DenseSamples);
+        points.push_back(point);
+        distances.push_back(distances.constLast() + QLineF(points.at(index - 1), point).length());
+    }
+    const qreal denseLength = distances.constLast();
+    QVERIFY(denseLength > 0.0);
+    QVERIFY(std::abs(table->totalLength() - denseLength) < 0.8);
+
+    for (const qreal fraction : {0.15, 0.35, 0.6, 0.85}) {
+        const qreal requested = table->totalLength() * fraction;
+        const PathPosition actual = table->positionAt(requested, false);
+        QVERIFY(actual.valid);
+        const qreal denseDistance = denseLength * fraction;
+        const auto upper = std::lower_bound(distances.cbegin(), distances.cend(), denseDistance);
+        const int rightIndex = qBound(1, static_cast<int>(upper - distances.cbegin()),
+                                      distances.size() - 1);
+        const qreal leftDistance = distances.at(rightIndex - 1);
+        const qreal step = distances.at(rightIndex) - leftDistance;
+        const qreal localFraction = step > 0.0
+            ? (denseDistance - leftDistance) / step : 0.0;
+        const QPointF expected = points.at(rightIndex - 1) * (1.0 - localFraction)
+            + points.at(rightIndex) * localFraction;
+        QVERIFY2(QLineF(actual.point, expected).length() < 1.0,
+                 qPrintable(QStringLiteral("arc-distance error at fraction %1")
+                                .arg(fraction)));
+    }
+}
+
+void CoreTests::pathClosedSeamTransformAndSideSemantics()
+{
+    PathGeometry closed = PathGeometry::makeDefault(100.0);
+    closed.closed = true;
+    const auto table = PathArcLengthTable::build(closed);
+    QVERIFY(table.has_value());
+    QVERIFY(table->positionAt(0.0, true).valid);
+    const PathPosition wrappedForward = table->positionAt(110.0, true);
+    const PathPosition wrappedBackward = table->positionAt(-10.0, true);
+    QVERIFY(wrappedForward.valid);
+    QVERIFY(wrappedBackward.valid);
+    // A closed two-node path contains the forward segment and its explicit
+    // closing segment, so its perimeter is 200 rather than 100.
+    QVERIFY(std::abs(wrappedForward.point.x() - 90.0) < 1.0e-6);
+    QVERIFY(std::abs(wrappedBackward.point.x() - 10.0) < 1.0e-6);
+
+    PathGeometry reversed = closed;
+    reversed.reverseDirection();
+    const auto reversedTable = PathArcLengthTable::build(reversed);
+    QVERIFY(reversedTable.has_value());
+    const PathPosition reversedStart = reversedTable->positionAt(0.0, false);
+    QVERIFY(reversedStart.valid);
+    QVERIFY(QLineF(reversedStart.point, QPointF(100.0, 0.0)).length() < 1.0e-6);
+    QVERIFY(reversedStart.tangent.x() < -0.99);
+    reversed.reverseDirection();
+    QVERIFY(reversed == closed);
+
+    ShapedText shaped;
+    shaped.lineBounds = {QRectF(0.0, 0.0, 100.0, 20.0)};
+    VectorGeometry base;
+    GeometryPiece piece;
+    piece.path.addRect(QRectF(0.0, -10.0, 10.0, 10.0));
+    piece.anchor = QPointF();
+    piece.originalAnchor = piece.anchor;
+    piece.layoutOrigin = piece.anchor;
+    piece.layoutAdvance = 10.0;
+    base.pieces.push_back(piece);
+    base.setReferenceBounds(QRectF(0.0, -10.0, 10.0, 10.0));
+    base.recomputeBounds();
+    PathTypographyProperties settings;
+    settings.enabled = true;
+    settings.pathId = closed.id;
+    settings.baselineOffset = 5.0;
+
+    QString error;
+    VectorGeometry normal = base;
+    QVERIFY2(PathLayoutEngine::apply(&normal, shaped, closed, settings, &error),
+             qPrintable(error));
+    settings.flip = true;
+    VectorGeometry flipped = base;
+    QVERIFY2(PathLayoutEngine::apply(&flipped, shaped, closed, settings, &error),
+             qPrintable(error));
+    QCOMPARE(normal.pieces.front().anchor.x(), flipped.pieces.front().anchor.x());
+    QVERIFY(std::abs(normal.pieces.front().anchor.y()
+                     + flipped.pieces.front().anchor.y()) < 1.0e-6);
+    const auto normalFirst = normal.pieces.front().path.elementAt(0);
+    const auto normalSecond = normal.pieces.front().path.elementAt(1);
+    const auto flippedFirst = flipped.pieces.front().path.elementAt(0);
+    const auto flippedSecond = flipped.pieces.front().path.elementAt(1);
+    QVERIFY(normalSecond.x - normalFirst.x > 0.0);
+    QVERIFY(flippedSecond.x - flippedFirst.x > 0.0);
+    QVERIFY(std::abs(normalSecond.y - normalFirst.y) < 1.0e-6);
+    QVERIFY(std::abs(flippedSecond.y - flippedFirst.y) < 1.0e-6);
+
+    ObjectTransform transform;
+    transform.position = QPointF(80.0, -35.0);
+    transform.rotation = 23.0;
+    transform.scale = QPointF(-1.5, 0.75);
+    transform.hasPivot = true;
+    transform.pivotLocal = QPointF(50.0, 0.0);
+    const ObjectFrame frame = ObjectFrame::fromTransform(
+        transform, QRectF(0.0, -20.0, 100.0, 40.0));
+    const QPointF localPoint = normal.pieces.front().anchor;
+    const QPointF pagePoint = frame.localPointToPage(localPoint);
+    QVERIFY(QLineF(frame.pagePointToLocal(pagePoint), localPoint).length() < 1.0e-8);
+}
+
+void CoreTests::pathSubdivisionAndDegenerateGeometryStayBounded()
+{
+    // The following two cubic segments are the exact de Casteljau split of
+    // one cubic at t=.5. Their arc lengths should agree independently of the
+    // implementation's internal lookup segmentation.
+    PathGeometry unsplit;
+    unsplit.id = QStringLiteral("unsplit");
+    PathNode u0;
+    u0.id = QStringLiteral("u0");
+    u0.anchor = QPointF(0.0, 0.0);
+    u0.hasOutgoingHandle = true;
+    u0.outgoingHandle = QPointF(0.0, 120.0);
+    PathNode u1;
+    u1.id = QStringLiteral("u1");
+    u1.anchor = QPointF(160.0, 0.0);
+    u1.hasIncomingHandle = true;
+    u1.incomingHandle = QPointF(160.0, 120.0);
+    unsplit.nodes = {u0, u1};
+
+    PathGeometry split;
+    split.id = QStringLiteral("split");
+    PathNode s0;
+    s0.id = QStringLiteral("s0");
+    s0.anchor = QPointF(0.0, 0.0);
+    s0.hasOutgoingHandle = true;
+    s0.outgoingHandle = QPointF(0.0, 60.0);
+    PathNode s1;
+    s1.id = QStringLiteral("s1");
+    s1.anchor = QPointF(80.0, 90.0);
+    s1.hasIncomingHandle = true;
+    s1.incomingHandle = QPointF(40.0, 90.0);
+    s1.hasOutgoingHandle = true;
+    s1.outgoingHandle = QPointF(120.0, 90.0);
+    PathNode s2;
+    s2.id = QStringLiteral("s2");
+    s2.anchor = QPointF(160.0, 0.0);
+    s2.hasIncomingHandle = true;
+    s2.incomingHandle = QPointF(160.0, 60.0);
+    split.nodes = {s0, s1, s2};
+
+    const auto unsplitTable = PathArcLengthTable::build(unsplit);
+    const auto splitTable = PathArcLengthTable::build(split);
+    QVERIFY(unsplitTable.has_value());
+    QVERIFY(splitTable.has_value());
+    QVERIFY(std::abs(unsplitTable->totalLength() - splitTable->totalLength()) < 0.8);
+
+    PathGeometry degenerate;
+    degenerate.id = QStringLiteral("degenerate");
+    PathNode d0;
+    d0.id = QStringLiteral("d0");
+    d0.anchor = QPointF(12.0, 12.0);
+    PathNode d1;
+    d1.id = QStringLiteral("d1");
+    d1.anchor = d0.anchor;
+    degenerate.nodes = {d0, d1};
+    const auto degenerateTable = PathArcLengthTable::build(degenerate);
+    QVERIFY(degenerateTable.has_value());
+    QCOMPARE(degenerateTable->totalLength(), 0.0);
+    QVERIFY(!degenerateTable->positionAt(0.0, false).valid);
+
+    ShapedText shaped;
+    shaped.lineBounds = {QRectF(0.0, 0.0, 100.0, 20.0)};
+    VectorGeometry geometry;
+    for (int index = 0; index < 3; ++index) {
+        GeometryPiece piece;
+        piece.path.addRect(QRectF(index * 15.0, -10.0, 8.0, 10.0));
+        piece.anchor = QPointF(index * 15.0, 0.0);
+        piece.originalAnchor = piece.anchor;
+        piece.layoutOrigin = piece.anchor;
+        piece.layoutAdvance = 8.0;
+        geometry.pieces.push_back(piece);
+    }
+    geometry.setReferenceBounds(QRectF(0.0, -10.0, 38.0, 10.0));
+    geometry.recomputeBounds();
+    PathTypographyProperties settings;
+    settings.enabled = true;
+    settings.pathId = degenerate.id;
+    QString error;
+    QVERIFY2(PathLayoutEngine::apply(&geometry, shaped, degenerate, settings, &error),
+             qPrintable(error));
+    for (const GeometryPiece& piece : geometry.pieces) {
+        QVERIFY(piece.path.isEmpty());
+    }
+}
+
+void CoreTests::pathLayoutClipsOpenOverflowWithoutEndpointPileup()
+{
+    ShapedText shaped;
+    shaped.lineBounds = {QRectF(0.0, 0.0, 100.0, 20.0)};
+    shaped.lineCount = 1;
+    VectorGeometry geometry;
+    for (const qreal x : {0.0, 20.0, 95.0}) {
+        GeometryPiece piece;
+        piece.path.addRect(QRectF(x, -10.0, 10.0, 10.0));
+        piece.anchor = QPointF(x, 0.0);
+        piece.originalAnchor = piece.anchor;
+        piece.layoutOrigin = piece.anchor;
+        piece.layoutAdvance = 10.0;
+        geometry.pieces.push_back(piece);
+    }
+    geometry.setReferenceBounds(QRectF(0.0, -10.0, 105.0, 10.0));
+    geometry.recomputeBounds();
+
+    const PathGeometry path = PathGeometry::makeDefault(100.0);
+    PathTypographyProperties settings;
+    settings.enabled = true;
+    settings.pathId = path.id;
+    QString error;
+    QVERIFY2(PathLayoutEngine::apply(&geometry, shaped, path, settings, &error),
+             qPrintable(error));
+    QVERIFY(!geometry.pieces.at(0).path.isEmpty());
+    QVERIFY(!geometry.pieces.at(1).path.isEmpty());
+    QVERIFY(geometry.pieces.at(2).path.isEmpty());
+    QVERIFY(std::abs(geometry.pieces.at(0).anchor.x()) < 1.0e-6);
+    QVERIFY(std::abs(geometry.pieces.at(1).anchor.x() - 20.0) < 1.0e-6);
+    QCOMPARE(geometry.pieces.at(0).originalAnchor, QPointF(0.0, 0.0));
+    QCOMPARE(geometry.pieces.at(1).originalAnchor, QPointF(20.0, 0.0));
+}
+
+void CoreTests::pathLayoutPreservesClustersThroughEffects()
+{
+    TextObject object = configuredText(
+        QStringLiteral("A\u0301 \u041f\u0440\u0438\u0432\u0435\u0442\nemoji \U0001F600"));
+    TextEngine engine;
+    const ShapedText shaped = engine.shape(object);
+    QVERIFY2(shaped.error.isEmpty(), qPrintable(shaped.error));
+    VectorGeometry geometry = GlyphGeometryBuilder::build(
+        shaped, object.typography.fontSize, object.font.underline, object.font.strikeOut);
+    QVector<QPair<int, int>> metadata;
+    for (const GeometryPiece& piece : geometry.pieces) {
+        metadata.push_back({piece.sourceClusterStart, piece.sourceClusterLength});
+    }
+
+    const PathGeometry path = PathGeometry::makeDefault(1600.0);
+    PathTypographyProperties settings;
+    settings.enabled = true;
+    settings.pathId = path.id;
+    settings.baselineOffset = 8.0;
+    QString error;
+    QVERIFY2(PathLayoutEngine::apply(&geometry, shaped, path, settings, &error),
+             qPrintable(error));
+    QCOMPARE(geometry.pieces.size(), metadata.size());
+    for (int index = 0; index < geometry.pieces.size(); ++index) {
+        QCOMPARE(geometry.pieces.at(index).sourceClusterStart, metadata.at(index).first);
+        QCOMPARE(geometry.pieces.at(index).sourceClusterLength, metadata.at(index).second);
+    }
+
+    auto wave = std::make_unique<WaveEffect>();
+    wave->amplitude = 0.4;
+    wave->frequency = 1.7;
+    wave->scope = {EffectScopeKind::TextRange, 0,
+                   qMax<int>(1, static_cast<int>(object.sourceText.size() / 2))};
+    EffectStack effects;
+    effects.append(std::move(wave));
+    const QByteArray before = geometrySignature(geometry);
+    effects.apply(geometry);
+    QVERIFY(geometrySignature(geometry) != before);
+    for (int index = 0; index < geometry.pieces.size(); ++index) {
+        QCOMPARE(geometry.pieces.at(index).sourceClusterStart, metadata.at(index).first);
+        QCOMPARE(geometry.pieces.at(index).sourceClusterLength, metadata.at(index).second);
+    }
+}
+
+void CoreTests::postPathEffectsFollowPathProgressInsteadOfSourceAnchors()
+{
+    ShapedText shaped;
+    shaped.lineBounds = {QRectF(0.0, 0.0, 80.0, 24.0)};
+
+    VectorGeometry geometry;
+    for (int index = 0; index < 4; ++index) {
+        GeometryPiece piece;
+        const qreal x = index * 20.0;
+        piece.path.addRect(QRectF(x, -8.0, 12.0, 16.0));
+        piece.anchor = QPointF(x, 0.0);
+        piece.originalAnchor = piece.anchor;
+        piece.layoutOrigin = piece.anchor;
+        piece.layoutAdvance = 12.0;
+        piece.sourceGlyphIndex = index;
+        piece.sourceClusterStart = index;
+        geometry.pieces.push_back(piece);
+    }
+    geometry.setReferenceBounds(QRectF(0.0, -8.0, 92.0, 16.0));
+    geometry.recomputeBounds();
+
+    PathGeometry translated;
+    translated.id = QStringLiteral("translated-effect-reference");
+    PathNode start;
+    start.id = QStringLiteral("translated-start");
+    start.anchor = QPointF(500.0, 0.0);
+    PathNode end;
+    end.id = QStringLiteral("translated-end");
+    end.anchor = QPointF(900.0, 0.0);
+    translated.nodes = {start, end};
+
+    PathTypographyProperties settings;
+    settings.enabled = true;
+    settings.pathId = translated.id;
+    QString error;
+    QVERIFY2(PathLayoutEngine::apply(&geometry, shaped, translated, settings, &error),
+             qPrintable(error));
+    QVERIFY(geometry.pieces.at(3).anchor.x() > geometry.pieces.at(0).anchor.x());
+
+    WaveEffect wave;
+    wave.amplitude = 1.0;
+    wave.frequency = 1.0;
+    wave.phase = 0.125;
+    wave.apply(geometry, {geometry.referenceBounds, geometry.referenceHeight});
+
+    // The path is deliberately translated far beyond the source layout. A
+    // source-anchor/reference-bounds mixup clamps every piece to progress 0,
+    // so this assertion fails at the reviewed Phase 4D head while remaining
+    // independent of any particular font outline.
+    const qreal firstDisplacement = geometry.pieces.at(0).anchor.y();
+    const qreal lastDisplacement = geometry.pieces.at(3).anchor.y();
+    QVERIFY2(std::abs(lastDisplacement - firstDisplacement) > 0.01,
+             "post-path wave progress must follow the translated path traversal");
+
+    // Reverse traversal and a closed curved path exercise the same contract
+    // at the two boundaries where a simple x-normalization is least useful.
+    settings.reverse = true;
+    geometry = [&] {
+        VectorGeometry rebuilt;
+        for (int index = 0; index < 4; ++index) {
+            GeometryPiece piece;
+            const qreal x = index * 20.0;
+            piece.path.addRect(QRectF(x, -8.0, 12.0, 16.0));
+            piece.anchor = QPointF(x, 0.0);
+            piece.originalAnchor = piece.anchor;
+            piece.layoutOrigin = piece.anchor;
+            piece.layoutAdvance = 12.0;
+            piece.sourceGlyphIndex = index;
+            piece.sourceClusterStart = index;
+            rebuilt.pieces.push_back(piece);
+        }
+        rebuilt.setReferenceBounds(QRectF(0.0, -8.0, 92.0, 16.0));
+        rebuilt.recomputeBounds();
+        return rebuilt;
+    }();
+    QVERIFY2(PathLayoutEngine::apply(&geometry, shaped, translated, settings, &error),
+             qPrintable(error));
+    wave.apply(geometry, {geometry.referenceBounds, geometry.referenceHeight});
+    QVERIFY(std::abs(geometry.pieces.at(3).anchor.y()
+                     - geometry.pieces.at(0).anchor.y()) > 0.01);
+
+    PathGeometry curved = translated;
+    curved.closed = true;
+    curved.nodes.front().hasOutgoingHandle = true;
+    curved.nodes.front().outgoingHandle = QPointF(500.0, 280.0);
+    curved.nodes.back().hasIncomingHandle = true;
+    curved.nodes.back().incomingHandle = QPointF(900.0, 280.0);
+    curved.nodes.push_back({QStringLiteral("translated-bottom"),
+                            QPointF(900.0, 360.0), {}, {}, false, false});
+    settings.reverse = false;
+    geometry = [&] {
+        VectorGeometry rebuilt;
+        for (int index = 0; index < 4; ++index) {
+            GeometryPiece piece;
+            const qreal x = index * 20.0;
+            piece.path.addRect(QRectF(x, -8.0, 12.0, 16.0));
+            piece.anchor = QPointF(x, 0.0);
+            piece.originalAnchor = piece.anchor;
+            piece.layoutOrigin = piece.anchor;
+            piece.layoutAdvance = 12.0;
+            piece.sourceGlyphIndex = index;
+            piece.sourceClusterStart = index;
+            rebuilt.pieces.push_back(piece);
+        }
+        rebuilt.setReferenceBounds(QRectF(0.0, -8.0, 92.0, 16.0));
+        rebuilt.recomputeBounds();
+        return rebuilt;
+    }();
+    QVERIFY2(PathLayoutEngine::apply(&geometry, shaped, curved, settings, &error),
+             qPrintable(error));
+    wave.apply(geometry, {geometry.referenceBounds, geometry.referenceHeight});
+    QVERIFY(std::abs(geometry.pieces.at(3).anchor.y()
+                     - geometry.pieces.at(0).anchor.y()) > 0.01);
+}
+
+void CoreTests::postPathEffectsFollowArcLengthTraversal()
+{
+    ShapedText shaped;
+    shaped.lineBounds = {QRectF(0.0, 0.0, 2400.0, 24.0)};
+
+    WaveEffect wave;
+    wave.amplitude = 1.0;
+    wave.frequency = 0.25;
+    wave.phase = 0.0;
+
+    auto applyPath = [&](VectorGeometry* geometry,
+                         const PathGeometry& path,
+                         const PathTypographyProperties& settings,
+                         QString* error) {
+        return PathLayoutEngine::apply(geometry, shaped, path, settings, error);
+    };
+
+    {
+        const PathGeometry path = verticalEffectPath();
+        PathTypographyProperties settings;
+        settings.enabled = true;
+        settings.pathId = path.id;
+        VectorGeometry geometry = pathEffectFixture(
+            {0.0, 120.0, 240.0, 360.0}, 12.0);
+        QString error;
+        QVERIFY2(applyPath(&geometry, path, settings, &error), qPrintable(error));
+        const QVector<qreal> displacements = effectAnchorDisplacements(geometry, wave);
+        const QVector<qreal> expectedProgress = {0.0, 0.2, 0.4, 0.6};
+        for (int index = 0; index < geometry.pieces.size(); ++index) {
+            QVERIFY(geometry.pieces.at(index).hasEffectReferenceProgress);
+            QVERIFY(std::abs(geometry.pieces.at(index).effectReferenceProgress
+                             - expectedProgress.at(index)) < 1.0e-6);
+        }
+        for (int index = 1; index < displacements.size(); ++index) {
+            QVERIFY2(displacements.at(index) > displacements.at(index - 1) + 1.0e-4,
+                     "vertical path progression must increase with arc distance");
+        }
+
+        PathTypographyProperties shiftedSettings = settings;
+        shiftedSettings.startOffset = 60.0;
+        VectorGeometry shifted = pathEffectFixture(
+            {0.0, 120.0, 240.0, 360.0}, 12.0);
+        QVERIFY2(applyPath(&shifted, path, shiftedSettings, &error), qPrintable(error));
+        QVERIFY(std::abs(shifted.pieces.at(0).effectReferenceProgress - 0.1) < 1.0e-6);
+
+        PathTypographyProperties baselineSettings = settings;
+        baselineSettings.baselineOffset = 42.0;
+        VectorGeometry baseline = pathEffectFixture(
+            {0.0, 120.0, 240.0, 360.0}, 12.0);
+        QVERIFY2(applyPath(&baseline, path, baselineSettings, &error), qPrintable(error));
+        PathTypographyProperties flipSettings = settings;
+        flipSettings.flip = true;
+        VectorGeometry flipped = pathEffectFixture(
+            {0.0, 120.0, 240.0, 360.0}, 12.0);
+        QVERIFY2(applyPath(&flipped, path, flipSettings, &error), qPrintable(error));
+        for (int index = 0; index < geometry.pieces.size(); ++index) {
+            QVERIFY(std::abs(baseline.pieces.at(index).effectReferenceProgress
+                             - geometry.pieces.at(index).effectReferenceProgress) < 1.0e-6);
+            QVERIFY(std::abs(flipped.pieces.at(index).effectReferenceProgress
+                             - geometry.pieces.at(index).effectReferenceProgress) < 1.0e-6);
+        }
+
+        QTransform objectTransform;
+        objectTransform.translate(120.0, -55.0);
+        VectorGeometry transformed = geometry;
+        transformed.transformAll(objectTransform);
+        for (int index = 0; index < geometry.pieces.size(); ++index) {
+            QVERIFY(std::abs(transformed.pieces.at(index).effectReferenceProgress
+                             - geometry.pieces.at(index).effectReferenceProgress) < 1.0e-6);
+        }
+
+        VectorGeometry clipped = pathEffectFixture({0.0, 1000.0}, 12.0);
+        for (GeometryPiece& piece : clipped.pieces) {
+            piece.effectReferenceProgress = 0.9;
+            piece.hasEffectReferenceProgress = true;
+        }
+        QVERIFY2(applyPath(&clipped, path, settings, &error), qPrintable(error));
+        QVERIFY(clipped.pieces.at(0).hasEffectReferenceProgress);
+        QVERIFY(!clipped.pieces.at(1).hasEffectReferenceProgress);
+
+        const test::GeometrySignature signature = test::geometrySignature(geometry);
+        QVERIFY(signature.pieces.at(1).hasEffectReferenceProgress);
+        QVERIFY(signature.pieces.at(1).effectReferenceProgress != 0);
+        VectorGeometry changedProgress = geometry;
+        changedProgress.pieces[1].effectReferenceProgress += 0.1;
+        QString difference;
+        QVERIFY2(!test::compareGeometry(
+                      signature, test::geometrySignature(changedProgress), &difference),
+                  "structured geometry signatures must observe path progress metadata");
+        QVERIFY(difference.contains(QStringLiteral("effectReferenceProgress")));
+
+        TrailEffect trail(QStringLiteral("trail"), QStringLiteral("Trail"));
+        QVERIFY(trail.setParameter(QStringLiteral("copyCount"), 1.0));
+        VectorGeometry generated = geometry;
+        trail.apply(generated, {generated.referenceBounds, generated.referenceHeight});
+        QCOMPARE(generated.pieces.size(), geometry.pieces.size() * 2);
+        for (int index = geometry.pieces.size(); index < generated.pieces.size(); ++index) {
+            const int sourceIndex = index - geometry.pieces.size();
+            QVERIFY(generated.pieces.at(index).hasEffectReferenceProgress);
+            QVERIFY(std::abs(generated.pieces.at(index).effectReferenceProgress
+                             - geometry.pieces.at(sourceIndex).effectReferenceProgress) < 1.0e-6);
+        }
+    }
+
+    {
+        const PathGeometry path = backtrackingEffectPath();
+        PathTypographyProperties settings;
+        settings.enabled = true;
+        settings.pathId = path.id;
+        VectorGeometry geometry = pathEffectFixture(
+            {0.0, 150.0, 250.0, 350.0, 500.0}, 10.0);
+        QString error;
+        QVERIFY2(applyPath(&geometry, path, settings, &error), qPrintable(error));
+        const QVector<qreal> displacements = effectAnchorDisplacements(geometry, wave);
+        const std::optional<PathArcLengthTable> table = PathArcLengthTable::build(path);
+        QVERIFY(table.has_value());
+        const qreal total = table->totalLength();
+        const QVector<qreal> expectedProgress = {
+            0.0, 150.0 / total, 250.0 / total, 350.0 / total, 500.0 / total};
+        for (int index = 0; index < geometry.pieces.size(); ++index) {
+            QVERIFY(geometry.pieces.at(index).hasEffectReferenceProgress);
+            QVERIFY(std::abs(geometry.pieces.at(index).effectReferenceProgress
+                             - expectedProgress.at(index)) < 1.0e-6);
+        }
+        for (int index = 1; index < displacements.size(); ++index) {
+            QVERIFY2(displacements.at(index) > displacements.at(index - 1) + 1.0e-4,
+                     "backtracking path progression must follow distance, not X");
+        }
+    }
+
+    {
+        const PathGeometry path = PathGeometry::makeDefault(600.0);
+        PathTypographyProperties settings;
+        settings.enabled = true;
+        settings.pathId = path.id;
+        settings.reverse = true;
+        VectorGeometry geometry = pathEffectFixture(
+            {0.0, 120.0, 240.0, 360.0, 480.0}, 10.0);
+        QString error;
+        QVERIFY2(applyPath(&geometry, path, settings, &error), qPrintable(error));
+        QVERIFY(geometry.pieces.at(1).anchor.x() < geometry.pieces.at(0).anchor.x());
+        const QVector<qreal> displacements = effectAnchorDisplacements(geometry, wave);
+        for (int index = 0; index < geometry.pieces.size(); ++index) {
+            QVERIFY(geometry.pieces.at(index).hasEffectReferenceProgress);
+            QVERIFY(std::abs(geometry.pieces.at(index).effectReferenceProgress
+                             - index * 0.2) < 1.0e-6);
+        }
+        for (int index = 1; index < displacements.size(); ++index) {
+            QVERIFY2(displacements.at(index) > displacements.at(index - 1) + 1.0e-4,
+                     "reverse traversal must still progress from its own start");
+        }
+    }
+
+    {
+        const PathGeometry path = curvedClosedEffectPath();
+        const std::optional<PathArcLengthTable> table = PathArcLengthTable::build(path);
+        QVERIFY(table.has_value());
+        const qreal total = table->totalLength();
+        QVERIFY(total > 100.0);
+
+        PathTypographyProperties settings;
+        settings.enabled = true;
+        settings.pathId = path.id;
+        VectorGeometry geometry = pathEffectFixture(
+            {total - 30.0, total + 90.0}, 8.0);
+        QString error;
+        QVERIFY2(applyPath(&geometry, path, settings, &error), qPrintable(error));
+        ProceduralEffect verticalSpread(
+            QStringLiteral("verticalSpread"), QStringLiteral("Vertical Spread"),
+            ProceduralEffect::Mode::VerticalSpread);
+        QVERIFY(verticalSpread.setParameter(QStringLiteral("strength"), 1.0));
+        const QVector<qreal> displacements = effectAnchorDisplacements(
+            geometry, verticalSpread);
+        const PathPosition beforeSeam = table->positionAt(total - 30.0, true);
+        const PathPosition afterSeam = table->positionAt(total + 90.0, true);
+        QVERIFY(std::abs(geometry.pieces.at(0).effectReferenceProgress
+                         - beforeSeam.distance / total) < 1.0e-6);
+        QVERIFY(std::abs(geometry.pieces.at(1).effectReferenceProgress
+                         - afterSeam.distance / total) < 1.0e-6);
+        QVERIFY2(displacements.at(0) > 0.0,
+                 "closed-path progress must remain near one before the seam");
+        QVERIFY2(displacements.at(1) < 0.0,
+                 "closed-path progress must wrap after the seam");
+    }
+
+    {
+        VectorGeometry ordinary = pathEffectFixture({0.0, 100.0}, 8.0);
+        ordinary.setReferenceBounds(QRectF(0.0, -8.0, 200.0, 16.0));
+        ordinary.recomputeBounds();
+        const QVector<qreal> displacements = effectAnchorDisplacements(ordinary, wave);
+        QCOMPARE(displacements.size(), 2);
+        for (const GeometryPiece& piece : ordinary.pieces) {
+            QVERIFY(!piece.hasEffectReferenceProgress);
+        }
+        QVERIFY(std::abs(displacements.at(0)) < 1.0e-6);
+        const qreal expectedSecond = ordinary.referenceHeight
+            * std::sin(6.28318530717958647692 * wave.frequency * 0.5);
+        QVERIFY(std::abs(displacements.at(1) - expectedSecond) < 1.0e-6);
+    }
+}
+
+void CoreTests::complexShapingPlacementHasFiniteAdvancesAndClusters()
+{
+    const QString rtl = QString(QChar(0x05d0)) + QChar(0x05d1)
+        + QChar(0x05d2) + QChar(0x05d3);
+    const QStringList samples = {
+        QStringLiteral("AV fi"),
+        QStringLiteral("A\u0301"),
+        QStringLiteral("\u041f\u0440\u0438\u0432\u0435\u0442"),
+        QString::fromUtf8("emoji \xF0\x9F\x98\x80"),
+        rtl,
+        QStringLiteral("abc ") + rtl + QStringLiteral(" xyz"),
+    };
+
+    for (const QString& source : samples) {
+        TextObject object = configuredText(source);
+        TextEngine engine;
+        const ShapedText shaped = engine.shape(object);
+        QVERIFY2(shaped.error.isEmpty(), qPrintable(shaped.error));
+        QVERIFY2(!shaped.glyphs.isEmpty(), qPrintable(source));
+
+        int distinctPositions = 0;
+        QPointF previous;
+        bool havePrevious = false;
+        for (const ShapedGlyph& glyph : shaped.glyphs) {
+            QVERIFY(std::isfinite(glyph.position.x()));
+            QVERIFY(std::isfinite(glyph.position.y()));
+            QVERIFY(std::isfinite(glyph.advance));
+            QVERIFY(glyph.advance >= 0.0);
+            QVERIFY(glyph.clusterStart >= 0);
+            QVERIFY(glyph.clusterStart + glyph.clusterLength <= source.size());
+            if (havePrevious && glyph.position != previous) {
+                ++distinctPositions;
+            }
+            previous = glyph.position;
+            havePrevious = true;
+        }
+        if (shaped.glyphs.size() > 1) {
+            QVERIFY2(distinctPositions > 0,
+                     "complex shaped glyphs must not collapse onto one source position");
+        }
+
+        VectorGeometry geometry = GlyphGeometryBuilder::build(
+            shaped, object.typography.fontSize, object.font.underline,
+            object.font.strikeOut);
+        PathGeometry path = PathGeometry::makeDefault(
+            qMax<qreal>(1600.0, shaped.logicalBounds.width() + 800.0), 0.0);
+        PathTypographyProperties settings;
+        settings.enabled = true;
+        settings.pathId = path.id;
+        settings.startOffset = 37.0;
+        QString error;
+        QVERIFY2(PathLayoutEngine::apply(&geometry, shaped, path, settings, &error),
+                 qPrintable(error));
+
+        int visiblePieces = 0;
+        QSet<qint64> anchorX;
+        for (const GeometryPiece& piece : geometry.pieces) {
+            if (piece.path.isEmpty()) continue;
+            ++visiblePieces;
+            QVERIFY(std::isfinite(piece.anchor.x()));
+            QVERIFY(std::isfinite(piece.anchor.y()));
+            anchorX.insert(qRound64(piece.anchor.x() * 1000.0));
+            QVERIFY(piece.sourceClusterStart >= 0);
+            QVERIFY(piece.sourceClusterStart + piece.sourceClusterLength <= source.size());
+        }
+        QVERIFY(visiblePieces > 0);
+        if (visiblePieces > 1) {
+            QVERIFY2(anchorX.size() > 1,
+                     "path placement must not pile complex-shaped glyphs at one endpoint");
+        }
+
+        VectorGeometry reversed = GlyphGeometryBuilder::build(
+            shaped, object.typography.fontSize, object.font.underline,
+            object.font.strikeOut);
+        settings.reverse = true;
+        QVERIFY2(PathLayoutEngine::apply(&reversed, shaped, path, settings, &error),
+                 qPrintable(error));
+        QCOMPARE(reversed.pieces.size(), geometry.pieces.size());
+        for (int index = 0; index < reversed.pieces.size(); ++index) {
+            QCOMPARE(reversed.pieces.at(index).sourceClusterStart,
+                     geometry.pieces.at(index).sourceClusterStart);
+            QCOMPARE(reversed.pieces.at(index).sourceClusterLength,
+                     geometry.pieces.at(index).sourceClusterLength);
+        }
+    }
+}
+
+void CoreTests::pathPipelineAppliesEffectsAndDeformationToFinalGeometry()
+{
+    TextObject base = configuredText(QStringLiteral("Path pipeline"));
+    base.path = PathGeometry::makeDefault(1400.0, 0.0);
+    base.pathLayout.enabled = true;
+    base.pathLayout.pathId = base.path->id;
+
+    Page page;
+    QVERIFY(!page.layers.empty());
+    page.layers.front()->objects.clear();
+    page.layers.front()->objects.push_back(std::make_unique<TextObject>(base));
+    page.layers.front()->objects.front()->id = QStringLiteral("path-pipeline-object");
+    page.layers.front()->objects.front()->path->id = QStringLiteral("path-pipeline-path");
+    page.layers.front()->objects.front()->pathLayout.pathId =
+        page.layers.front()->objects.front()->path->id;
+
+    const SceneGeometry pathOnly = SceneEvaluator::evaluate(page, 1);
+    const SceneObjectGeometry* pathOnlyObject =
+        pathOnly.objectById(QStringLiteral("path-pipeline-object"));
+    QVERIFY(pathOnlyObject);
+    QVERIFY(!pathOnlyObject->geometry.pieces.isEmpty());
+    const QByteArray pathSignature = geometrySignature(pathOnlyObject->geometry);
+
+    TextObject& finalObject = *page.layers.front()->objects.front();
+    auto wave = std::make_unique<WaveEffect>();
+    wave->amplitude = 0.35;
+    wave->frequency = 2.0;
+    EffectMaskStroke mask;
+    mask.points = {pathOnlyObject->geometry.bounds.center()};
+    mask.radius = qMax<qreal>(100.0, pathOnlyObject->geometry.bounds.width());
+    mask.opacity = 1.0;
+    mask.hardness = 0.5;
+    wave->maskStrokes.push_back(mask);
+    finalObject.effects.append(std::move(wave));
+
+    auto warp = std::make_unique<GeometryWarpEffect>(
+        QStringLiteral("waveWarp"), QStringLiteral("Wave Warp"),
+        GeometryWarpEffect::Mode::WaveWarp);
+    QVERIFY(warp->setParameter(QStringLiteral("amount"), 0.18));
+    finalObject.effects.append(std::move(warp));
+
+    auto echo = std::make_unique<TrailEffect>(QStringLiteral("echo"), QStringLiteral("Echo"));
+    QVERIFY(echo->setParameter(QStringLiteral("copyCount"), 2.0));
+    finalObject.effects.append(std::move(echo));
+
+    DeformationStroke deformation;
+    deformation.mode = BrushMode::Push;
+    deformation.target = BrushTarget::Shape;
+    deformation.coordinateSpace = DeformationCoordinateSpace::ObjectLocal;
+    deformation.radius = qMax<qreal>(80.0, pathOnlyObject->geometry.bounds.height() * 2.0);
+    deformation.strength = 0.9;
+    deformation.hardness = 0.4;
+    const QPointF center = pathOnlyObject->geometry.bounds.center();
+    deformation.samples = {{center - QPointF(20.0, 0.0), QPointF(), 1.0},
+                            {center, QPointF(20.0, 0.0), 1.0},
+                            {center + QPointF(20.0, 0.0), QPointF(20.0, 0.0), 1.0}};
+    finalObject.deformation.enabled = true;
+    finalObject.deformation.strokes.push_back(deformation);
+
+    const SceneGeometry finalScene = SceneEvaluator::evaluate(page, 2);
+    const SceneObjectGeometry* finalSceneObject =
+        finalScene.objectById(QStringLiteral("path-pipeline-object"));
+    QVERIFY(finalSceneObject);
+    QVERIFY(finalSceneObject->geometry.pieces.size() > pathOnlyObject->geometry.pieces.size());
+    QVERIFY(geometrySignature(finalSceneObject->geometry) != pathSignature);
+    QVERIFY(finalSceneObject->geometry.bounds != pathOnlyObject->geometry.bounds);
+
+    Document exportDocument;
+    VectorExportPayload payload;
+    QString exportError;
+    QVERIFY2(ExportPayloadBuilder::build(
+                 exportDocument, page, finalScene, ExportScope::CurrentPage,
+                 {}, &payload, &exportError), qPrintable(exportError));
+    QCOMPARE(payload.plainText, base.sourceText);
+    QVERIFY(!payload.records.isEmpty());
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString svgPath = directory.filePath(QStringLiteral("path-pipeline.svg"));
+    SvgExporter exporter;
+    QVERIFY2(exporter.exportPayload(payload, svgPath, &exportError), qPrintable(exportError));
+    QFile svg(svgPath);
+    QVERIFY(svg.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QByteArray svgBytes = svg.readAll();
+    QVERIFY(svgBytes.contains("<path"));
+    QVERIFY(!svgBytes.contains("textPath"));
+}
+
+void CoreTests::pathLayoutHonorsCancellationBudget()
+{
+    ShapedText shaped;
+    shaped.lineBounds = {QRectF(0.0, 0.0, 100.0, 20.0)};
+    GeometryPiece piece;
+    piece.path.addRect(QRectF(0.0, -10.0, 10.0, 10.0));
+    piece.anchor = QPointF();
+    piece.originalAnchor = piece.anchor;
+    piece.layoutOrigin = piece.anchor;
+    piece.layoutAdvance = 10.0;
+    piece.effectReferenceProgress = 0.25;
+    piece.hasEffectReferenceProgress = true;
+    VectorGeometry geometry;
+    geometry.pieces.push_back(piece);
+    piece.path = QPainterPath();
+    piece.path.addRect(QRectF(20.0, -10.0, 10.0, 10.0));
+    piece.anchor = QPointF(20.0, 0.0);
+    piece.originalAnchor = piece.anchor;
+    piece.layoutOrigin = piece.anchor;
+    geometry.pieces.push_back(piece);
+    geometry.setReferenceBounds(QRectF(0.0, -10.0, 10.0, 10.0));
+    geometry.recomputeBounds();
+    const QByteArray before = geometrySignature(geometry);
+    const PathGeometry path = PathGeometry::makeDefault(100.0);
+    PathTypographyProperties settings;
+    settings.enabled = true;
+    settings.pathId = path.id;
+    QString error;
+    WorkControl work = WorkControl::unlimited();
+    work.setCheckpointCallback([work](qint64 consumed) {
+        if (consumed >= 4) {
+            work.cancel();
+        }
+    });
+    QVERIFY(!PathLayoutEngine::apply(&geometry, shaped, path, settings, &error, work));
+    QCOMPARE(geometrySignature(geometry), before);
+}
+
+void CoreTests::pathCancellationThresholdsDoNotPoisonPathStageCaches()
+{
+    TextObject fixture = configuredText(QString(96, QLatin1Char('W')));
+    fixture.id = QStringLiteral("path-cache-threshold-object");
+    fixture.path = PathGeometry::makeDefault(3600.0, 0.0);
+    fixture.path->nodes.front().hasOutgoingHandle = true;
+    fixture.path->nodes.front().outgoingHandle = QPointF(520.0, 420.0);
+    fixture.path->nodes.back().hasIncomingHandle = true;
+    fixture.path->nodes.back().incomingHandle = QPointF(3080.0, 420.0);
+    fixture.pathLayout.enabled = true;
+    fixture.pathLayout.pathId = fixture.path->id;
+    fixture.pathLayout.baselineOffset = 11.0;
+    auto procedural = std::make_unique<ProceduralEffect>(
+        QStringLiteral("path-cache-procedural"), QStringLiteral("Path cache procedural"),
+        ProceduralEffect::Mode::VerticalSpread);
+    QVERIFY(procedural->setParameter(QStringLiteral("strength"), 0.8));
+    fixture.effects.append(std::move(procedural));
+
+    auto pageFor = [](const TextObject& source) {
+        Page page;
+        page.id = QStringLiteral("path-cache-page");
+        page.layers.front()->id = QStringLiteral("path-cache-layer");
+        page.layers.front()->objects.push_back(std::make_unique<TextObject>(source));
+        return page;
+    };
+
+    SceneEvaluator::invalidateFontCaches();
+    const WorkControl baselineWork = WorkControl::unlimited();
+    const SceneGeometry baseline = SceneEvaluator::evaluate(
+        pageFor(fixture), 201, baselineWork);
+    QCOMPARE(baseline.evaluationStatus, EvaluationStatus::Complete);
+    QCOMPARE(baseline.objects.size(), 1);
+    QVERIFY(baselineWork.unitsConsumed() > 32);
+    const test::GeometrySignature expected = test::geometrySignature(
+        baseline.objects.front().geometry);
+
+    // The worker's TextEngine intentionally reuses a shaped result across
+    // object IDs. Measure the warm, path-cold workload used by the threshold
+    // loop so the cancellation checkpoints remain semantic rather than tied
+    // to the one-time cold shaping cost of the baseline evaluation.
+    TextObject warmFixture = fixture;
+    warmFixture.id = QStringLiteral("path-cache-threshold-warmup");
+    const WorkControl warmWork = WorkControl::unlimited();
+    const SceneGeometry warm = SceneEvaluator::evaluate(
+        pageFor(warmFixture), 202, warmWork);
+    QCOMPARE(warm.evaluationStatus, EvaluationStatus::Complete);
+    QCOMPARE(warm.objects.size(), 1);
+    QVERIFY(warmWork.unitsConsumed() > 32);
+
+    QVector<qint64> checkpoints = {
+        1,
+        2,
+        qMax<qint64>(3, warmWork.unitsConsumed() / 4),
+        qMax<qint64>(4, warmWork.unitsConsumed() / 2),
+        qMax<qint64>(5, warmWork.unitsConsumed() - 1),
+    };
+    std::sort(checkpoints.begin(), checkpoints.end());
+    checkpoints.erase(std::unique(checkpoints.begin(), checkpoints.end()), checkpoints.end());
+
+    for (int checkpointIndex = 0; checkpointIndex < checkpoints.size(); ++checkpointIndex) {
+        const qint64 checkpoint = checkpoints.at(checkpointIndex);
+        TextObject attempt = fixture;
+        attempt.id = QStringLiteral("path-cache-threshold-attempt-%1").arg(checkpointIndex);
+        const WorkControl interrupted = WorkControl::withBudget();
+        interrupted.setCheckpointCallback(
+            [&interrupted, checkpoint](qint64 consumed) {
+                if (consumed >= checkpoint) interrupted.cancel();
+            });
+        const SceneGeometry partial = SceneEvaluator::evaluate(
+            pageFor(attempt), 202, interrupted);
+        QCOMPARE(partial.evaluationStatus, EvaluationStatus::Cancelled);
+        QVERIFY(partial.objects.isEmpty());
+
+        const WorkControl recoveredWork = WorkControl::unlimited();
+        const SceneGeometry recovered = SceneEvaluator::evaluate(
+            pageFor(attempt), 203, recoveredWork);
+        QCOMPARE(recovered.evaluationStatus, EvaluationStatus::Complete);
+        QCOMPARE(recovered.objects.size(), 1);
+        QString difference;
+        QVERIFY2(test::compareGeometry(
+                     expected, test::geometrySignature(recovered.objects.front().geometry),
+                     &difference),
+                 qPrintable(QStringLiteral("path cache recovery after threshold %1: %2")
+                                .arg(checkpoint).arg(difference)));
+    }
+
+    // A path-only key change must rebuild the path stage while retaining the
+    // shaped/base stages; compare it with a cold worker result and retain the
+    // work-unit signal as an independent cache-preservation assertion.
+    Page changedPath = pageFor(fixture);
+    changedPath.layers.front()->objects.front()->path->nodes.front().anchor
+        += QPointF(35.0, -20.0);
+    const WorkControl changedPathWork = WorkControl::unlimited();
+    const SceneGeometry changedPathScene = SceneEvaluator::evaluate(
+        changedPath, 204, changedPathWork);
+    QCOMPARE(changedPathScene.evaluationStatus, EvaluationStatus::Complete);
+    SceneEvaluator::invalidateFontCaches();
+    const WorkControl coldPathWork = WorkControl::unlimited();
+    const SceneGeometry coldPathScene = SceneEvaluator::evaluate(
+        changedPath, 205, coldPathWork);
+    QCOMPARE(coldPathScene.evaluationStatus, EvaluationStatus::Complete);
+    QString difference;
+    QVERIFY2(test::compareGeometry(
+                 test::geometrySignature(coldPathScene.objects.front().geometry),
+                 test::geometrySignature(changedPathScene.objects.front().geometry),
+                 &difference),
+             qPrintable(difference));
+    QVERIFY(changedPathWork.unitsConsumed() < coldPathWork.unitsConsumed());
+
+    // An effect-only key change must reuse the completed path stage and still
+    // produce the same final geometry as a cold evaluation.
+    Page changedEffect = pageFor(fixture);
+    auto extraWave = std::make_unique<WaveEffect>();
+    extraWave->amplitude = 0.23;
+    extraWave->phase = 0.19;
+    changedEffect.layers.front()->objects.front()->effects.append(std::move(extraWave));
+    const WorkControl changedEffectWork = WorkControl::unlimited();
+    const SceneGeometry changedEffectScene = SceneEvaluator::evaluate(
+        changedEffect, 206, changedEffectWork);
+    QCOMPARE(changedEffectScene.evaluationStatus, EvaluationStatus::Complete);
+    SceneEvaluator::invalidateFontCaches();
+    const WorkControl coldEffectWork = WorkControl::unlimited();
+    const SceneGeometry coldEffectScene = SceneEvaluator::evaluate(
+        changedEffect, 207, coldEffectWork);
+    QCOMPARE(coldEffectScene.evaluationStatus, EvaluationStatus::Complete);
+    QVERIFY2(test::compareGeometry(
+                 test::geometrySignature(coldEffectScene.objects.front().geometry),
+                 test::geometrySignature(changedEffectScene.objects.front().geometry),
+                 &difference),
+             qPrintable(difference));
+    QVERIFY(changedEffectWork.unitsConsumed() < coldEffectWork.unitsConsumed());
+}
+
+void CoreTests::pathControllerDuplicateAndStaleGestureKeepIdentitySafe()
+{
+    EditorController controller;
+    const QString originalId = controller.createTextObject(QPointF(50.0, 50.0), QStringLiteral("Path"));
+    QVERIFY(!originalId.isEmpty());
+    controller.setPathLayoutEnabled(true);
+    const TextObject* original = controller.document().objectById(originalId);
+    QVERIFY(original && original->path.has_value());
+    const QString originalPathId = original->path->id;
+    const QString originalNodeId = original->path->nodes.front().id;
+    const QPointF originalAnchor = original->path->nodes.front().anchor;
+    const quint64 oldRevision = controller.spatialRevision();
+
+    PathGeometry stalePath = *original->path;
+    stalePath.nodes.front().anchor += QPointF(30.0, 5.0);
+    controller.setText(QStringLiteral("Changed"));
+    controller.setPathGeometry(originalId, stalePath, oldRevision);
+    const TextObject* afterStale = controller.document().objectById(originalId);
+    QVERIFY(afterStale && afterStale->path.has_value());
+    QCOMPARE(afterStale->path->nodes.front().anchor, originalAnchor);
+
+    controller.selectObject(originalId);
+    controller.duplicateSelectedObjects();
+    const QStringList selected = controller.selectedObjectIds();
+    QCOMPARE(selected.size(), 1);
+    const QString duplicateId = selected.last();
+    const TextObject* duplicate = controller.document().objectById(duplicateId);
+    QVERIFY(duplicate && duplicate->path.has_value());
+    QVERIFY(duplicate->path->id != originalPathId);
+    QVERIFY(duplicate->path->nodes.front().id != originalNodeId);
+    QCOMPARE(duplicate->pathLayout.pathId, duplicate->path->id);
+}
+
+void CoreTests::pathSerializationRejectsCorruptionAndBudgets()
+{
+    Document document;
+    TextObject& object = document.primaryTextObject();
+    object.sourceText = QStringLiteral("serialized path");
+    object.path = PathGeometry::makeDefault(240.0);
+    object.pathLayout.enabled = true;
+    object.pathLayout.pathId = object.path->id;
+    const QJsonObject original = ProjectSerializer::toJson(document).object();
+
+    const auto pagesWithObject = [&original](const QJsonObject& serializedObject) {
+        QJsonObject root = original;
+        QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+        QJsonObject page = pages.at(0).toObject();
+        QJsonArray layers = page.value(QStringLiteral("layers")).toArray();
+        QJsonObject layer = layers.at(0).toObject();
+        QJsonArray objects = layer.value(QStringLiteral("objects")).toArray();
+        objects.replace(0, serializedObject);
+        layer.insert(QStringLiteral("objects"), objects);
+        layers.replace(0, layer);
+        page.insert(QStringLiteral("layers"), layers);
+        pages.replace(0, page);
+        root.insert(QStringLiteral("pages"), pages);
+        return root;
+    };
+    const QJsonObject serializedObject = original.value(QStringLiteral("pages"))
+        .toArray().at(0).toObject().value(QStringLiteral("layers"))
+        .toArray().at(0).toObject().value(QStringLiteral("objects"))
+        .toArray().at(0).toObject();
+
+    QJsonObject duplicatePathObject = serializedObject;
+    duplicatePathObject.insert(QStringLiteral("id"), QStringLiteral("second-object"));
+    QJsonObject path = duplicatePathObject.value(QStringLiteral("path")).toObject();
+    path.insert(QStringLiteral("id"), object.path->id);
+    duplicatePathObject.insert(QStringLiteral("path"), path);
+    QJsonObject duplicateRoot = pagesWithObject(serializedObject);
+    QJsonArray pages = duplicateRoot.value(QStringLiteral("pages")).toArray();
+    QJsonObject page = pages.at(0).toObject();
+    QJsonArray layers = page.value(QStringLiteral("layers")).toArray();
+    QJsonObject layer = layers.at(0).toObject();
+    QJsonArray objects = layer.value(QStringLiteral("objects")).toArray();
+    objects.append(duplicatePathObject);
+    layer.insert(QStringLiteral("objects"), objects);
+    layers.replace(0, layer);
+    page.insert(QStringLiteral("layers"), layers);
+    pages.replace(0, page);
+    duplicateRoot.insert(QStringLiteral("pages"), pages);
+    QString error;
+    Document rejected;
+    QVERIFY(!ProjectSerializer::fromJson(QJsonDocument(duplicateRoot), &rejected, &error));
+    QVERIFY(error.contains(QStringLiteral("duplicate path ID")));
+
+    QJsonObject duplicateNodeObject = serializedObject;
+    path = duplicateNodeObject.value(QStringLiteral("path")).toObject();
+    QJsonArray nodes = path.value(QStringLiteral("nodes")).toArray();
+    QJsonObject secondNode = nodes.at(1).toObject();
+    secondNode.insert(QStringLiteral("id"), nodes.at(0).toObject().value(QStringLiteral("id")));
+    nodes.replace(1, secondNode);
+    path.insert(QStringLiteral("nodes"), nodes);
+    duplicateNodeObject.insert(QStringLiteral("path"), path);
+    const QJsonObject duplicateNodeRoot = pagesWithObject(duplicateNodeObject);
+    QVERIFY(!ProjectSerializer::fromJson(QJsonDocument(duplicateNodeRoot), &rejected, &error));
+    QVERIFY(error.contains(QStringLiteral("duplicate node ID")));
+
+    QJsonObject invalidLayoutObject = serializedObject;
+    QJsonObject layout = invalidLayoutObject.value(QStringLiteral("pathLayout")).toObject();
+    layout.insert(QStringLiteral("overflow"), QStringLiteral("wrap"));
+    invalidLayoutObject.insert(QStringLiteral("pathLayout"), layout);
+    QVERIFY(!ProjectSerializer::fromJson(
+        QJsonDocument(pagesWithObject(invalidLayoutObject)), &rejected, &error));
+    QVERIFY(error.contains(QStringLiteral("overflow")));
+
+    QJsonObject wrongTypeLayoutObject = serializedObject;
+    layout = wrongTypeLayoutObject.value(QStringLiteral("pathLayout")).toObject();
+    layout.insert(QStringLiteral("enabled"), QStringLiteral("true"));
+    wrongTypeLayoutObject.insert(QStringLiteral("pathLayout"), layout);
+    QVERIFY(!ProjectSerializer::fromJson(
+        QJsonDocument(pagesWithObject(wrongTypeLayoutObject)), &rejected, &error));
+    QVERIFY(error.contains(QStringLiteral("JSON type")));
+
+    QJsonObject wrongTypePathObject = serializedObject;
+    path = wrongTypePathObject.value(QStringLiteral("path")).toObject();
+    path.insert(QStringLiteral("closed"), QStringLiteral("false"));
+    wrongTypePathObject.insert(QStringLiteral("path"), path);
+    QVERIFY(!ProjectSerializer::fromJson(
+        QJsonDocument(pagesWithObject(wrongTypePathObject)), &rejected, &error));
+    QVERIFY(error.contains(QStringLiteral("closed")));
+
+    QJsonObject missingPathObject = serializedObject;
+    missingPathObject.remove(QStringLiteral("path"));
+    QVERIFY(!ProjectSerializer::fromJson(
+        QJsonDocument(pagesWithObject(missingPathObject)), &rejected, &error));
+    QVERIFY(error.contains(QStringLiteral("missing")));
+
+    ProjectResourceLimits limits = ProjectSerializer::resourceLimits();
+    limits.maximumPathNodesPerPath = 1;
+    QVERIFY(!ProjectSerializer::validateResourceBudget(
+        QJsonDocument(QJsonArray{serializedObject}), limits, &error));
+    QVERIFY(error.contains(QStringLiteral("path nodes per path")));
+
+    // Exact aggregate/per-entry limits are admissible; the first value beyond
+    // each boundary is rejected without allowing a path to consume a hidden
+    // extra unit of resource budget.
+    const ProjectResourceLimits exact = ProjectSerializer::resourceLimits();
+    QVERIFY(ProjectSerializer::validateResourceBudget(
+        QJsonDocument(QJsonArray{serializedObject}), exact, &error));
+    ProjectResourceLimits exactPathNodes = exact;
+    exactPathNodes.maximumPathNodesPerPath = 2;
+    exactPathNodes.maximumPathNodes = 2;
+    exactPathNodes.maximumPaths = 1;
+    QVERIFY(ProjectSerializer::validateResourceBudget(
+        QJsonDocument(QJsonArray{serializedObject}), exactPathNodes, &error));
+    exactPathNodes.maximumPathNodes = 1;
+    QVERIFY(!ProjectSerializer::validateResourceBudget(
+        QJsonDocument(QJsonArray{serializedObject}), exactPathNodes, &error));
+    QVERIFY(error.contains(QStringLiteral("aggregate path nodes")));
+    exactPathNodes = exact;
+    exactPathNodes.maximumPaths = 0;
+    QVERIFY(!ProjectSerializer::validateResourceBudget(
+        QJsonDocument(QJsonArray{serializedObject}), exactPathNodes, &error));
+    QVERIFY(error.contains(QStringLiteral("aggregate paths")));
+    exactPathNodes = exact;
+    exactPathNodes.maximumPathNodesPerPath = 2;
+    exactPathNodes.maximumPathWork = 2;
+    QVERIFY(ProjectSerializer::validateResourceBudget(
+        QJsonDocument(QJsonArray{serializedObject}), exactPathNodes, &error));
+    exactPathNodes.maximumPathWork = 1;
+    QVERIFY(!ProjectSerializer::validateResourceBudget(
+        QJsonDocument(QJsonArray{serializedObject}), exactPathNodes, &error));
+    QVERIFY(error.contains(QStringLiteral("path work")));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString filePath = directory.filePath(QStringLiteral("sentinel.vtp"));
+    QFile sentinel(filePath);
+    QVERIFY(sentinel.open(QIODevice::WriteOnly));
+    sentinel.write("sentinel");
+    sentinel.close();
+    Document invalidDocument;
+    invalidDocument.primaryTextObject().path = PathGeometry::makeDefault(100.0);
+    invalidDocument.primaryTextObject().pathLayout.pathId =
+        invalidDocument.primaryTextObject().path->id;
+    invalidDocument.primaryTextObject().path->nodes[1].id =
+        invalidDocument.primaryTextObject().path->nodes[0].id;
+    QVERIFY(!ProjectSerializer::saveToFile(invalidDocument, filePath, &error));
+    QFile preserved(filePath);
+    QVERIFY(preserved.open(QIODevice::ReadOnly));
+    QCOMPARE(preserved.readAll(), QByteArrayLiteral("sentinel"));
+}
+
+void CoreTests::pathUndoTargetsExplicitObjectAndRestoresFingerprint()
+{
+    EditorController controller;
+    const QString firstId = controller.createTextObject(QPointF(40.0, 40.0), QStringLiteral("first"));
+    QVERIFY(!firstId.isEmpty());
+    controller.setPathLayoutEnabled(true);
+    const TextObject* first = controller.document().objectById(firstId);
+    QVERIFY(first && first->path.has_value());
+    const QString secondId = controller.createTextObject(QPointF(260.0, 40.0), QStringLiteral("second"));
+    QVERIFY(!secondId.isEmpty());
+    QVERIFY(controller.activeObject());
+    const QString before = test::semanticFingerprint(controller.document());
+
+    PathGeometry candidate = *first->path;
+    candidate.nodes.front().anchor += QPointF(18.0, 11.0);
+    controller.setPathGeometry(firstId, candidate, controller.spatialRevision());
+    QCOMPARE(controller.document().objectById(firstId)->path->nodes.front().anchor,
+             candidate.nodes.front().anchor);
+    QCOMPARE(controller.document().objectById(secondId)->path.has_value(), false);
+    const QString changed = test::semanticFingerprint(controller.document());
+    QVERIFY(changed != before);
+
+    controller.undoStack()->undo();
+    QCOMPARE(test::semanticFingerprint(controller.document()), before);
+    controller.undoStack()->redo();
+    QCOMPARE(test::semanticFingerprint(controller.document()), changed);
 }
 
 void CoreTests::projectV1TrackingMigrates()

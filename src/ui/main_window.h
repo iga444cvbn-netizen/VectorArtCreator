@@ -59,6 +59,7 @@ private:
     void applyNavigationSettings();
     [[nodiscard]] bool selectedEffectSupportsMask() const;
     void refreshEffectMaskCapability();
+    void refreshPathCapability();
     void setGlobalEditorShortcutsEnabled(bool enabled);
     void handleTextEditingChanged(bool editing);
     void addTextAtPageCenter();
