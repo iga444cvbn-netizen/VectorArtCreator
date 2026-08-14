@@ -120,6 +120,7 @@ void SmokeWorkflowTests::firstFiveMinutesCanary()
     const QString savedFingerprint = test::semanticFingerprint(driver.controller().document());
     QVERIFY2(driver.controller().openProject(projectPath, &error), qPrintable(error));
     QCOMPARE(test::semanticFingerprint(driver.controller().document()), savedFingerprint);
+    driver.selectObject(id);
     driver.waitForSceneGeneration(id);
     driver.expectVectorGeometry();
     driver.expectInvariants();
@@ -192,6 +193,7 @@ void SmokeWorkflowTests::regionHoleEditRemoveAndPersistence()
     const QString savedFingerprint = test::semanticFingerprint(driver.controller().document());
     QVERIFY2(driver.controller().openProject(projectPath, &error), qPrintable(error));
     QCOMPARE(test::semanticFingerprint(driver.controller().document()), savedFingerprint);
+    driver.selectObject(id);
     driver.waitForSceneGeneration(id);
     driver.expectVectorGeometry();
     driver.expectInvariants();
