@@ -56,8 +56,8 @@ void RegionTypographyUiTests::regionControlsExposePersistentSettings()
 
     TextObject object;
     object.region = TypographyRegion::makeRectangle(QRectF(0.0, 0.0, 200.0, 100.0));
-    const TypographyRegion hole = TypographyRegion::makeRectangle(QRectF(40.0, 20.0, 120.0, 60.0));
-    object.region->holes.push_back(hole.outer);
+    const TypographyRegion holeRegion = TypographyRegion::makeRectangle(QRectF(40.0, 20.0, 120.0, 60.0));
+    object.region->holes.push_back(holeRegion.outer);
     object.layoutMode = TypographyLayoutMode::Region;
     object.regionLayout.regionId = object.region->id;
     object.regionLayout.paddingLeft = 31.0;
