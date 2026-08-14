@@ -2,14 +2,19 @@
 #include "core/evaluation/work_control.h"
 #include "core/region/region_layout.h"
 #include "core/serialization/project_serializer.h"
+#include "core/text/text_engine.h"
 #include "tests/support/state_fingerprint.h"
+#include "tests/support/test_fonts.h"
 #include "ui/editor_controller.h"
 
 #include <QGuiApplication>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QPainterPath>
 #include <QTest>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -79,6 +84,35 @@ VectorGeometry glyphGeometry(const QVector<int>& clusterStarts,
     return geometry;
 }
 
+VectorGeometry glyphGeometryWithWidths(const QVector<int>& clusterStarts,
+                                        const QVector<int>& clusterLengths,
+                                        const QVector<qreal>& advances,
+                                        const QVector<qreal>& widths,
+                                        qreal y = 0.0)
+{
+    VectorGeometry geometry;
+    qreal x = 0.0;
+    for (int index = 0; index < clusterStarts.size(); ++index) {
+        GeometryPiece piece;
+        piece.path.addRect(QRectF(x, y, widths.at(index), 10.0));
+        piece.anchor = QPointF(x + widths.at(index) * 0.5, y + 5.0);
+        piece.originalAnchor = piece.anchor;
+        piece.layoutOrigin = QPointF(x, y);
+        piece.layoutAdvance = advances.at(index);
+        piece.sourceGlyphIndex = index;
+        piece.sourceClusterStart = clusterStarts.at(index);
+        piece.sourceClusterLength = clusterLengths.at(index);
+        piece.sourceLineIndex = 0;
+        piece.effectReferenceAnchor = piece.anchor;
+        piece.hasEffectReferenceAnchor = true;
+        geometry.pieces.push_back(piece);
+        x += advances.at(index);
+    }
+    geometry.setReferenceBounds(QRectF(0.0, y, qMax<qreal>(x, 1.0), 10.0));
+    geometry.recomputeBounds();
+    return geometry;
+}
+
 ShapedText oneLineShape(qreal width, qreal y = 0.0)
 {
     ShapedText shaped;
@@ -133,6 +167,10 @@ private slots:
     void regionLayoutWrapsWithoutSplittingClusters();
     void regionLayoutHonorsAlignmentPaddingAndClip();
     void regionLayoutUsesLogicalJustificationAndCancellation();
+    void regionLayoutJustifiesWhitespaceWithIndependentGeometryOracle();
+    void regionLayoutRejectsBetweenSampleBandConcavityAndHole();
+    void regionLayoutDoesNotSilentlySplitUnbreakableWords();
+    void regionLayoutShapesRealBidiTextWithoutClusterLoss();
     void regionSerializationMigratesAndRejectsDuplicateIdentity();
     void controllerRegionEditsUndoAndFreshenDuplicateIdentity();
 };
@@ -409,6 +447,205 @@ void RegionTypographyTests::regionLayoutUsesLogicalJustificationAndCancellation(
                                        QStringLiteral("aaaa"), region, settings, 1.0,
                                        &error, work));
     QCOMPARE(geometryState(interrupted), before);
+}
+
+void RegionTypographyTests::regionLayoutJustifiesWhitespaceWithIndependentGeometryOracle()
+{
+    const TypographyRegion region = rectangleRegion(
+        QStringLiteral("justification-oracle"), QRectF(0.0, 0.0, 100.0, 100.0));
+    const QString source = QStringLiteral("a a");
+    const QVector<int> starts = {0, 1, 2};
+    const QVector<int> lengths = {1, 1, 1};
+    const QVector<qreal> advances = {10.0, 5.0, 10.0};
+    const QVector<qreal> widths = {8.0, 5.0, 8.0};
+
+    RegionTypographyProperties leftSettings = regionSettings(region);
+    leftSettings.horizontalAlignment = RegionHorizontalAlignment::Left;
+    VectorGeometry left = glyphGeometryWithWidths(starts, lengths, advances, widths);
+    QString error;
+    QVERIFY2(RegionLayoutEngine::apply(&left, oneLineShape(30.0), source, region,
+                                       leftSettings, 1.0, &error), qPrintable(error));
+
+    RegionTypographyProperties justifiedSettings = leftSettings;
+    justifiedSettings.horizontalAlignment = RegionHorizontalAlignment::Justified;
+    VectorGeometry justified = glyphGeometryWithWidths(starts, lengths, advances, widths);
+    QVERIFY2(RegionLayoutEngine::apply(&justified, oneLineShape(30.0), source, region,
+                                       justifiedSettings, 1.0, &error), qPrintable(error));
+
+    const qreal leftSecondWord = left.pieces.at(2).path.boundingRect().left();
+    const qreal justifiedSecondWord = justified.pieces.at(2).path.boundingRect().left();
+    const qreal expectedExtra = 100.0 - (advances.at(0) + advances.at(1) + advances.at(2));
+    QVERIFY2(justifiedSecondWord > leftSecondWord + 1.0,
+             "Justified layout must visibly redistribute whitespace.");
+    QVERIFY(std::abs((justifiedSecondWord - leftSecondWord) - expectedExtra) < 1.0e-4);
+    QVERIFY(std::abs(justified.pieces.at(2).path.boundingRect().width()
+                     - left.pieces.at(2).path.boundingRect().width()) < 1.0e-4);
+
+    const QString repeatedSource = QStringLiteral("a a a");
+    const QVector<int> repeatedStarts = {0, 1, 2, 3, 4};
+    const QVector<int> repeatedLengths(5, 1);
+    const QVector<qreal> repeatedAdvances = {8.0, 2.0, 8.0, 2.0, 8.0};
+    const QVector<qreal> repeatedWidths = repeatedAdvances;
+    VectorGeometry repeatedLeft = glyphGeometryWithWidths(
+        repeatedStarts, repeatedLengths, repeatedAdvances, repeatedWidths);
+    VectorGeometry repeatedJustified = repeatedLeft;
+    QVERIFY2(RegionLayoutEngine::apply(&repeatedLeft, oneLineShape(40.0), repeatedSource,
+                                       region, leftSettings, 1.0, &error), qPrintable(error));
+    QVERIFY2(RegionLayoutEngine::apply(&repeatedJustified, oneLineShape(40.0), repeatedSource,
+                                       region, justifiedSettings, 1.0, &error),
+             qPrintable(error));
+    const qreal perOpportunity = (100.0 - 40.0) / 2.0;
+    QVERIFY(std::abs((repeatedJustified.pieces.at(2).path.boundingRect().left()
+                      - repeatedLeft.pieces.at(2).path.boundingRect().left())
+                     - perOpportunity) < 1.0e-4);
+    QVERIFY(std::abs((repeatedJustified.pieces.at(4).path.boundingRect().left()
+                      - repeatedLeft.pieces.at(4).path.boundingRect().left())
+                     - perOpportunity * 2.0) < 1.0e-4);
+
+    // A wrapped paragraph distributes only on its non-final line. The final
+    // word is intentionally an indivisible shaping cluster and must not move
+    // merely because the first line used Justified alignment.
+    const QString wrappedSource = QStringLiteral("a a BIG");
+    VectorGeometry wrappedLeft = glyphGeometryWithWidths(
+        {0, 1, 2, 3, 4}, {1, 1, 1, 1, 3},
+        {8.0, 2.0, 8.0, 2.0, 20.0},
+        {8.0, 2.0, 8.0, 2.0, 20.0});
+    VectorGeometry wrappedJustified = wrappedLeft;
+    QVERIFY2(RegionLayoutEngine::apply(&wrappedLeft, oneLineShape(30.0), wrappedSource,
+                                       region, leftSettings, 1.0, &error), qPrintable(error));
+    QVERIFY2(RegionLayoutEngine::apply(&wrappedJustified, oneLineShape(30.0), wrappedSource,
+                                       region, justifiedSettings, 1.0, &error),
+             qPrintable(error));
+    QVERIFY(std::abs(wrappedJustified.pieces.at(2).path.boundingRect().left()
+                     - wrappedLeft.pieces.at(2).path.boundingRect().left() - 5.0) < 1.0e-4);
+    QVERIFY(std::abs(wrappedJustified.pieces.at(4).path.boundingRect().left()
+                     - wrappedLeft.pieces.at(4).path.boundingRect().left()) < 1.0e-4);
+}
+
+void RegionTypographyTests::regionLayoutRejectsBetweenSampleBandConcavityAndHole()
+{
+    QString error;
+    TypographyRegion notch = rectangleRegion(QStringLiteral("between-sample-notch"),
+                                             QRectF(0.0, 0.0, 100.0, 20.0));
+    notch.outer = polygonContour(
+        QStringLiteral("between-sample-notch-outer"),
+        {{0.0, 0.0}, {100.0, 0.0}, {100.0, 4.6}, {40.0, 4.6},
+         {40.0, 4.9}, {100.0, 4.9}, {100.0, 20.0}, {0.0, 20.0}});
+    QVERIFY2(notch.validate(&error), qPrintable(error));
+    VectorGeometry notchGeometry = glyphGeometry({0}, {1}, {60.0}, 60.0);
+    QVERIFY2(RegionLayoutEngine::apply(&notchGeometry, oneLineShape(60.0),
+                                       QStringLiteral("a"), notch,
+                                       regionSettings(notch), 1.0, &error),
+             qPrintable(error));
+    QVERIFY(!notch.toPainterPath().contains(QPointF(50.0, 4.75)));
+    QVERIFY2(notchGeometry.pieces.front().path
+                 .subtracted(notch.toPainterPath()).isEmpty(),
+             "A glyph may not leak through a concavity between scanline samples.");
+
+    TypographyRegion hole = rectangleRegion(QStringLiteral("between-sample-hole"),
+                                             QRectF(0.0, 0.0, 100.0, 20.0));
+    hole.holes.push_back(rectangleContour(QStringLiteral("between-sample-hole-contour"),
+                                          QRectF(40.0, 4.6, 20.0, 0.3)));
+    QVERIFY2(hole.validate(&error), qPrintable(error));
+    VectorGeometry holeGeometry = glyphGeometry({0}, {1}, {80.0}, 80.0);
+    QVERIFY2(RegionLayoutEngine::apply(&holeGeometry, oneLineShape(80.0),
+                                       QStringLiteral("a"), hole,
+                                       regionSettings(hole), 1.0, &error),
+             qPrintable(error));
+    QVERIFY(!hole.toPainterPath().contains(QPointF(50.0, 4.75)));
+    QVERIFY2(holeGeometry.pieces.front().path
+                 .subtracted(hole.toPainterPath()).isEmpty(),
+             "A glyph may not leak through a hole between scanline samples.");
+}
+
+void RegionTypographyTests::regionLayoutDoesNotSilentlySplitUnbreakableWords()
+{
+    const TypographyRegion region = rectangleRegion(
+        QStringLiteral("unbreakable-word"), QRectF(0.0, 0.0, 25.0, 100.0));
+    const RegionTypographyProperties settings = regionSettings(region);
+    QString error;
+    for (const QString& source : {QStringLiteral("abcdefgh"), QString::fromUtf8("абвг")}) {
+        VectorGeometry geometry = glyphGeometry({0, 1, 2, 3}, {1, 1, 1, 1},
+                                                 {10.0, 10.0, 10.0, 10.0}, 10.0);
+        QVERIFY2(RegionLayoutEngine::apply(&geometry, oneLineShape(40.0), source,
+                                           region, settings, 1.0, &error),
+                 qPrintable(error));
+        for (const GeometryPiece& piece : geometry.pieces) {
+            QVERIFY2(piece.path.isEmpty(),
+                     "A word without a legal break must not be silently hard-broken.");
+        }
+    }
+
+    const QString emojiWord = QString::fromUtf8("😀😀");
+    VectorGeometry emojiGeometry = glyphGeometry({0, 2}, {2, 2}, {12.0, 12.0}, 12.0);
+    QVERIFY2(RegionLayoutEngine::apply(&emojiGeometry, oneLineShape(24.0), emojiWord,
+                                       region, settings, 1.0, &error), qPrintable(error));
+    for (const GeometryPiece& piece : emojiGeometry.pieces) {
+        QVERIFY(piece.path.isEmpty());
+    }
+}
+
+void RegionTypographyTests::regionLayoutShapesRealBidiTextWithoutClusterLoss()
+{
+    TextObject object;
+    object.sourceText = QString::fromUtf8("אבגדהוזחטיכלמנס 123, A");
+    object.font.family = test::deterministicTestFamily();
+    object.typography.fontSize = 28.0;
+    QVERIFY(!object.font.family.isEmpty());
+
+    TextEngine engine;
+    const ShapedText shaped = engine.shape(object);
+    QVERIFY2(shaped.error.isEmpty(), qPrintable(shaped.error));
+    QVERIFY(!shaped.glyphs.isEmpty());
+    VectorGeometry geometry = GlyphGeometryBuilder::build(shaped,
+                                                          object.typography.fontSize);
+    const VectorGeometry original = geometry;
+    QHash<int, QVector<int>> originalPiecesByCluster;
+    for (int index = 0; index < original.pieces.size(); ++index) {
+        const GeometryPiece& piece = original.pieces.at(index);
+        if (piece.sourceGlyphIndex >= 0) {
+            originalPiecesByCluster[piece.sourceClusterStart].push_back(index);
+        }
+    }
+
+    const TypographyRegion region = rectangleRegion(
+        QStringLiteral("real-bidi-region"), QRectF(0.0, 0.0, 140.0, 500.0));
+    const RegionTypographyProperties settings = regionSettings(region);
+    QString error;
+    QVERIFY2(RegionLayoutEngine::apply(&geometry, shaped, object.sourceText, region,
+                                       settings, 1.0, &error), qPrintable(error));
+
+    QHash<int, QVector<int>> visiblePiecesByCluster;
+    QHash<int, QVector<int>> piecesByOutputLine;
+    for (int index = 0; index < geometry.pieces.size(); ++index) {
+        const GeometryPiece& piece = geometry.pieces.at(index);
+        if (piece.sourceGlyphIndex < 0 || piece.path.isEmpty()) continue;
+        QCOMPARE(piece.sourceClusterStart,
+                 original.pieces.at(index).sourceClusterStart);
+        QCOMPARE(piece.sourceClusterLength,
+                 original.pieces.at(index).sourceClusterLength);
+        QVERIFY(piece.sourceClusterStart >= 0);
+        QVERIFY(piece.sourceClusterStart + piece.sourceClusterLength
+                <= object.sourceText.size());
+        visiblePiecesByCluster[piece.sourceClusterStart].push_back(index);
+        piecesByOutputLine[piece.sourceLineIndex].push_back(index);
+    }
+    for (auto it = originalPiecesByCluster.cbegin(); it != originalPiecesByCluster.cend(); ++it) {
+        const int visibleCount = visiblePiecesByCluster.value(it.key()).size();
+        QVERIFY2(visibleCount == 0 || visibleCount == it.value().size(),
+                 "Region wrapping must clip or preserve a complete shaping cluster.");
+    }
+    QVERIFY(piecesByOutputLine.size() >= 2);
+    for (auto it = piecesByOutputLine.cbegin(); it != piecesByOutputLine.cend(); ++it) {
+        QVector<int> byVisualX = it.value();
+        std::sort(byVisualX.begin(), byVisualX.end(), [&geometry](int left, int right) {
+            return geometry.pieces.at(left).path.boundingRect().left()
+                < geometry.pieces.at(right).path.boundingRect().left();
+        });
+        for (int index = 1; index < byVisualX.size(); ++index) {
+            QVERIFY(byVisualX.at(index - 1) < byVisualX.at(index));
+        }
+    }
 }
 
 void RegionTypographyTests::regionSerializationMigratesAndRejectsDuplicateIdentity()
