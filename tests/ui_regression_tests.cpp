@@ -1083,6 +1083,9 @@ void EffectsPanelUiTests::pathTypographyControlsAndAnchorGesture()
     QTRY_VERIFY_WITH_TIMEOUT(pathTool->isEnabled(), 5000);
     QTest::mouseClick(pathTool, Qt::LeftButton);
     QTRY_COMPARE(static_cast<int>(controller->tool()), static_cast<int>(EditorTool::PathEdit));
+    QTRY_VERIFY_WITH_TIMEOUT(canvas->pathEditorObjectId() == objectId, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        canvas->pathEditorSpatialRevision() == controller->spatialRevision(), 5000);
     QTRY_VERIFY_WITH_TIMEOUT(
         controller->sceneGeometry().spatialRevision == controller->spatialRevision(), 5000);
 
@@ -1338,6 +1341,9 @@ void EffectsPanelUiTests::pathCubicInsertionSplitsCurveAndPreservesIdentity()
         controller->sceneGeometry().spatialRevision == controller->spatialRevision(), 5000);
     QTest::mouseClick(pathTool, Qt::LeftButton);
     QTRY_COMPARE(static_cast<int>(controller->tool()), static_cast<int>(EditorTool::PathEdit));
+    QTRY_VERIFY_WITH_TIMEOUT(canvas->pathEditorObjectId() == objectId, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        canvas->pathEditorSpatialRevision() == controller->spatialRevision(), 5000);
 
     controller->undoStack()->clear();
     controller->undoStack()->setClean();
@@ -1378,6 +1384,11 @@ void EffectsPanelUiTests::pathCubicInsertionSplitsCurveAndPreservesIdentity()
     QCOMPARE(*controller->document().objectById(objectId)->path, curved);
     controller->undoStack()->redo();
     QCOMPARE(*controller->document().objectById(objectId)->path, inserted);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        controller->sceneGeometry().spatialRevision == controller->spatialRevision(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(canvas->pathEditorObjectId() == objectId, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        canvas->pathEditorSpatialRevision() == controller->spatialRevision(), 5000);
 }
 
 void EffectsPanelUiTests::pathNodeLineCubicConversionIsReversible()
@@ -1412,6 +1423,9 @@ void EffectsPanelUiTests::pathNodeLineCubicConversionIsReversible()
     QTRY_VERIFY_WITH_TIMEOUT(
         controller->sceneGeometry().spatialRevision == controller->spatialRevision(), 5000);
     QTest::mouseClick(pathTool, Qt::LeftButton);
+    QTRY_VERIFY_WITH_TIMEOUT(canvas->pathEditorObjectId() == objectId, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        canvas->pathEditorSpatialRevision() == controller->spatialRevision(), 5000);
     controller->undoStack()->clear();
     controller->undoStack()->setClean();
 
@@ -1446,6 +1460,11 @@ void EffectsPanelUiTests::pathNodeLineCubicConversionIsReversible()
     QCOMPARE(*controller->document().objectById(objectId)->path, line);
     controller->undoStack()->redo();
     QCOMPARE(*controller->document().objectById(objectId)->path, cubicSnapshot);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        controller->sceneGeometry().spatialRevision == controller->spatialRevision(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(canvas->pathEditorObjectId() == objectId, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        canvas->pathEditorSpatialRevision() == controller->spatialRevision(), 5000);
 
     QTest::keyClick(canvas, Qt::Key_L);
     QTRY_VERIFY_WITH_TIMEOUT(commitSpy.count() > 1, 5000);
@@ -1468,6 +1487,9 @@ void EffectsPanelUiTests::pathNodeLineCubicConversionIsReversible()
     controller->setPathGeometry(objectId, curved, controller->spatialRevision());
     QTRY_VERIFY_WITH_TIMEOUT(
         controller->sceneGeometry().spatialRevision == controller->spatialRevision(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(canvas->pathEditorObjectId() == objectId, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        canvas->pathEditorSpatialRevision() == controller->spatialRevision(), 5000);
     const SceneObjectGeometry* curvedScene = controller->sceneGeometry().objectById(objectId);
     QVERIFY(curvedScene);
     const QPoint curvedAnchor = canvas->mapDocumentToViewport(

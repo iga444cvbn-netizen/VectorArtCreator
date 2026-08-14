@@ -1094,7 +1094,11 @@ void CoreTests::pathCancellationThresholdsDoNotPoisonPathStageCaches()
         if (partial.evaluationStatus != EvaluationStatus::Cancelled) {
             qInfo() << "path cancellation checkpoint" << checkpoint
                     << "consumed" << interrupted.unitsConsumed()
-                    << "work status" << static_cast<int>(interrupted.status());
+                    << "work status" << static_cast<int>(interrupted.status())
+                    << "objects" << partial.objects.size()
+                    << "error" << (partial.objects.isEmpty()
+                                         ? QString()
+                                         : partial.objects.front().error);
         }
         QCOMPARE(partial.evaluationStatus, EvaluationStatus::Cancelled);
         QVERIFY(partial.objects.isEmpty());

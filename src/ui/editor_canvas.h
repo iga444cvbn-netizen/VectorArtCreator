@@ -63,6 +63,8 @@ public:
     // Read-only coordinate seam used by diagnostics and accessibility tooling.
     // It exposes the same page-to-widget transform used to paint the canvas.
     [[nodiscard]] QPointF mapDocumentToViewport(const QPointF& documentPoint) const;
+    [[nodiscard]] QString pathEditorObjectId() const { return m_pathEditObjectId; }
+    [[nodiscard]] quint64 pathEditorSpatialRevision() const { return m_pathEditSpatialRevision; }
     [[nodiscard]] BrushMode brushMode() const { return m_brushMode; }
     [[nodiscard]] BrushTarget brushTarget() const { return m_brushTarget; }
     [[nodiscard]] bool maskEnabled() const { return m_maskEnabled; }
