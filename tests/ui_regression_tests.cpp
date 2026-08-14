@@ -204,11 +204,11 @@ qreal splitCurveError(const PathGeometry& original, const PathGeometry& candidat
     qreal maximum = 0.0;
     for (int index = 0; index <= 100; ++index) {
         const qreal t = static_cast<qreal>(index) / 100.0;
-        const QPointF expected = cubicPoint(originalP0, originalP1, originalP2,
-                                            originalP3, t);
+        const QPointF expected = cubicPointForTest(originalP0, originalP1, originalP2,
+                                                   originalP3, t);
         const QPointF actual = t <= 0.5
-            ? cubicPoint(firstP0, firstP1, firstP2, firstP3, t * 2.0)
-            : cubicPoint(secondP0, secondP1, secondP2, secondP3, (t - 0.5) * 2.0);
+            ? cubicPointForTest(firstP0, firstP1, firstP2, firstP3, t * 2.0)
+            : cubicPointForTest(secondP0, secondP1, secondP2, secondP3, (t - 0.5) * 2.0);
         maximum = qMax(maximum, QLineF(expected, actual).length());
     }
     return maximum;

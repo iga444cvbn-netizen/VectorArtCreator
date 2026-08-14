@@ -162,7 +162,7 @@ bool PathGeometry::splitSegment(int segmentIndex,
 {
     if (segmentIndex < 0 || segmentIndex >= segmentCount()
         || newNodeId.trimmed().isEmpty() || indexOfNode(newNodeId) >= 0
-        || !std::isfinite(t)) {
+        || !std::isfinite(t) || nodes.size() >= MaximumNodes) {
         return false;
     }
     constexpr qreal endpointEpsilon = 1.0e-6;
