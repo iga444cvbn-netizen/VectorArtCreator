@@ -272,6 +272,18 @@ void EditorCanvas::setPathEditor(const QString& objectId,
 {
     if (!enabled || objectId.isEmpty() || !path) {
         cancelPathEdit();
+        // A committed path edit makes the authoritative scene briefly stale
+        // while the worker evaluates the new snapshot. Preserve the stable
+        // node selection during that interval so a following key gesture is
+        // not silently converted into a no-op. Leaving PathEdit clears the
+        // editor through setTool(), which keeps this preservation scoped to
+        // the in-flight authoritative refresh.
+        if (m_tool == EditorTool::PathEdit && !m_pathEditObjectId.isEmpty()
+            && !m_pathEditGeometry.nodes.isEmpty()) {
+            m_pathEditSpatialRevision = 0;
+            update();
+            return;
+        }
         m_pathEditObjectId.clear();
         m_pathEditGeometry = {};
         m_pathEditSpatialRevision = 0;
@@ -675,12 +687,17 @@ void EditorCanvas::mouseDoubleClickEvent(QMouseEvent* event)
         PathGeometry candidate = m_pathEditGeometry;
         const QString nodeId = createStableId(QStringLiteral("path-node"));
         if (!candidate.splitSegment(hit.segment, hit.parameter, nodeId)) {
+            qInfo() << "path double-click split rejected"
+                    << "nodes" << candidate.nodes.size()
+                    << "segments" << candidate.segmentCount()
+                    << "new id" << nodeId;
             event->ignore();
             return;
         }
         m_pathEditGeometry = candidate;
         m_pathEditNodeIndex = candidate.indexOfNode(nodeId);
         m_pathEditNodeId = nodeId;
+        qInfo() << "path double-click committing" << nodeId;
         emit pathGeometryCommitted(m_pathEditObjectId, candidate, m_pathEditSpatialRevision);
         event->accept();
         return;
