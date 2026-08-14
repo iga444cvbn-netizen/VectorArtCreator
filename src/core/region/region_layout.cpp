@@ -535,13 +535,16 @@ bool RegionLayoutEngine::apply(VectorGeometry* geometry,
                                                candidates.at(index).blockHeight,
                                                settings.verticalAlignment);
             const qreal residual = std::abs(next - candidateOrigins.at(index));
-            if (residual < bestResidual - LayoutEpsilon
+            const bool fewerLines = candidates.at(index).lines.size()
+                < candidates.at(bestIndex).lines.size();
+            const bool sameLineCount = candidates.at(index).lines.size()
+                == candidates.at(bestIndex).lines.size();
+            const bool earlierOrigin = candidateOrigins.at(index)
+                < candidateOrigins.at(bestIndex);
+            const bool better = residual < bestResidual - LayoutEpsilon
                 || (std::abs(residual - bestResidual) <= LayoutEpsilon
-                    && (candidates.at(index).lines.size()
-                            < candidates.at(bestIndex).lines.size()
-                        || (candidates.at(index).lines.size()
-                                == candidates.at(bestIndex).lines.size()
-                            && candidateOrigins.at(index) < candidateOrigins.at(bestIndex)))) {
+                    && (fewerLines || (sameLineCount && earlierOrigin)));
+            if (better) {
                 bestIndex = index;
                 bestResidual = residual;
             }
