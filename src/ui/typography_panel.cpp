@@ -230,8 +230,16 @@ TypographyPanel::TypographyPanel(QWidget* parent)
             this, &TypographyPanel::pathLayoutEnabledChanged);
     connect(m_pathStartOffset, &SliderSpinBox::valueChanged, this,
             [this](double value) { emit pathStartOffsetChanged(value); });
+    connect(m_pathStartOffset, &SliderSpinBox::interactionStarted, this,
+            &TypographyPanel::pathStartOffsetInteractionStarted);
+    connect(m_pathStartOffset, &SliderSpinBox::interactionFinished, this,
+            &TypographyPanel::pathStartOffsetInteractionFinished);
     connect(m_pathBaselineOffset, &SliderSpinBox::valueChanged, this,
             [this](double value) { emit pathBaselineOffsetChanged(value); });
+    connect(m_pathBaselineOffset, &SliderSpinBox::interactionStarted, this,
+            &TypographyPanel::pathBaselineOffsetInteractionStarted);
+    connect(m_pathBaselineOffset, &SliderSpinBox::interactionFinished, this,
+            &TypographyPanel::pathBaselineOffsetInteractionFinished);
     connect(m_pathReverse, &QCheckBox::toggled,
             this, &TypographyPanel::pathReverseChanged);
     connect(m_pathFlip, &QCheckBox::toggled,

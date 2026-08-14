@@ -84,6 +84,10 @@ public:
     void removePathLayout();
     void setPathStartOffset(qreal offset);
     void setPathBaselineOffset(qreal offset);
+    void beginPathStartOffsetGesture();
+    void endPathStartOffsetGesture();
+    void beginPathBaselineOffsetGesture();
+    void endPathBaselineOffsetGesture();
     void setPathReverse(bool reverse);
     void setPathFlip(bool flip);
     void setPathFollowTangent(bool followTangent);
@@ -237,6 +241,8 @@ private:
                        std::optional<PathGeometry> path,
                        PathTypographyProperties layout,
                        const QString& description);
+    void beginPathOffsetGesture(PathOffsetProperty property);
+    void endPathOffsetGesture();
     [[nodiscard]] bool pathInputRevisionIsCurrent(const QString& objectId,
                                                   quint64 inputSpatialRevision);
 
@@ -281,6 +287,11 @@ private:
     QString m_effectStackStrengthGestureObjectId;
     quint64 m_effectStackStrengthGestureSerial = 0;
     quint64 m_effectStackStrengthGestureToken = 0;
+    bool m_pathOffsetGestureActive = false;
+    PathOffsetProperty m_pathOffsetGestureProperty = PathOffsetProperty::Start;
+    QString m_pathOffsetGestureObjectId;
+    quint64 m_pathOffsetGestureSerial = 0;
+    quint64 m_pathOffsetGestureToken = 0;
 };
 
 } // namespace vt

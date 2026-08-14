@@ -38,7 +38,11 @@ signals:
     void fillColorChanged(const QColor& color);
     void pathLayoutEnabledChanged(bool enabled);
     void pathStartOffsetChanged(qreal offset);
+    void pathStartOffsetInteractionStarted();
+    void pathStartOffsetInteractionFinished();
     void pathBaselineOffsetChanged(qreal offset);
+    void pathBaselineOffsetInteractionStarted();
+    void pathBaselineOffsetInteractionFinished();
     void pathReverseChanged(bool reverse);
     void pathFlipChanged(bool flip);
     void pathFollowTangentChanged(bool followTangent);

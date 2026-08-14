@@ -49,6 +49,14 @@ struct PathGeometry {
                                              QPointF* p1,
                                              QPointF* p2,
                                              QPointF* p3) const;
+    // Segment editing operates on the actual cubic control points. Splitting
+    // uses de Casteljau subdivision and therefore preserves the rendered
+    // curve, including the closed-path seam.
+    [[nodiscard]] bool splitSegment(int segmentIndex,
+                                    qreal t,
+                                    const QString& newNodeId);
+    [[nodiscard]] bool convertSegmentToCubic(int segmentIndex);
+    [[nodiscard]] bool convertSegmentToLine(int segmentIndex);
     [[nodiscard]] QPainterPath toPainterPath() const;
 
     // Reversal preserves every node identity and is involutive: calling it

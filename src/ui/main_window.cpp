@@ -411,8 +411,16 @@ MainWindow::MainWindow(QWidget* parent)
             });
     connect(m_typographyPanel, &TypographyPanel::pathStartOffsetChanged, this,
             [this](qreal offset) { m_controller->setPathStartOffset(offset); });
+    connect(m_typographyPanel, &TypographyPanel::pathStartOffsetInteractionStarted,
+            m_controller, &EditorController::beginPathStartOffsetGesture);
+    connect(m_typographyPanel, &TypographyPanel::pathStartOffsetInteractionFinished,
+            m_controller, &EditorController::endPathStartOffsetGesture);
     connect(m_typographyPanel, &TypographyPanel::pathBaselineOffsetChanged, this,
             [this](qreal offset) { m_controller->setPathBaselineOffset(offset); });
+    connect(m_typographyPanel, &TypographyPanel::pathBaselineOffsetInteractionStarted,
+            m_controller, &EditorController::beginPathBaselineOffsetGesture);
+    connect(m_typographyPanel, &TypographyPanel::pathBaselineOffsetInteractionFinished,
+            m_controller, &EditorController::endPathBaselineOffsetGesture);
     connect(m_typographyPanel, &TypographyPanel::pathReverseChanged, this,
             [this](bool reverse) { m_controller->setPathReverse(reverse); });
     connect(m_typographyPanel, &TypographyPanel::pathFlipChanged, this,

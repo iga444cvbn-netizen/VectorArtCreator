@@ -331,9 +331,11 @@ SceneGeometry SceneEvaluator::evaluate(const Page& page,
         const TextObject* object = nullptr;
         bool locked = false;
     };
+    bool interruptedDuringCollection = false;
     QVector<Task> tasks;
     for (const auto& layer : page.layers) {
         if (!work.consume()) {
+            interruptedDuringCollection = true;
             break;
         }
         if (!layer || !layer->visible) {
@@ -341,12 +343,16 @@ SceneGeometry SceneEvaluator::evaluate(const Page& page,
         }
         for (const auto& object : layer->objects) {
             if (!work.consume()) {
+                interruptedDuringCollection = true;
                 break;
             }
             if (!object || !object->visible) {
                 continue;
             }
             tasks.push_back({layer->id, object.get(), layer->locked});
+        }
+        if (interruptedDuringCollection) {
+            break;
         }
     }
     // EditorController schedules a complete page evaluation.  Do not queue
@@ -355,6 +361,7 @@ SceneGeometry SceneEvaluator::evaluate(const Page& page,
     // ordered and sequential within that outer worker.
     for (const Task& task : tasks) {
         if (!work.consume() || !task.object) {
+            interruptedDuringCollection = true;
             break;
         }
         result.objects.push_back(evaluateObjectTask(
@@ -363,7 +370,7 @@ SceneGeometry SceneEvaluator::evaluate(const Page& page,
             break;
         }
     }
-    if (!work.isRunning()) {
+    if (interruptedDuringCollection || !work.isRunning()) {
         result.objects.clear();
         result.bounds = {};
         result.evaluationStatus = work.status() == WorkControlStatus::Cancelled

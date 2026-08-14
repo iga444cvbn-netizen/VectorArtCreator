@@ -48,6 +48,8 @@ struct GeometryPieceSignature {
     int sourceLineIndex = 0;
     QuantizedPoint anchor;
     QuantizedPoint originalAnchor;
+    QuantizedPoint effectReferenceAnchor;
+    bool hasEffectReferenceAnchor = false;
     qint64 opacity = 0;
     int generationDepth = 0;
     QString generatorEffectId;

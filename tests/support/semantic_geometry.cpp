@@ -142,6 +142,8 @@ GeometrySignature geometrySignature(const VectorGeometry& geometry, qreal quantu
         item.sourceLineIndex = piece.sourceLineIndex;
         item.anchor = point(piece.anchor, quantum);
         item.originalAnchor = point(piece.originalAnchor, quantum);
+        item.effectReferenceAnchor = point(piece.effectReferenceAnchor, quantum);
+        item.hasEffectReferenceAnchor = piece.hasEffectReferenceAnchor;
         item.opacity = quantize(piece.opacityMultiplier, quantum);
         item.generationDepth = piece.generationDepth;
         item.generatorEffectId = piece.generatorEffectId;
@@ -211,6 +213,10 @@ bool compareGeometry(const GeometrySignature& expected, const GeometrySignature&
         if (!comparePoint(left.anchor, right.anchor, quantum, prefix + QStringLiteral(".anchor"), difference)) return false;
         if (!comparePoint(left.originalAnchor, right.originalAnchor, quantum,
                           prefix + QStringLiteral(".originalAnchor"), difference)) return false;
+        if (!comparePoint(left.effectReferenceAnchor, right.effectReferenceAnchor, quantum,
+                          prefix + QStringLiteral(".effectReferenceAnchor"), difference)) return false;
+        if (!compareValue(left.hasEffectReferenceAnchor, right.hasEffectReferenceAnchor,
+                          prefix + QStringLiteral(".hasEffectReferenceAnchor"), difference)) return false;
         if (mismatch(left.opacity != right.opacity, prefix + QStringLiteral(".opacity"),
                      scalar(left.opacity, quantum), scalar(right.opacity, quantum), difference)) return false;
         if (!compareValue(left.generationDepth, right.generationDepth,
@@ -289,7 +295,9 @@ QByteArray geometryDigest(const GeometrySignature& signature)
     for (const auto& piece : signature.pieces) {
         stream << piece.sourceGlyphIndex << piece.sourceClusterStart << piece.sourceClusterLength
                << piece.sourceLineIndex << piece.anchor.x << piece.anchor.y
-               << piece.originalAnchor.x << piece.originalAnchor.y << piece.opacity
+               << piece.originalAnchor.x << piece.originalAnchor.y
+               << piece.effectReferenceAnchor.x << piece.effectReferenceAnchor.y
+               << piece.hasEffectReferenceAnchor << piece.opacity
                << piece.generationDepth << piece.generatorEffectId << qint32(piece.path.size());
         for (const auto& element : piece.path) {
             stream << element.type << element.position.x << element.position.y;

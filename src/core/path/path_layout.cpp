@@ -402,6 +402,8 @@ bool PathLayoutEngine::apply(VectorGeometry* geometry,
                             1.0);
         piece.path = transform.map(piece.path);
         piece.anchor = target;
+        piece.effectReferenceAnchor = target;
+        piece.hasEffectReferenceAnchor = true;
     }
     const QPainterPath derivedPath = traversal.toPainterPath();
     const QRectF pathBounds = derivedPath.boundingRect();

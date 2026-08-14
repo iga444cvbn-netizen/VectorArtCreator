@@ -498,4 +498,34 @@ private:
     PathTypographyProperties m_newLayout;
 };
 
+enum class PathOffsetProperty {
+    Start,
+    Baseline,
+};
+
+class SetPathOffsetCommand final : public DocumentCommand {
+public:
+    SetPathOffsetCommand(Document& document,
+                         QString objectId,
+                         PathOffsetProperty property,
+                         qreal oldValue,
+                         qreal newValue,
+                         quint64 mergeToken,
+                         DocumentChangeCallback onChanged,
+                         QString description);
+
+    void undo() override;
+    void redo() override;
+    [[nodiscard]] int id() const override;
+    bool mergeWith(const QUndoCommand* other) override;
+
+private:
+    void apply(qreal value);
+
+    PathOffsetProperty m_property = PathOffsetProperty::Start;
+    qreal m_oldValue = 0.0;
+    qreal m_newValue = 0.0;
+    quint64 m_mergeToken = 0;
+};
+
 } // namespace vt

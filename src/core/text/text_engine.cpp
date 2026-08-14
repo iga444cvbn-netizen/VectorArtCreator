@@ -418,6 +418,8 @@ VectorGeometry GlyphGeometryBuilder::build(const ShapedText& shaped,
         piece.originalAnchor = glyph.position;
         piece.layoutOrigin = glyph.position;
         piece.layoutAdvance = glyph.advance;
+        piece.effectReferenceAnchor = glyph.position;
+        piece.hasEffectReferenceAnchor = true;
 
         QPainterPath glyphPath = glyph.rawFont.pathForGlyph(glyph.glyphIndex);
         if (!work.consume(qMax(1, glyphPath.elementCount()))) {
@@ -454,6 +456,8 @@ VectorGeometry GlyphGeometryBuilder::build(const ShapedText& shaped,
         piece.originalAnchor = piece.anchor;
         piece.layoutOrigin = QPointF(decoration.left(), decoration.center().y());
         piece.layoutAdvance = decoration.width();
+        piece.effectReferenceAnchor = piece.anchor;
+        piece.hasEffectReferenceAnchor = true;
         piece.path.addRect(decoration);
         geometry.pieces.push_back(piece);
         visibleBounds = hasVisibleBounds ? visibleBounds.united(decoration) : decoration;

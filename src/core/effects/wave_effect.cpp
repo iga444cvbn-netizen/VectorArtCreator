@@ -88,9 +88,11 @@ void WaveEffect::apply(VectorGeometry& geometry, const EffectContext& context) c
             break;
         }
         const GeometryPiece& piece = geometry.pieces[index];
+        const QPointF effectAnchor = piece.hasEffectReferenceAnchor
+            ? piece.effectReferenceAnchor : piece.originalAnchor;
         const qreal progress = qBound<qreal>(
             0.0,
-            (piece.originalAnchor.x() - context.referenceBounds.left()) / width,
+            (effectAnchor.x() - context.referenceBounds.left()) / width,
             1.0);
     const qreal displacement = amplitude * context.effectiveStrength(*this) * context.referenceHeight
             * std::sin(twoPi * (frequency * progress + phase));

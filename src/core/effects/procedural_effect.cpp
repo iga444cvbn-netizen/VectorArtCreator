@@ -120,9 +120,11 @@ void ProceduralEffect::apply(VectorGeometry& geometry, const EffectContext& cont
         }
         GeometryPiece& piece = geometry.pieces[index];
         const int glyphIndex = piece.sourceGlyphIndex >= 0 ? piece.sourceGlyphIndex : index;
+        const QPointF effectAnchor = piece.hasEffectReferenceAnchor
+            ? piece.effectReferenceAnchor : piece.originalAnchor;
         const qreal progress = qBound<qreal>(
             0.0,
-            (piece.originalAnchor.x() - context.referenceBounds.left()) / width,
+            (effectAnchor.x() - context.referenceBounds.left()) / width,
             1.0);
         const qreal phase = twoPi * (progress * m_frequency);
         const qreal signedRandom = randomUnit(m_seed, glyphIndex, 0x7134ULL) * 2.0 - 1.0;

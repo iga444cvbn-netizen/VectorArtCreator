@@ -14,6 +14,7 @@ constexpr int EffectParameterCommandId = 103;
 constexpr int DeformationStrengthCommandId = 104;
 constexpr int EffectMasterStrengthCommandId = 105;
 constexpr int EffectStackStrengthCommandId = 107;
+constexpr int PathOffsetCommandId = 108;
 
 } // namespace
 
@@ -918,6 +919,66 @@ void SetPathTypographyCommand::undo()
 void SetPathTypographyCommand::redo()
 {
     apply(m_newPath, m_newLayout);
+}
+
+SetPathOffsetCommand::SetPathOffsetCommand(Document& document,
+                                           QString objectId,
+                                           PathOffsetProperty property,
+                                           qreal oldValue,
+                                           qreal newValue,
+                                           quint64 mergeToken,
+                                           DocumentChangeCallback onChanged,
+                                           QString description)
+    : DocumentCommand(document, std::move(onChanged), description)
+    , m_property(property)
+    , m_oldValue(oldValue)
+    , m_newValue(newValue)
+    , m_mergeToken(mergeToken)
+{
+    m_objectId = std::move(objectId);
+}
+
+void SetPathOffsetCommand::apply(qreal value)
+{
+    TextObject* object = m_document.objectById(m_objectId);
+    if (!object) {
+        return;
+    }
+    if (m_property == PathOffsetProperty::Start) {
+        object->pathLayout.startOffset = value;
+    } else {
+        object->pathLayout.baselineOffset = value;
+    }
+    notifyChanged();
+}
+
+void SetPathOffsetCommand::undo()
+{
+    apply(m_oldValue);
+}
+
+void SetPathOffsetCommand::redo()
+{
+    apply(m_newValue);
+}
+
+int SetPathOffsetCommand::id() const
+{
+    // A zero token is a standalone numeric edit. Only an explicitly opened
+    // physical gesture may merge its successive values.
+    return m_mergeToken == 0 ? -1 : PathOffsetCommandId;
+}
+
+bool SetPathOffsetCommand::mergeWith(const QUndoCommand* other)
+{
+    const auto* command = dynamic_cast<const SetPathOffsetCommand*>(other);
+    if (!command || m_mergeToken == 0 || command->m_mergeToken != m_mergeToken
+        || command->m_objectId != m_objectId || command->m_property != m_property) {
+        return false;
+    }
+    m_newValue = command->m_newValue;
+    setObsolete(m_newValue == m_oldValue);
+    return true;
 }
 
 } // namespace vt

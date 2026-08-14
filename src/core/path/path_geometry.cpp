@@ -156,6 +156,117 @@ bool PathGeometry::segmentControlPoints(int segmentIndex,
     return true;
 }
 
+bool PathGeometry::splitSegment(int segmentIndex,
+                                qreal t,
+                                const QString& newNodeId)
+{
+    if (segmentIndex < 0 || segmentIndex >= segmentCount()
+        || newNodeId.trimmed().isEmpty() || indexOfNode(newNodeId) >= 0
+        || !std::isfinite(t)) {
+        return false;
+    }
+    constexpr qreal endpointEpsilon = 1.0e-6;
+    const qreal splitT = qBound(endpointEpsilon, t, 1.0 - endpointEpsilon);
+
+    QPointF p0;
+    QPointF p1;
+    QPointF p2;
+    QPointF p3;
+    if (!segmentControlPoints(segmentIndex, &p0, &p1, &p2, &p3)) {
+        return false;
+    }
+
+    const int endIndex = (segmentIndex + 1) % nodes.size();
+    const bool cubic = isCubicSegment(segmentIndex);
+    const QPointF newAnchor = cubic
+        ? ([&] {
+              const QPointF p01 = p0 * (1.0 - splitT) + p1 * splitT;
+              const QPointF p12 = p1 * (1.0 - splitT) + p2 * splitT;
+              const QPointF p23 = p2 * (1.0 - splitT) + p3 * splitT;
+              const QPointF p012 = p01 * (1.0 - splitT) + p12 * splitT;
+              const QPointF p123 = p12 * (1.0 - splitT) + p23 * splitT;
+              return p012 * (1.0 - splitT) + p123 * splitT;
+          }())
+        : p0 * (1.0 - splitT) + p3 * splitT;
+
+    PathNode inserted;
+    inserted.id = newNodeId;
+    inserted.anchor = newAnchor;
+
+    if (cubic) {
+        const QPointF p01 = p0 * (1.0 - splitT) + p1 * splitT;
+        const QPointF p12 = p1 * (1.0 - splitT) + p2 * splitT;
+        const QPointF p23 = p2 * (1.0 - splitT) + p3 * splitT;
+        const QPointF p012 = p01 * (1.0 - splitT) + p12 * splitT;
+        const QPointF p123 = p12 * (1.0 - splitT) + p23 * splitT;
+        nodes[segmentIndex].outgoingHandle = p01;
+        nodes[segmentIndex].hasOutgoingHandle = true;
+        inserted.incomingHandle = p012;
+        inserted.hasIncomingHandle = true;
+        inserted.outgoingHandle = p123;
+        inserted.hasOutgoingHandle = true;
+        nodes[endIndex].incomingHandle = p23;
+        nodes[endIndex].hasIncomingHandle = true;
+    }
+
+    // For the closed seam, segment N-1 ends at node 0, so the new node is
+    // appended after node N-1 and before the implicit wrap to node 0.
+    const int insertIndex = segmentIndex + 1;
+    nodes.insert(insertIndex, inserted);
+    return true;
+}
+
+bool PathGeometry::convertSegmentToCubic(int segmentIndex)
+{
+    if (segmentIndex < 0 || segmentIndex >= segmentCount()) {
+        return false;
+    }
+    const int endIndex = (segmentIndex + 1) % nodes.size();
+    if (isCubicSegment(segmentIndex)) {
+        // A partially specified cubic is completed deterministically while an
+        // existing cubic is left untouched. Handles on adjacent segments are
+        // never changed here.
+        bool changed = false;
+        if (!nodes[segmentIndex].hasOutgoingHandle) {
+            nodes[segmentIndex].outgoingHandle = nodes[segmentIndex].anchor
+                + (nodes[endIndex].anchor - nodes[segmentIndex].anchor) / 3.0;
+            nodes[segmentIndex].hasOutgoingHandle = true;
+            changed = true;
+        }
+        if (!nodes[endIndex].hasIncomingHandle) {
+            nodes[endIndex].incomingHandle = nodes[endIndex].anchor
+                - (nodes[endIndex].anchor - nodes[segmentIndex].anchor) / 3.0;
+            nodes[endIndex].hasIncomingHandle = true;
+            changed = true;
+        }
+        return changed;
+    }
+    nodes[segmentIndex].outgoingHandle = nodes[segmentIndex].anchor
+        + (nodes[endIndex].anchor - nodes[segmentIndex].anchor) / 3.0;
+    nodes[segmentIndex].hasOutgoingHandle = true;
+    nodes[endIndex].incomingHandle = nodes[endIndex].anchor
+        - (nodes[endIndex].anchor - nodes[segmentIndex].anchor) / 3.0;
+    nodes[endIndex].hasIncomingHandle = true;
+    return true;
+}
+
+bool PathGeometry::convertSegmentToLine(int segmentIndex)
+{
+    if (segmentIndex < 0 || segmentIndex >= segmentCount()) {
+        return false;
+    }
+    const int endIndex = (segmentIndex + 1) % nodes.size();
+    const bool changed = nodes[segmentIndex].hasOutgoingHandle
+        || nodes[endIndex].hasIncomingHandle
+        || nodes[segmentIndex].outgoingHandle != QPointF()
+        || nodes[endIndex].incomingHandle != QPointF();
+    nodes[segmentIndex].hasOutgoingHandle = false;
+    nodes[segmentIndex].outgoingHandle = QPointF();
+    nodes[endIndex].hasIncomingHandle = false;
+    nodes[endIndex].incomingHandle = QPointF();
+    return changed;
+}
+
 QPainterPath PathGeometry::toPainterPath() const
 {
     QPainterPath result;

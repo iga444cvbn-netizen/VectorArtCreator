@@ -24,6 +24,12 @@ struct GeometryPiece {
     // operate on the transformed path/anchor below it.
     QPointF layoutOrigin;
     qreal layoutAdvance = 0.0;
+    // Stable reference metadata for the current effect stage. The source
+    // anchor above remains immutable; path layout replaces this reference with
+    // the post-path anchor so ordered effects normalize against the geometry
+    // they actually receive rather than against pre-path text coordinates.
+    QPointF effectReferenceAnchor;
+    bool hasEffectReferenceAnchor = false;
     qreal opacityMultiplier = 1.0;
     int generationDepth = 0;
     QString generatorEffectId;

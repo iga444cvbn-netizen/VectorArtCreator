@@ -23,6 +23,86 @@
 
 namespace vt {
 
+namespace {
+
+QPointF cubicPoint(const QPointF& p0,
+                  const QPointF& p1,
+                  const QPointF& p2,
+                  const QPointF& p3,
+                  qreal t)
+{
+    const qreal oneMinusT = 1.0 - t;
+    return p0 * (oneMinusT * oneMinusT * oneMinusT)
+        + p1 * (3.0 * oneMinusT * oneMinusT * t)
+        + p2 * (3.0 * oneMinusT * t * t)
+        + p3 * (t * t * t);
+}
+
+struct PathSegmentHit {
+    int segment = -1;
+    qreal parameter = 0.0;
+    qreal distanceSquared = std::numeric_limits<qreal>::max();
+};
+
+PathSegmentHit nearestPathSegment(const PathGeometry& path,
+                                  const ObjectFrame& frame,
+                                  const QPointF& pagePoint)
+{
+    constexpr int samples = 160;
+    PathSegmentHit best;
+    for (int segment = 0; segment < path.segmentCount(); ++segment) {
+        QPointF p0;
+        QPointF p1;
+        QPointF p2;
+        QPointF p3;
+        if (!path.segmentControlPoints(segment, &p0, &p1, &p2, &p3)) {
+            continue;
+        }
+        p0 = frame.localPointToPage(p0);
+        p1 = frame.localPointToPage(p1);
+        p2 = frame.localPointToPage(p2);
+        p3 = frame.localPointToPage(p3);
+        const auto pointAt = [&](qreal t) {
+            return cubicPoint(p0, p1, p2, p3, t);
+        };
+        qreal segmentBestT = 0.0;
+        qreal segmentBestDistance = std::numeric_limits<qreal>::max();
+        for (int sample = 0; sample <= samples; ++sample) {
+            const qreal t = static_cast<qreal>(sample) / samples;
+            const qreal distance = QLineF(pointAt(t), pagePoint).length();
+            const qreal distanceSquared = distance * distance;
+            if (distanceSquared < segmentBestDistance) {
+                segmentBestDistance = distanceSquared;
+                segmentBestT = t;
+            }
+        }
+        qreal step = 1.0 / samples;
+        for (int iteration = 0; iteration < 10; ++iteration) {
+            const qreal leftT = qMax<qreal>(0.0, segmentBestT - step);
+            const qreal rightT = qMin<qreal>(1.0, segmentBestT + step);
+            const qreal leftDistance = QLineF(pointAt(leftT), pagePoint).length();
+            const qreal rightDistance = QLineF(pointAt(rightT), pagePoint).length();
+            if (leftDistance * leftDistance < segmentBestDistance) {
+                segmentBestT = leftT;
+                segmentBestDistance = leftDistance * leftDistance;
+            }
+            if (rightDistance * rightDistance < segmentBestDistance) {
+                segmentBestT = rightT;
+                segmentBestDistance = rightDistance * rightDistance;
+            }
+            step *= 0.5;
+        }
+        if (segmentBestDistance < best.distanceSquared) {
+            best.segment = segment;
+            best.parameter = qBound<qreal>(0.0, segmentBestT, 1.0);
+            best.distanceSquared = segmentBestDistance;
+        }
+    }
+    return best;
+}
+
+} // namespace
+
 EditorCanvas::EditorCanvas(QWidget* parent)
     : QWidget(parent)
 {
@@ -574,31 +654,22 @@ void EditorCanvas::mouseDoubleClickEvent(QMouseEvent* event)
     if (event->button() == Qt::LeftButton && m_tool == EditorTool::PathEdit
         && !m_pathEditObjectId.isEmpty() && m_pathEditGeometry.nodes.size() >= 2) {
         const QPointF pagePoint = documentPosition(event->position());
-        const QPointF localPoint = m_pathEditFrame.pagePointToLocal(pagePoint);
-        int nearestSegment = 0;
-        qreal nearestDistance = std::numeric_limits<qreal>::max();
-        for (int segment = 0; segment < m_pathEditGeometry.segmentCount(); ++segment) {
-            const int next = (segment + 1) % m_pathEditGeometry.nodes.size();
-            const QPointF a = m_pathEditFrame.localPointToPage(
-                m_pathEditGeometry.nodes.at(segment).anchor);
-            const QPointF b = m_pathEditFrame.localPointToPage(
-                m_pathEditGeometry.nodes.at(next).anchor);
-            const qreal distance = QLineF(pagePoint, a).length()
-                + QLineF(pagePoint, b).length() - QLineF(a, b).length();
-            if (distance < nearestDistance) {
-                nearestDistance = distance;
-                nearestSegment = segment;
-            }
+        const PathSegmentHit hit = nearestPathSegment(m_pathEditGeometry,
+                                                      m_pathEditFrame,
+                                                      pagePoint);
+        if (hit.segment < 0) {
+            event->ignore();
+            return;
         }
         PathGeometry candidate = m_pathEditGeometry;
-        PathNode node;
-        node.id = createStableId(QStringLiteral("path-node"));
-        node.anchor = localPoint;
-        const int insertIndex = qMin(candidate.nodes.size(), nearestSegment + 1);
-        candidate.nodes.insert(insertIndex, node);
+        const QString nodeId = createStableId(QStringLiteral("path-node"));
+        if (!candidate.splitSegment(hit.segment, hit.parameter, nodeId)) {
+            event->ignore();
+            return;
+        }
         m_pathEditGeometry = candidate;
-        m_pathEditNodeIndex = insertIndex;
-        m_pathEditNodeId = node.id;
+        m_pathEditNodeIndex = candidate.indexOfNode(nodeId);
+        m_pathEditNodeId = nodeId;
         emit pathGeometryCommitted(m_pathEditObjectId, candidate, m_pathEditSpatialRevision);
         event->accept();
         return;
@@ -949,12 +1020,25 @@ void EditorCanvas::keyPressEvent(QKeyEvent* event)
         && !event->isAutoRepeat() && m_pathEditNodeIndex >= 0
         && m_pathEditNodeIndex < m_pathEditGeometry.nodes.size()) {
         PathGeometry candidate = m_pathEditGeometry;
-        PathNode& node = candidate.nodes[m_pathEditNodeIndex];
-        const qreal handleLength = 40.0;
-        node.hasIncomingHandle = true;
-        node.hasOutgoingHandle = true;
-        node.incomingHandle = node.anchor - QPointF(handleLength, 0.0);
-        node.outgoingHandle = node.anchor + QPointF(handleLength, 0.0);
+        if (!candidate.convertSegmentToCubic(m_pathEditNodeIndex)) {
+            event->ignore();
+            return;
+        }
+        m_pathEditGeometry = candidate;
+        emit pathGeometryCommitted(m_pathEditObjectId, candidate,
+                                   m_pathEditSpatialRevision);
+        update();
+        event->accept();
+        return;
+    }
+    if (m_tool == EditorTool::PathEdit && event->key() == Qt::Key_L
+        && !event->isAutoRepeat() && m_pathEditNodeIndex >= 0
+        && m_pathEditNodeIndex < m_pathEditGeometry.segmentCount()) {
+        PathGeometry candidate = m_pathEditGeometry;
+        if (!candidate.convertSegmentToLine(m_pathEditNodeIndex)) {
+            event->ignore();
+            return;
+        }
         m_pathEditGeometry = candidate;
         emit pathGeometryCommitted(m_pathEditObjectId, candidate,
                                    m_pathEditSpatialRevision);

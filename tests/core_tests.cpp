@@ -67,7 +67,7 @@ QString cyrillicFamily()
     return QFontDatabase::families(QFontDatabase::Cyrillic).value(0);
 }
 
-TextObject configuredText(const QString& text = QStringLiteral("Hello РњРёСЂ"))
+TextObject configuredText(const QString& text = QStringLiteral("Hello Мир"))
 {
     TextObject object;
     object.sourceText = text;
@@ -1698,7 +1698,7 @@ void CoreTests::textReplacementPreservesEffects()
     document.primaryTextObject().effects.append(std::make_unique<GlyphJitterEffect>());
     document.primaryTextObject().deformation.strokes.push_back(pushStroke());
     const QJsonArray before = document.primaryTextObject().effects.toJson();
-    document.primaryTextObject().sourceText = QStringLiteral("Р”СЂСѓРіРѕР№ С‚РµРєСЃС‚");
+    document.primaryTextObject().sourceText = QStringLiteral("Другой текст");
     QCOMPARE(document.primaryTextObject().effects.toJson(), before);
     QCOMPARE(document.primaryTextObject().deformation.strokes.size(), 1);
 }
@@ -1841,7 +1841,7 @@ void CoreTests::cyrillicTextProducesGeometry()
         QSKIP("No installed font advertises Cyrillic support in this environment.");
     }
 
-    TextObject object = configuredText(QStringLiteral("РџСЂРёРІРµС‚ РјРёСЂ"));
+    TextObject object = configuredText(QStringLiteral("Привет мир"));
     object.sourceText = QStringLiteral("\u041f\u0440\u0438\u0432\u0435\u0442 \u043c\u0438\u0440");
     object.font.family = family;
     object.font.styleName = QFontDatabase::styles(family).value(0);
@@ -1867,7 +1867,7 @@ void CoreTests::glyphFallbackIsReportedWhenAvailable()
         QSKIP("No installed Latin-only font is available for a deterministic fallback test.");
     }
 
-    TextObject object = configuredText(QStringLiteral("РџСЂРёРІРµС‚ РјРёСЂ"));
+    TextObject object = configuredText(QStringLiteral("Привет мир"));
     object.sourceText = QStringLiteral("\u041f\u0440\u0438\u0432\u0435\u0442 \u043c\u0438\u0440");
     object.font.family = fallbackFamily;
     object.font.styleName = QFontDatabase::styles(fallbackFamily).value(0);
@@ -2336,7 +2336,7 @@ void CoreTests::cyrillicShapeDeformationProducesGeometry()
     if (family.isEmpty()) {
         QSKIP("No installed font advertises Cyrillic support in this environment.");
     }
-    TextObject object = configuredText(QStringLiteral("РќР• РЎРњРћРўР Р"));
+    TextObject object = configuredText(QStringLiteral("НЕ СМОТРИ"));
     object.font.family = family;
     object.font.styleName = QFontDatabase::styles(family).value(0);
     TextEngine engine;
@@ -2520,7 +2520,7 @@ void CoreTests::legacyFlatProjectMigratesToPageAndLayer()
 
 void CoreTests::multilineShapingPreservesLinesAndClusters()
 {
-    TextObject object = configuredText(QStringLiteral("РЎРўР РђРҐ\nРќР• РЎРњРћРўР Р"));
+    TextObject object = configuredText(QStringLiteral("СТРАХ\nНЕ СМОТРИ"));
     TextEngine engine;
     const ShapedText shaped = engine.shape(object);
     QVERIFY2(shaped.error.isEmpty(), qPrintable(shaped.error));
@@ -3578,7 +3578,7 @@ void CoreTests::textRangeRebasingUsesUtf16Offsets()
     const EffectScope shifted = TextRangeRebaser::rebase(range, QStringLiteral("abCD"), QStringLiteral("XabCD"));
     QCOMPARE(shifted.start, 3);
     QCOMPARE(shifted.end, 5);
-    const QString emoji = QString::fromUtf8("AрџЂBC");
+    const QString emoji = QString::fromUtf8("A😀BC");
     const EffectScope emojiRange{EffectScopeKind::TextRange, 3, 5}; // B/C after surrogate pair
     const EffectScope unchanged = TextRangeRebaser::rebase(emojiRange, emoji, emoji + QStringLiteral("!"));
     QCOMPARE(unchanged.start, 3);

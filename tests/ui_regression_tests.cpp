@@ -36,6 +36,7 @@
 #include <QWheelEvent>
 
 #include <cmath>
+#include <limits>
 
 using namespace vt;
 
@@ -176,14 +177,39 @@ PathGeometry curvedPathForTest()
     return path;
 }
 
-qreal splitCurveError(const QPainterPath& original, const QPainterPath& candidate)
+qreal splitCurveError(const PathGeometry& original, const PathGeometry& candidate)
 {
+    QPointF originalP0;
+    QPointF originalP1;
+    QPointF originalP2;
+    QPointF originalP3;
+    if (!original.segmentControlPoints(0, &originalP0, &originalP1,
+                                       &originalP2, &originalP3)
+        || candidate.segmentCount() < 2) {
+        return std::numeric_limits<qreal>::max();
+    }
+    QPointF firstP0;
+    QPointF firstP1;
+    QPointF firstP2;
+    QPointF firstP3;
+    QPointF secondP0;
+    QPointF secondP1;
+    QPointF secondP2;
+    QPointF secondP3;
+    if (!candidate.segmentControlPoints(0, &firstP0, &firstP1, &firstP2, &firstP3)
+        || !candidate.segmentControlPoints(1, &secondP0, &secondP1,
+                                           &secondP2, &secondP3)) {
+        return std::numeric_limits<qreal>::max();
+    }
     qreal maximum = 0.0;
     for (int index = 0; index <= 100; ++index) {
         const qreal t = static_cast<qreal>(index) / 100.0;
-        maximum = qMax(maximum,
-                       QLineF(original.pointAtPercent(t),
-                              candidate.pointAtPercent(t)).length());
+        const QPointF expected = cubicPoint(originalP0, originalP1, originalP2,
+                                            originalP3, t);
+        const QPointF actual = t <= 0.5
+            ? cubicPoint(firstP0, firstP1, firstP2, firstP3, t * 2.0)
+            : cubicPoint(secondP0, secondP1, secondP2, secondP3, (t - 0.5) * 2.0);
+        maximum = qMax(maximum, QLineF(expected, actual).length());
     }
     return maximum;
 }
@@ -1152,6 +1178,8 @@ void EffectsPanelUiTests::pathTypographySlidersAreTransactionalPhysicalGestures(
     QTest::mouseClick(createPath, Qt::LeftButton);
     QTRY_VERIFY_WITH_TIMEOUT(controller->document().objectById(second)->path.has_value(), 5000);
     QTRY_VERIFY_WITH_TIMEOUT(controller->document().objectById(second)->pathLayout.enabled, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(first) != nullptr, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(second) != nullptr, 5000);
     controller->selectObject(first);
     QTRY_VERIFY_WITH_TIMEOUT(controller->activeObject()->id == first, 5000);
 
@@ -1315,7 +1343,6 @@ void EffectsPanelUiTests::pathCubicInsertionSplitsCurveAndPreservesIdentity()
     controller->undoStack()->setClean();
     const SceneObjectGeometry* sceneObject = controller->sceneGeometry().objectById(objectId);
     QVERIFY(sceneObject);
-    const QPainterPath originalPainterPath = curved.toPainterPath();
     const QPointF splitLocal = cubicPointForTest(
         curved.nodes.at(0).anchor, curved.nodes.at(0).outgoingHandle,
         curved.nodes.at(1).incomingHandle, curved.nodes.at(1).anchor, 0.5);
@@ -1343,7 +1370,7 @@ void EffectsPanelUiTests::pathCubicInsertionSplitsCurveAndPreservesIdentity()
     QVERIFY(committed.nodes.at(0).hasOutgoingHandle);
     QVERIFY(committed.nodes.at(2).hasIncomingHandle);
     QVERIFY(QLineF(committed.nodes.at(1).anchor, splitLocal).length() < 4.0);
-    QVERIFY2(splitCurveError(originalPainterPath, committed.toPainterPath()) < 1.5,
+    QVERIFY2(splitCurveError(curved, committed) < 1.5,
              "inserting on a cubic must preserve the original curve geometry");
 
     const PathGeometry inserted = committed;
