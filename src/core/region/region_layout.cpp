@@ -525,7 +525,8 @@ bool RegionLayoutEngine::apply(VectorGeometry* geometry,
     const qint64 complexity = static_cast<qint64>(shaped.lineBounds.size() + 1)
         * static_cast<qint64>(geometry->pieces.size() + region.outer.nodes.size()
                               + 1);
-    const int maximumCandidates = static_cast<int>(qBound<qint64>(16, complexity + 1, 4096));
+    const int maximumCandidates = static_cast<int>(qBound<qint64>(
+        static_cast<qint64>(16), complexity + 1, static_cast<qint64>(4096)));
     auto chooseBestCandidate = [&]() {
         int bestIndex = 0;
         qreal bestResidual = std::numeric_limits<qreal>::max();
