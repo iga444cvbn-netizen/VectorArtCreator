@@ -30,14 +30,29 @@ opposite side without mirroring or turning the glyph outline. Each source line
 uses the same path and receives its deterministic `lineBounds.y()` normal
 offset.
 
+After successful placement, each visible path-layout piece receives transient
+`GeometryPiece::effectReferenceProgress`: the normalized leading-anchor
+distance returned by the same `PathArcLengthTable` traversal used for layout
+(`PathPosition::distance / totalLength`). Closed paths use the table's wrapped
+distance, and `reverse` builds the table from the reversed traversal. Wave and
+progression-dependent procedural modes consume this scalar; ordinary text
+retains its existing anchor-based fallback. `originalAnchor` remains immutable
+source-layout metadata. Progress is not serialized, is unaffected by baseline
+offset, flip, or later object transforms, and is published atomically with the
+successful path stage and its caches.
+
 ## Editing contract
 
 The Typography inspector exposes path creation, enablement, offsets, traversal,
 side, tangent, closure, geometry reversal, and removal. The Path Edit tool draws
 the object-local path through the current `ObjectFrame`; anchors and handles are
 dragged in page space and converted back to object-local coordinates. Double-click
-adds a node, `C` gives the selected node symmetric cubic handles, Delete removes a
-selected node when the path remains valid, and Escape cancels the active drag.
+uses curve-aware nearest segment hit testing and true de Casteljau splitting,
+including the closed seam. `C` converts a selected line segment to a cubic, `L`
+converts a cubic segment back to a line, Delete removes a selected node when the
+path remains valid, and Escape cancels the active drag. Stable path/node identity
+is retained across async refreshes; edits carrying a stale spatial revision are
+rejected.
 
 Every committed node edit is an undoable command targeted by object ID. The
 canvas sends the spatial revision captured at mouse press. The controller checks
@@ -54,6 +69,9 @@ serialized or used as frame authority.
   reversing geometry twice restores the exact semantic path.
 - Path effects/deformation see post-layout geometry, and transform is still
   applied exactly once at scene/export boundaries.
+- Generated geometry copies preserve transient path progression, while
+  interrupted path layout publishes neither partial geometry nor partial
+  progression metadata; structured geometry signatures observe the metadata.
 - Save/load, copy/assignment, undo/redo, duplicate, paste, and page clone retain
   or freshen path identities according to the hierarchy contract.
 - Cancellation and aggregate path budgets stop work without publishing partial
