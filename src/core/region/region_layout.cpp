@@ -522,11 +522,22 @@ bool RegionLayoutEngine::apply(VectorGeometry* geometry,
     QVector<LayoutPass> candidates;
     QVector<qreal> candidateOrigins;
     QSet<QByteArray> seenStates;
-    const qint64 complexity = static_cast<qint64>(shaped.lineBounds.size() + 1)
-        * static_cast<qint64>(geometry->pieces.size() + region.outer.nodes.size()
-                              + 1);
-    const int maximumCandidates = static_cast<int>(qBound<qint64>(
-        static_cast<qint64>(16), complexity + 1, static_cast<qint64>(4096)));
+    const qint64 lineComplexity = qMax<qint64>(
+        1, static_cast<qint64>(shaped.lineBounds.size()) + 1);
+    const qint64 geometryComplexity = qMax<qint64>(
+        1, static_cast<qint64>(geometry->pieces.size())
+               + static_cast<qint64>(region.outer.nodes.size()) + 1);
+    const qint64 maximumQInt = std::numeric_limits<qint64>::max();
+    const qint64 complexity = lineComplexity > maximumQInt / geometryComplexity
+        ? maximumQInt : lineComplexity * geometryComplexity;
+    const qint64 complexityBound = complexity == maximumQInt
+        ? maximumQInt : complexity + 1;
+    // Each pass is charged through WorkControl. The complexity-derived bound
+    // prevents an unstable input from growing the candidate set without a
+    // fixed iteration magic number; a smaller caller budget remains the
+    // authoritative resource limit.
+    const qint64 maximumCandidates = qMin(complexityBound,
+                                          qMax<qint64>(1, work.maximumUnits()));
     auto chooseBestCandidate = [&]() {
         int bestIndex = 0;
         qreal bestResidual = std::numeric_limits<qreal>::max();
@@ -551,7 +562,7 @@ bool RegionLayoutEngine::apply(VectorGeometry* geometry,
         }
         if (!candidates.isEmpty()) pass = candidates.at(bestIndex);
     };
-    for (int iteration = 0; iteration < maximumCandidates; ++iteration) {
+    for (qint64 iteration = 0; iteration < maximumCandidates; ++iteration) {
         pass = layoutAtOrigin(*geometry, shaped, sourceText, *flattenedRegion, settings,
                               lineSpacing, origin, allClusters, bands, work);
         if (!work.isRunning()) {
