@@ -167,8 +167,9 @@ build\vector_typography_integration_tests.exe seededValidWorkflows -vs
 ## Diagnostics and manual boundary
 
 Windows CI uploads CTest output plus `build/test-artifacts` even when tests
-fail. Smoke scenarios can save a PNG snapshot without making snapshots a
-font-sensitive pass/fail oracle. The Windows clipboard test requires complete
+fail and points offscreen Qt at the runner's Windows font directory. Smoke
+scenarios can save a PNG snapshot without making snapshots a font-sensitive
+pass/fail oracle. The Windows clipboard test requires complete
 EMF, SVG, PNG and Unicode publication on the headless Windows runner; an EMF
 creation or transfer failure is a test failure, not a skip. Manual testing
 remains responsible for subjective UX/visual quality and actual Word/

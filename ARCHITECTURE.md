@@ -48,7 +48,8 @@ TextEngine -> ShapedText -> GlyphGeometryBuilder -> VectorGeometry
   object-owned layout constraints. A region owns one closed outer cubic contour
   and zero or more closed hole contours with stable contour/node IDs. Its
   derived full-band scanline intervals constrain layout before effects; bounded
-  contour-event/slab probes prove the flattened topology across each line band.
+  contour-event/slab probes, including one-sided limits at vertices, prove the
+  flattened topology across each line band without endpoint artifacts.
   The region is not a post-layout clipping mask. Duplicate, paste, and page
   clone freshen the region, contours, and nodes together.
 * `DeformationToolState` is UI interaction state, not document state. `Select` is

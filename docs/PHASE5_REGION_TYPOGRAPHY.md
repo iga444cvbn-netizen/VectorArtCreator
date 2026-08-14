@@ -33,9 +33,11 @@ effects or deformation. For every candidate line band it:
 1. flattens each cubic contour once with a bounded adaptive tolerance;
 2. collects the band endpoints and every flattened contour-vertex Y event in
    that band;
-3. probes each event and the midpoint of every event slab, computes half-open
-   horizontal crossings for the outer contour, and subtracts every hole
-   interval explicitly;
+3. probes the inward one-sided limit at each band endpoint, both one-sided
+   limits at each interior event, and the midpoint of every event slab;
+   exact vertices are not treated as ordinary samples because the crossing
+   oracle uses a half-open edge convention. It computes horizontal crossings
+   for the outer contour and subtracts every hole interval explicitly;
 4. intersects all event/slab intervals to obtain a conservative full-band
    safe interval set. The flattened geometry is piecewise linear between
    events, so this is a bounded topology proof rather than a fixed sample

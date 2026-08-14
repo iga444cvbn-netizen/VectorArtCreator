@@ -271,7 +271,8 @@ For every new persisted field or public workflow, add the applicable gates:
     post-layout effect/deformation ordering;
 13. region geometry and layout: outer/hole topology, cubic scanlines,
     concavity, widest-continuous-interval selection and deterministic ties,
-    event/slab full-band safety, shaping-safe wrapping, real bidi/RTL cluster
+    event/slab full-band safety with one-sided contour-event limits,
+    shaping-safe wrapping, real bidi/RTL cluster
     ownership, explicit unbreakable-word fallback, alignment, padding, Clip
     termination, cancellation/cache recovery, v8 migration, identity
     freshening, controller undo/redo, post-layout effect ordering, export, and
