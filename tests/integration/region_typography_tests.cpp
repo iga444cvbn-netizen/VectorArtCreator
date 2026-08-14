@@ -838,7 +838,7 @@ void RegionTypographyTests::regionSerializationMigratesAndRejectsDuplicateIdenti
 
     QJsonObject missingRegionLayout = serialized;
     missingRegionLayout.remove(QStringLiteral("regionLayout"));
-    assertRejectedAtomically(missingRegionLayout, QStringLiteral("regionLayout"));
+    assertRejectedAtomically(missingRegionLayout, QStringLiteral("region"));
 
     ProjectResourceLimits limited = ProjectSerializer::resourceLimits();
     limited.maximumRegionNodesPerContour = 3;
