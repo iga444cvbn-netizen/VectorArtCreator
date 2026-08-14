@@ -175,6 +175,7 @@ private slots:
     void regionValidationRejectsAdversarialTopologyAndCancellation();
     void regionSerializationMigratesAndRejectsDuplicateIdentity();
     void controllerRegionEditsUndoAndFreshenDuplicateIdentity();
+    void controllerRegionHolePlacementUsesContourEvents();
 };
 
 void RegionTypographyTests::scanlineIntervalsHandleConcavityHolesAndCubics()
@@ -959,6 +960,35 @@ void RegionTypographyTests::controllerRegionEditsUndoAndFreshenDuplicateIdentity
     QVERIFY(layer->objects.at(1)->region.has_value());
     QVERIFY(layer->objects.at(0)->region->id != layer->objects.at(1)->region->id);
     QVERIFY(layer->objects.at(0)->region->outer.id != layer->objects.at(1)->region->outer.id);
+}
+
+void RegionTypographyTests::controllerRegionHolePlacementUsesContourEvents()
+{
+    EditorController controller;
+    const QString objectId = controller.createTextObject(
+        QPointF(80.0, 80.0), QStringLiteral("event-derived hole placement"));
+    controller.setTypographyLayoutMode(TypographyLayoutMode::Region);
+    TextObject* object = controller.document().objectById(objectId);
+    QVERIFY(object && object->region.has_value());
+
+    PathGeometry plus = polygonContour(
+        object->region->outer.id,
+        {{49.0, 0.0}, {51.0, 0.0}, {51.0, 37.0}, {100.0, 37.0},
+         {100.0, 53.0}, {51.0, 53.0}, {51.0, 100.0}, {49.0, 100.0},
+         {49.0, 53.0}, {0.0, 53.0}, {0.0, 37.0}, {49.0, 37.0}});
+    controller.setPathGeometry(objectId, plus, controller.spatialRevision());
+    object = controller.document().objectById(objectId);
+    QVERIFY(object && object->region.has_value());
+    QCOMPARE(object->region->outer.id, plus.id);
+
+    controller.addRegionHole();
+    object = controller.document().objectById(objectId);
+    QVERIFY(object && object->region.has_value());
+    QCOMPARE(object->region->holes.size(), 1);
+    const QRectF holeBounds = object->region->holes.front().toPainterPath().boundingRect();
+    QVERIFY(holeBounds.top() > 37.0);
+    QVERIFY(holeBounds.bottom() < 53.0);
+    QVERIFY2(object->region->validate(), "Event-derived hole placement must remain valid.");
 }
 
 int main(int argc, char* argv[])
