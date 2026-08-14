@@ -17,6 +17,7 @@
 #include "core/presets/preset_manager.h"
 #include "core/presets/preset_catalog.h"
 #include "core/path/path_layout.h"
+#include "core/region/region_layout.h"
 #include "core/serialization/project_serializer.h"
 #include "core/scene/scene_evaluator.h"
 #include "core/scene/object_frame.h"
@@ -293,6 +294,7 @@ private slots:
     void postPathEffectsFollowArcLengthTraversal();
     void complexShapingPlacementHasFiniteAdvancesAndClusters();
     void pathPipelineAppliesEffectsAndDeformationToFinalGeometry();
+    void regionPipelineAppliesEffectsAfterLayoutAndExportsFinalGeometry();
     void pathLayoutHonorsCancellationBudget();
     void pathCancellationThresholdsDoNotPoisonPathStageCaches();
     void pathControllerDuplicateAndStaleGestureKeepIdentitySafe();
@@ -1305,6 +1307,116 @@ void CoreTests::pathPipelineAppliesEffectsAndDeformationToFinalGeometry()
     const QByteArray svgBytes = svg.readAll();
     QVERIFY(svgBytes.contains("<path"));
     QVERIFY(!svgBytes.contains("textPath"));
+}
+
+void CoreTests::regionPipelineAppliesEffectsAfterLayoutAndExportsFinalGeometry()
+{
+    TextObject base = configuredText(QStringLiteral("Region pipeline 123"));
+    base.id = QStringLiteral("region-pipeline-object");
+    base.layoutMode = TypographyLayoutMode::Region;
+    base.region = TypographyRegion::makeRectangle(QRectF(-200.0, -200.0,
+                                                           1200.0, 900.0));
+    base.regionLayout.regionId = base.region->id;
+    base.regionLayout.paddingLeft = 0.0;
+    base.regionLayout.paddingRight = 0.0;
+    base.regionLayout.paddingTop = 0.0;
+    base.regionLayout.paddingBottom = 0.0;
+
+    Page page;
+    page.layers.front()->objects.clear();
+    page.layers.front()->objects.push_back(std::make_unique<TextObject>(base));
+
+    const SceneGeometry regionOnly = SceneEvaluator::evaluate(page, 301);
+    QCOMPARE(regionOnly.evaluationStatus, EvaluationStatus::Complete);
+    const SceneObjectGeometry* regionOnlyObject =
+        regionOnly.objectById(base.id);
+    QVERIFY(regionOnlyObject);
+    QVERIFY(regionOnlyObject->geometry.hasVisibleGeometry());
+    const test::GeometrySignature regionOnlySignature = test::geometrySignature(
+        regionOnlyObject->geometry);
+
+    TextObject& finalObject = *page.layers.front()->objects.front();
+    auto warp = std::make_unique<GeometryWarpEffect>(
+        QStringLiteral("regionWave"), QStringLiteral("Region Wave"),
+        GeometryWarpEffect::Mode::WaveWarp);
+    QVERIFY(warp->setParameter(QStringLiteral("amount"), 0.22));
+    QVERIFY(warp->setParameter(QStringLiteral("frequency"), 1.7));
+    finalObject.effects.append(std::move(warp));
+
+    DeformationStroke deformation;
+    deformation.mode = BrushMode::Push;
+    deformation.target = BrushTarget::Shape;
+    deformation.coordinateSpace = DeformationCoordinateSpace::ObjectLocal;
+    deformation.radius = 260.0;
+    deformation.strength = 0.8;
+    deformation.hardness = 0.45;
+    const QPointF center = regionOnlyObject->geometry.bounds.center();
+    deformation.samples = {{center - QPointF(70.0, 0.0), QPointF(30.0, 0.0), 1.0},
+                            {center, QPointF(40.0, 10.0), 1.0},
+                            {center + QPointF(70.0, 0.0), QPointF(30.0, 0.0), 1.0}};
+    finalObject.deformation.enabled = true;
+    finalObject.deformation.strokes.push_back(deformation);
+
+    const SceneGeometry finalScene = SceneEvaluator::evaluate(page, 302);
+    QCOMPARE(finalScene.evaluationStatus, EvaluationStatus::Complete);
+    const SceneObjectGeometry* finalSceneObject = finalScene.objectById(base.id);
+    QVERIFY(finalSceneObject);
+    QVERIFY(finalSceneObject->geometry.hasVisibleGeometry());
+    QVERIFY(test::geometrySignature(finalSceneObject->geometry) != regionOnlySignature);
+
+    TextEngine engine;
+    const ShapedText shaped = engine.shape(finalObject);
+    QVERIFY2(shaped.error.isEmpty(), qPrintable(shaped.error));
+    VectorGeometry expected = GlyphGeometryBuilder::build(
+        shaped, finalObject.typography.fontSize, finalObject.font.underline,
+        finalObject.font.strikeOut);
+    QString layoutError;
+    QVERIFY2(RegionLayoutEngine::apply(
+                 &expected, shaped, finalObject.sourceText, *finalObject.region,
+                 finalObject.regionLayout, finalObject.typography.lineSpacing,
+                 &layoutError), qPrintable(layoutError));
+    finalObject.effects.apply(expected, finalObject.effectStackStrength);
+    finalObject.deformation.apply(expected);
+    QString difference;
+    QVERIFY2(test::compareGeometry(test::geometrySignature(expected),
+                                   test::geometrySignature(finalSceneObject->geometry),
+                                   &difference),
+             qPrintable(difference));
+
+    // Applying deformation before effects is a distinct, invalid pipeline for
+    // this non-commuting pair. Keep the assertion independent of a fixture
+    // coordinate by comparing complete semantic geometry signatures.
+    VectorGeometry wrongOrder = GlyphGeometryBuilder::build(
+        shaped, finalObject.typography.fontSize, finalObject.font.underline,
+        finalObject.font.strikeOut);
+    QVERIFY2(RegionLayoutEngine::apply(
+                 &wrongOrder, shaped, finalObject.sourceText, *finalObject.region,
+                 finalObject.regionLayout, finalObject.typography.lineSpacing,
+                 &layoutError), qPrintable(layoutError));
+    finalObject.deformation.apply(wrongOrder);
+    finalObject.effects.apply(wrongOrder, finalObject.effectStackStrength);
+    QVERIFY(test::geometrySignature(wrongOrder)
+            != test::geometrySignature(finalSceneObject->geometry));
+
+    Document exportDocument;
+    VectorExportPayload payload;
+    QString exportError;
+    QVERIFY2(ExportPayloadBuilder::build(
+                 exportDocument, page, finalScene, ExportScope::CurrentPage,
+                 {}, &payload, &exportError), qPrintable(exportError));
+    QCOMPARE(payload.plainText, base.sourceText);
+    QVERIFY(!payload.records.isEmpty());
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString svgPath = directory.filePath(QStringLiteral("region-pipeline.svg"));
+    SvgExporter exporter;
+    QVERIFY2(exporter.exportPayload(payload, svgPath, &exportError), qPrintable(exportError));
+    QFile svg(svgPath);
+    QVERIFY(svg.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QByteArray svgBytes = svg.readAll();
+    QVERIFY(svgBytes.contains("<path"));
+    QVERIFY(!svgBytes.contains("<text"));
+    QVERIFY(!svgBytes.contains("regionWave"));
 }
 
 void CoreTests::pathLayoutHonorsCancellationBudget()
