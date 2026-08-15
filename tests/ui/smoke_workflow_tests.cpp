@@ -2,10 +2,8 @@
 #include "tests/support/state_fingerprint.h"
 
 #include "core/serialization/project_serializer.h"
-#include "core/scene/scene_evaluator.h"
 #include "ui/editor_controller.h"
 
-#include <QDebug>
 #include <QFile>
 #include <QTemporaryDir>
 #include <QTest>
@@ -107,24 +105,6 @@ void SmokeWorkflowTests::firstFiveMinutesCanary()
     driver.undo();
     driver.redo();
     QCOMPARE(test::semanticFingerprint(driver.controller().document()), afterRegionEdits);
-    const TextObject* redoObject = driver.controller().document().objectById(id);
-    const SceneObjectGeometry* published = driver.controller().sceneGeometry().objectById(id);
-    const SceneGeometry direct = SceneEvaluator::evaluate(
-        *driver.controller().document().currentPage(),
-        driver.controller().spatialRevision(), WorkControl::unlimited());
-    const SceneObjectGeometry* directObject = direct.objectById(id);
-    qInfo() << "smoke redo region diagnostic"
-            << "source" << (redoObject ? redoObject->sourceText : QString())
-            << "regionBounds" << (redoObject && redoObject->region.has_value()
-                                      ? redoObject->region->toPainterPath().boundingRect()
-                                      : QRectF())
-            << "publishedPieces" << (published ? published->geometry.pieces.size() : -1)
-            << "publishedVisible" << (published && published->geometry.hasVisibleGeometry())
-            << "publishedError" << (published ? published->error : QString())
-            << "directStatus" << static_cast<int>(direct.evaluationStatus)
-            << "directPieces" << (directObject ? directObject->geometry.pieces.size() : -1)
-            << "directVisible" << (directObject && directObject->geometry.hasVisibleGeometry())
-            << "directError" << (directObject ? directObject->error : QString());
     driver.waitForSceneGeneration(id);
 
     QTemporaryDir artifacts;
