@@ -622,6 +622,13 @@ bool RegionLayoutEngine::apply(VectorGeometry* geometry,
             && regionBounds.height() < 200.0) {
             qWarning() << "wide region pass" << origin << pass.lines.size()
                        << pass.blockHeight << pass.clipped << nextOrigin;
+            for (const PlannedLine& line : pass.lines) {
+                qWarning() << "wide region planned line"
+                           << line.clusterBegin << line.clusterEnd
+                           << line.usedWidth << line.interval.left
+                           << line.interval.right << line.oversizedCluster
+                           << line.lastParagraphLine;
+            }
         }
         candidates.push_back(pass);
         candidateOrigins.push_back(origin);
@@ -785,6 +792,17 @@ bool RegionLayoutEngine::apply(VectorGeometry* geometry,
             candidate.pieces[index].path = QPainterPath();
             candidate.pieces[index].hasEffectReferenceProgress = false;
         }
+    }
+    if (regionBounds.width() > 900.0 && regionBounds.height() > 100.0
+        && regionBounds.height() < 200.0) {
+        int nonEmpty = 0;
+        int assignedCount = 0;
+        for (int index = 0; index < candidate.pieces.size(); ++index) {
+            if (assigned.at(index)) ++assignedCount;
+            if (!candidate.pieces.at(index).path.isEmpty()) ++nonEmpty;
+        }
+        qWarning() << "wide region output" << assignedCount << nonEmpty
+                   << candidate.pieces.size();
     }
     const int progressCount = laidOutGlyphs.size();
     for (int ordinal = 0; ordinal < progressCount; ++ordinal) {
