@@ -401,6 +401,61 @@ MainWindow::MainWindow(QWidget* parent)
             [this, finishCanvasTextEditingForInspector](qreal spacing) {
                 finishCanvasTextEditingForInspector(); m_controller->setLineSpacing(spacing);
             });
+    connect(m_typographyPanel, &TypographyPanel::typographyLayoutModeChanged, this,
+            [this, finishCanvasTextEditingForInspector](int mode) {
+                finishCanvasTextEditingForInspector();
+                m_controller->setTypographyLayoutMode(static_cast<TypographyLayoutMode>(mode));
+            });
+    connect(m_typographyPanel, &TypographyPanel::createRegionRectangleRequested, this,
+            [this] { m_controller->createRegionRectangle(); });
+    connect(m_typographyPanel, &TypographyPanel::createRegionEllipseRequested, this,
+            [this] { m_controller->createRegionEllipse(); });
+    connect(m_typographyPanel, &TypographyPanel::createRegionCustomRequested, this,
+            [this] { m_controller->createRegionCustom(); });
+    connect(m_typographyPanel, &TypographyPanel::editRegionRequested, this, [this] {
+        if (m_controller->regionLayoutEnabled()) {
+            m_controller->editRegionOuterContour();
+            m_controller->setTool(EditorTool::PathEdit);
+        }
+    });
+    connect(m_typographyPanel, &TypographyPanel::editRegionHoleRequested, this, [this] {
+        if (m_controller->regionLayoutEnabled()) {
+            m_controller->editRegionHoleContour();
+            m_controller->setTool(EditorTool::PathEdit);
+        }
+    });
+    connect(m_typographyPanel, &TypographyPanel::removeRegionRequested, this, [this] {
+        m_controller->setTool(EditorTool::Select);
+        m_controller->removeRegion();
+    });
+    connect(m_typographyPanel, &TypographyPanel::regionPaddingChanged, this,
+            [this](int side, qreal value) {
+                m_controller->setRegionPadding(static_cast<RegionPaddingSide>(side), value);
+            });
+    connect(m_typographyPanel, &TypographyPanel::regionPaddingInteractionStarted, this,
+            [this](int side) {
+                m_controller->beginRegionPaddingGesture(static_cast<RegionPaddingSide>(side));
+            });
+    connect(m_typographyPanel, &TypographyPanel::regionPaddingInteractionFinished,
+            m_controller, &EditorController::endRegionPaddingGesture);
+    connect(m_typographyPanel, &TypographyPanel::regionHorizontalAlignmentChanged, this,
+            [this](int alignment) {
+                m_controller->setRegionHorizontalAlignment(
+                    static_cast<RegionHorizontalAlignment>(alignment));
+            });
+    connect(m_typographyPanel, &TypographyPanel::regionVerticalAlignmentChanged, this,
+            [this](int alignment) {
+                m_controller->setRegionVerticalAlignment(
+                    static_cast<RegionVerticalAlignment>(alignment));
+            });
+    connect(m_typographyPanel, &TypographyPanel::regionOverflowChanged, this,
+            [this](int overflow) {
+                m_controller->setRegionOverflow(static_cast<RegionOverflowMode>(overflow));
+            });
+    connect(m_typographyPanel, &TypographyPanel::addRegionHoleRequested,
+            m_controller, &EditorController::addRegionHole);
+    connect(m_typographyPanel, &TypographyPanel::removeRegionHoleRequested,
+            m_controller, &EditorController::removeRegionHole);
     connect(m_typographyPanel, &TypographyPanel::pathLayoutEnabledChanged, this,
             [this, finishCanvasTextEditingForInspector](bool enabled) {
                 finishCanvasTextEditingForInspector();
@@ -732,7 +787,10 @@ void MainWindow::refreshPathCapability()
     const TextObject* object = m_controller->activeObject();
     const SceneObjectGeometry* sceneObject = object
         ? m_controller->sceneGeometry().objectById(object->id) : nullptr;
-    const bool available = object && object->path.has_value();
+    const bool regionMode = object
+        && activeTypographyLayoutMode(*object) == TypographyLayoutMode::Region
+        && object->region.has_value();
+    const bool available = object && (object->path.has_value() || regionMode);
     const bool sceneCurrent = m_controller->sceneGeometry().spatialRevision
         == m_controller->spatialRevision();
     if (!available && m_controller->tool() == EditorTool::PathEdit) {
@@ -745,13 +803,22 @@ void MainWindow::refreshPathCapability()
     if (available && sceneCurrent && sceneObject
         && sceneObject->frame.spatialRevision == m_controller->spatialRevision()
         && m_controller->tool() == EditorTool::PathEdit) {
+        const PathGeometry* editablePath = regionMode
+            ? m_controller->activeRegionContour() : &*object->path;
         m_canvas->setPathEditor(object->id,
-                                &*object->path,
+                                editablePath,
                                 sceneObject->frame,
                                 m_controller->sceneGeometry().spatialRevision,
                                 true);
     } else {
         m_canvas->setPathEditor({}, nullptr, ObjectFrame(), 0, false);
+    }
+    if (regionMode && sceneCurrent && sceneObject
+        && sceneObject->frame.spatialRevision == m_controller->spatialRevision()) {
+        m_canvas->setRegionOverlay(object->id, &*object->region, sceneObject->frame,
+                                   m_controller->sceneGeometry().spatialRevision, true);
+    } else {
+        m_canvas->setRegionOverlay({}, nullptr, ObjectFrame(), 0, false);
     }
 }
 

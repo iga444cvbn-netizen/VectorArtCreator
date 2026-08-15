@@ -3,6 +3,7 @@
 #include "core/effects/effect_stack.h"
 #include "core/deformation/manual_deformation.h"
 #include "core/path/path_geometry.h"
+#include "core/region/typography_region.h"
 #include "core/text/font_descriptor.h"
 
 #include <QColor>
@@ -54,6 +55,12 @@ struct TextObject {
     // the object ID and rewrite pathLayout.pathId.
     std::optional<PathGeometry> path;
     PathTypographyProperties pathLayout;
+    // v8 introduces one explicit active layout tag. The legacy pathLayout
+    // flag is retained for v7 compatibility and is normalized by the
+    // serializer/controller at boundaries.
+    TypographyLayoutMode layoutMode = TypographyLayoutMode::Baseline;
+    std::optional<TypographyRegion> region;
+    RegionTypographyProperties regionLayout;
     ObjectTransform transform;
     bool visible = true;
 
@@ -66,6 +73,8 @@ struct TextObject {
     TextObject(TextObject&&) noexcept = default;
     TextObject& operator=(TextObject&&) noexcept = default;
 };
+
+[[nodiscard]] TypographyLayoutMode activeTypographyLayoutMode(const TextObject& object);
 
 struct Layer {
     QString id;
@@ -103,7 +112,7 @@ struct Page {
 
 class Document {
 public:
-    static constexpr int CurrentFormatVersion = 7;
+    static constexpr int CurrentFormatVersion = 8;
 
     int formatVersion = CurrentFormatVersion;
     QString title = QStringLiteral("Untitled Vector Typography Project");

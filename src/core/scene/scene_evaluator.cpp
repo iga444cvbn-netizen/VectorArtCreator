@@ -2,6 +2,7 @@
 
 #include "core/text/text_engine.h"
 #include "core/path/path_layout.h"
+#include "core/region/region_layout.h"
 
 #include <QCryptographicHash>
 #include <QHash>
@@ -45,8 +46,8 @@ struct CachedObjectStages {
     ShapedText shaped;
     QByteArray baseKey;
     VectorGeometry baseGeometry;
-    QByteArray pathKey;
-    VectorGeometry pathGeometry;
+    QByteArray layoutKey;
+    VectorGeometry layoutGeometry;
     QByteArray effectKey;
     VectorGeometry effectGeometry;
     QByteArray deformationKey;
@@ -114,13 +115,25 @@ QByteArray effectsKey(const TextObject& object)
     return hashKey(key);
 }
 
-QByteArray pathLayoutKey(const TextObject& object)
+QByteArray typographyLayoutKey(const TextObject& object)
 {
-    QByteArray key = QJsonDocument(object.pathLayout.toJson())
-                         .toJson(QJsonDocument::Compact);
-    key += QByteArrayLiteral("|path=");
-    if (object.path.has_value()) {
-        key += QJsonDocument(object.path->toJson()).toJson(QJsonDocument::Compact);
+    const TypographyLayoutMode mode = activeTypographyLayoutMode(object);
+    QByteArray key = QByteArrayLiteral("mode=")
+        + typographyLayoutModeToString(mode).toUtf8();
+    if (mode == TypographyLayoutMode::Path) {
+        key += QByteArrayLiteral("|pathLayout=");
+        key += QJsonDocument(object.pathLayout.toJson()).toJson(QJsonDocument::Compact);
+        key += QByteArrayLiteral("|path=");
+        if (object.path.has_value()) {
+            key += QJsonDocument(object.path->toJson()).toJson(QJsonDocument::Compact);
+        }
+    } else if (mode == TypographyLayoutMode::Region) {
+        key += QByteArrayLiteral("|regionLayout=");
+        key += QJsonDocument(object.regionLayout.toJson()).toJson(QJsonDocument::Compact);
+        key += QByteArrayLiteral("|region=");
+        if (object.region.has_value()) {
+            key += QJsonDocument(object.region->toJson()).toJson(QJsonDocument::Compact);
+        }
     }
     return hashKey(key);
 }
@@ -170,7 +183,7 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
         cache.shaped = std::move(shaped);
         cache.shapingKey = currentShapingKey;
         cache.baseKey.clear();
-        cache.pathKey.clear();
+        cache.layoutKey.clear();
         cache.effectKey.clear();
         cache.deformationKey.clear();
     }
@@ -191,56 +204,89 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
         }
         cache.baseGeometry = std::move(baseGeometry);
         cache.baseKey = currentBaseKey;
-        cache.pathKey.clear();
+        cache.layoutKey.clear();
         cache.effectKey.clear();
         cache.deformationKey.clear();
     }
 
-    const QByteArray currentPathKey = hashKey(cache.baseKey + pathLayoutKey(object));
-    if (cache.pathKey != currentPathKey) {
-        VectorGeometry pathGeometry = cache.baseGeometry;
-        if (object.pathLayout.enabled) {
+    const QByteArray currentLayoutKey = hashKey(
+        cache.baseKey + typographyLayoutKey(object));
+    if (cache.layoutKey != currentLayoutKey) {
+        VectorGeometry layoutGeometry = cache.baseGeometry;
+        const TypographyLayoutMode layoutMode = activeTypographyLayoutMode(object);
+        if (layoutMode == TypographyLayoutMode::Path) {
             if (!object.path.has_value()
+                || !object.pathLayout.enabled
                 || object.pathLayout.pathId.isEmpty()
                 || object.path->id != object.pathLayout.pathId) {
                 evaluated.error = QStringLiteral("Path typography references a missing or unrelated path.");
-                cache.pathKey.clear();
+                cache.layoutKey.clear();
                 return evaluated;
             }
             QString pathError;
-            if (!PathLayoutEngine::apply(&pathGeometry,
+            PathTypographyProperties pathSettings = object.pathLayout;
+            pathSettings.enabled = true;
+            if (!PathLayoutEngine::apply(&layoutGeometry,
                                          cache.shaped,
                                          *object.path,
-                                         object.pathLayout,
+                                         pathSettings,
                                          &pathError,
                                          work)) {
                 if (!work.isRunning()) {
-                    cache.pathKey.clear();
+                    cache.layoutKey.clear();
                     return evaluated;
                 }
                 evaluated.error = pathError.isEmpty()
                     ? QStringLiteral("Path typography could not be evaluated.")
                     : pathError;
-                cache.pathKey.clear();
+                cache.layoutKey.clear();
+                return evaluated;
+            }
+        } else if (layoutMode == TypographyLayoutMode::Region) {
+            if (!object.region.has_value()
+                || object.pathLayout.enabled
+                || object.regionLayout.regionId.isEmpty()
+                || object.region->id != object.regionLayout.regionId) {
+                evaluated.error = QStringLiteral("Region typography references a missing or unrelated region.");
+                cache.layoutKey.clear();
+                return evaluated;
+            }
+            QString regionError;
+            if (!RegionLayoutEngine::apply(&layoutGeometry,
+                                           cache.shaped,
+                                           object.sourceText,
+                                           *object.region,
+                                           object.regionLayout,
+                                           object.typography.lineSpacing,
+                                           &regionError,
+                                           work)) {
+                if (!work.isRunning()) {
+                    cache.layoutKey.clear();
+                    return evaluated;
+                }
+                evaluated.error = regionError.isEmpty()
+                    ? QStringLiteral("Region typography could not be evaluated.")
+                    : regionError;
+                cache.layoutKey.clear();
                 return evaluated;
             }
         }
         if (!work.isRunning()) {
-            cache.pathKey.clear();
+            cache.layoutKey.clear();
             return evaluated;
         }
-        cache.pathGeometry = std::move(pathGeometry);
-        cache.pathKey = currentPathKey;
+        cache.layoutGeometry = std::move(layoutGeometry);
+        cache.layoutKey = currentLayoutKey;
         cache.effectKey.clear();
         cache.deformationKey.clear();
     }
 
-    const QByteArray currentEffectKey = hashKey(cache.pathKey + effectsKey(object));
+    const QByteArray currentEffectKey = hashKey(cache.layoutKey + effectsKey(object));
     if (cache.effectKey != currentEffectKey) {
-        if (!work.consume(geometryWorkUnits(cache.pathGeometry))) {
+        if (!work.consume(geometryWorkUnits(cache.layoutGeometry))) {
             return evaluated;
         }
-        cache.effectGeometry = cache.pathGeometry;
+        cache.effectGeometry = cache.layoutGeometry;
         object.effects.apply(cache.effectGeometry, object.effectStackStrength, work);
         if (!work.isRunning()) {
             cache.effectKey.clear();
@@ -267,7 +313,7 @@ SceneObjectGeometry evaluateObjectTask(const QString& pageId,
     // Empty text is still an object.  Its local frame is deliberately
     // independent from glyph visibility so it can be selected, moved and
     // edited later.
-    QRectF baseBounds = cache.pathGeometry.referenceBounds;
+    QRectF baseBounds = cache.layoutGeometry.referenceBounds;
     if (baseBounds.isNull() || baseBounds.isEmpty()) {
         baseBounds = QRectF(0.0,
                             -object.typography.fontSize * 0.8,

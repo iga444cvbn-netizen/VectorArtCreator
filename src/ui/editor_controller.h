@@ -59,6 +59,8 @@ public:
     [[nodiscard]] QString selectedEffectId() const;
     [[nodiscard]] bool pathLayoutEnabled() const;
     [[nodiscard]] const PathGeometry* activePath() const;
+    [[nodiscard]] bool regionLayoutEnabled() const;
+    [[nodiscard]] const TypographyRegion* activeRegion() const;
 
     void refreshFonts();
     void newDocument();
@@ -97,6 +99,22 @@ public:
     void setPathGeometry(const QString& objectId,
                          const PathGeometry& path,
                          quint64 inputSpatialRevision = 0);
+    void setTypographyLayoutMode(TypographyLayoutMode mode);
+    void createRegionRectangle();
+    void createRegionEllipse();
+    void createRegionCustom();
+    void removeRegion();
+    void setRegionPadding(RegionPaddingSide side, qreal value);
+    void beginRegionPaddingGesture(RegionPaddingSide side);
+    void endRegionPaddingGesture();
+    void setRegionHorizontalAlignment(RegionHorizontalAlignment alignment);
+    void setRegionVerticalAlignment(RegionVerticalAlignment alignment);
+    void setRegionOverflow(RegionOverflowMode overflow);
+    void addRegionHole();
+    void removeRegionHole();
+    void editRegionOuterContour();
+    void editRegionHoleContour();
+    [[nodiscard]] const PathGeometry* activeRegionContour() const;
     void setEffectStackStrength(qreal strength);
     void beginEffectStackStrengthGesture();
     void endEffectStackStrengthGesture();
@@ -241,6 +259,17 @@ private:
                        std::optional<PathGeometry> path,
                        PathTypographyProperties layout,
                        const QString& description);
+    void pushTypographyLayoutState(const QString& objectId,
+                                   TypographyLayoutMode mode,
+                                   std::optional<PathGeometry> path,
+                                   PathTypographyProperties pathLayout,
+                                   std::optional<TypographyRegion> region,
+                                   RegionTypographyProperties regionLayout,
+                                   const QString& description,
+                                   quint64 mergeToken = 0);
+    void setRegionContour(const QString& objectId,
+                          const PathGeometry& contour,
+                          quint64 inputSpatialRevision);
     void beginPathOffsetGesture(PathOffsetProperty property);
     void endPathOffsetGesture();
     [[nodiscard]] bool pathInputRevisionIsCurrent(const QString& objectId,
@@ -292,6 +321,13 @@ private:
     QString m_pathOffsetGestureObjectId;
     quint64 m_pathOffsetGestureSerial = 0;
     quint64 m_pathOffsetGestureToken = 0;
+    bool m_regionPaddingGestureActive = false;
+    RegionPaddingSide m_regionPaddingGestureSide = RegionPaddingSide::Left;
+    QString m_regionPaddingGestureObjectId;
+    quint64 m_regionPaddingGestureSerial = 0;
+    quint64 m_regionPaddingGestureToken = 0;
+    QString m_regionEditObjectId;
+    QString m_regionEditContourId;
 };
 
 } // namespace vt

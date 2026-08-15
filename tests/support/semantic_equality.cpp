@@ -123,6 +123,12 @@ bool compareTextObjects(const TextObject& expected, const TextObject& actual,
                        path + QStringLiteral(".path"), difference)
         || !equalValue(expected.pathLayout, actual.pathLayout,
                        path + QStringLiteral(".pathLayout"), difference)
+        || !equalValue(expected.layoutMode, actual.layoutMode,
+                       path + QStringLiteral(".layoutMode"), difference)
+        || !equalValue(expected.region, actual.region,
+                       path + QStringLiteral(".region"), difference)
+        || !equalValue(expected.regionLayout, actual.regionLayout,
+                       path + QStringLiteral(".regionLayout"), difference)
         || !equalValue(expected.transform.position, actual.transform.position,
                        path + QStringLiteral(".transform.position"), difference)
         || !equalValue(expected.transform.rotation, actual.transform.rotation,

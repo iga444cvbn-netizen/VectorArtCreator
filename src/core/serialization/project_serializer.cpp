@@ -1,5 +1,7 @@
 #include "core/serialization/project_serializer.h"
 
+#include "core/evaluation/work_control.h"
+
 #include <QFile>
 #include <QHash>
 #include <QJsonArray>
@@ -30,8 +32,7 @@ bool validateHierarchicalIdentity(const QJsonObject& root, QString* error)
     QSet<QString> layerIds;
     QSet<QString> objectIds;
     QSet<QString> effectIds;
-    QSet<QString> pathIds;
-    QSet<QString> pathNodeIds;
+    QSet<QString> geometryIds;
     QHash<QString, QSet<QString>> layerIdsByPage;
     QHash<QString, QSet<QString>> objectIdsByPage;
 
@@ -94,19 +95,19 @@ bool validateHierarchicalIdentity(const QJsonObject& root, QString* error)
                             QStringLiteral("Invalid path at pages[%1].layers[%2].objects[%3].path: %4")
                                 .arg(pageIndex).arg(layerIndex).arg(objectIndex).arg(pathError), error);
                     }
-                    if (pathIds.contains(parsedPath.id)) {
+                    if (geometryIds.contains(parsedPath.id)) {
                         return identityError(
                             QStringLiteral("Project contains a duplicate path ID at pages[%1].layers[%2].objects[%3].path.id.")
                                 .arg(pageIndex).arg(layerIndex).arg(objectIndex), error);
                     }
-                    pathIds.insert(parsedPath.id);
+                    geometryIds.insert(parsedPath.id);
                     for (const PathNode& node : parsedPath.nodes) {
-                        if (pathNodeIds.contains(node.id)) {
+                        if (geometryIds.contains(node.id)) {
                             return identityError(
                                 QStringLiteral("Project contains a duplicate path node ID at pages[%1].layers[%2].objects[%3].path.")
                                     .arg(pageIndex).arg(layerIndex).arg(objectIndex), error);
                         }
-                        pathNodeIds.insert(node.id);
+                        geometryIds.insert(node.id);
                     }
                     const QJsonValue layoutValue = object.value(QStringLiteral("pathLayout"));
                     if (!layoutValue.isUndefined()) {
@@ -148,6 +149,95 @@ bool validateHierarchicalIdentity(const QJsonObject& root, QString* error)
                         }
                     }
                 }
+                const QJsonValue regionValue = object.value(QStringLiteral("region"));
+                if (!regionValue.isUndefined()) {
+                    if (!regionValue.isObject()) {
+                        return identityError(QStringLiteral("Text object region data is not an object."), error);
+                    }
+                    TypographyRegion parsedRegion;
+                    QString regionError;
+                    if (!TypographyRegion::fromJson(
+                            regionValue.toObject(), &parsedRegion, &regionError)) {
+                        return identityError(
+                            QStringLiteral("Invalid region at pages[%1].layers[%2].objects[%3]: %4")
+                                .arg(pageIndex).arg(layerIndex).arg(objectIndex).arg(regionError), error);
+                    }
+                    if (geometryIds.contains(parsedRegion.id)) {
+                        return identityError(QStringLiteral("Project contains a duplicate region ID."), error);
+                    }
+                    geometryIds.insert(parsedRegion.id);
+                    const auto collectContour = [&](const PathGeometry& contour) -> bool {
+                        if (geometryIds.contains(contour.id)) return false;
+                        geometryIds.insert(contour.id);
+                        for (const PathNode& node : contour.nodes) {
+                            if (geometryIds.contains(node.id)) return false;
+                            geometryIds.insert(node.id);
+                        }
+                        return true;
+                    };
+                    if (!collectContour(parsedRegion.outer)) {
+                        return identityError(QStringLiteral("Project contains duplicate region contour or node IDs."), error);
+                    }
+                    for (const PathGeometry& hole : parsedRegion.holes) {
+                        if (!collectContour(hole)) {
+                            return identityError(QStringLiteral("Project contains duplicate region contour or node IDs."), error);
+                        }
+                    }
+                    const QJsonValue regionLayoutValue = object.value(QStringLiteral("regionLayout"));
+                    if (!regionLayoutValue.isObject()) {
+                        return identityError(QStringLiteral("Region data is missing regionLayout."), error);
+                    }
+                    RegionTypographyProperties properties;
+                    if (!RegionTypographyProperties::fromJson(
+                            regionLayoutValue.toObject(), &properties, &regionError)) {
+                        return identityError(
+                            QStringLiteral("Invalid region typography at pages[%1].layers[%2].objects[%3]: %4")
+                                .arg(pageIndex).arg(layerIndex).arg(objectIndex).arg(regionError), error);
+                    }
+                    if (properties.regionId.isEmpty() || properties.regionId != parsedRegion.id) {
+                        return identityError(QStringLiteral("Region typography references a different owned region."), error);
+                    }
+                } else {
+                    const QJsonValue regionLayoutValue = object.value(QStringLiteral("regionLayout"));
+                    if (regionLayoutValue.isObject()) {
+                        RegionTypographyProperties properties;
+                        QString regionError;
+                        if (!RegionTypographyProperties::fromJson(
+                                regionLayoutValue.toObject(), &properties, &regionError)) {
+                            return identityError(
+                                QStringLiteral("Invalid region typography at pages[%1].layers[%2].objects[%3]: %4")
+                                    .arg(pageIndex).arg(layerIndex).arg(objectIndex).arg(regionError), error);
+                        }
+                        if (!properties.regionId.isEmpty()) {
+                            return identityError(QStringLiteral("Region typography references a missing owned region."), error);
+                        }
+                    }
+                }
+                const QJsonValue modeValue = object.value(QStringLiteral("layoutMode"));
+                if (!modeValue.isUndefined()) {
+                    TypographyLayoutMode mode = TypographyLayoutMode::Baseline;
+                    if (!modeValue.isString()
+                        || !typographyLayoutModeFromString(modeValue.toString(), &mode)) {
+                        return identityError(QStringLiteral("Text object contains an invalid layout mode."), error);
+                    }
+                    if (mode == TypographyLayoutMode::Region
+                        && (!regionValue.isObject()
+                            || !object.value(QStringLiteral("regionLayout")).isObject())) {
+                        return identityError(QStringLiteral("Region layout mode has no region data."), error);
+                    }
+                    const QJsonObject pathLayout = object.value(QStringLiteral("pathLayout")).toObject();
+                    const bool pathEnabled = pathLayout.value(QStringLiteral("enabled")).toBool(false);
+                    if (mode == TypographyLayoutMode::Path
+                        && (!object.value(QStringLiteral("path")).isObject() || !pathEnabled)) {
+                        return identityError(QStringLiteral("Path layout mode has missing or disabled path data."), error);
+                    }
+                    if (mode == TypographyLayoutMode::Baseline && pathEnabled) {
+                        return identityError(QStringLiteral("Baseline layout mode has conflicting path data."), error);
+                    }
+                    if (mode == TypographyLayoutMode::Region && pathEnabled) {
+                        return identityError(QStringLiteral("Region layout mode has conflicting path data."), error);
+                    }
+                }
             }
         }
     }
@@ -180,6 +270,10 @@ struct ResourceBudgetTracker {
     qint64 pathNodes = 0;
     qint64 cubicSegments = 0;
     qint64 pathWork = 0;
+    qint64 regions = 0;
+    qint64 regionContours = 0;
+    qint64 regionNodes = 0;
+    qint64 regionWork = 0;
     qint64 estimatedWork = 0;
 };
 
@@ -223,6 +317,56 @@ qint64 saturatedMultiply(qint64 left, qint64 right)
         return std::numeric_limits<qint64>::max();
     }
     return left * right;
+}
+
+bool preflightRegionContour(const QJsonValue& value,
+                            const QString& path,
+                            const ProjectResourceLimits& limits,
+                            qint64* nodeCount,
+                            qint64* cubicSegments,
+                            QString* error)
+{
+    if (!value.isObject()) {
+        if (error) *error = QStringLiteral("Region contour at %1 must be an object.").arg(path);
+        return false;
+    }
+    const QJsonObject contour = value.toObject();
+    const QJsonValue nodesValue = contour.value(QStringLiteral("nodes"));
+    if (!nodesValue.isArray()) {
+        if (error) *error = QStringLiteral("Region contour nodes at %1 must be an array.").arg(path);
+        return false;
+    }
+    const QJsonArray nodes = nodesValue.toArray();
+    if (!checkLimit(nodes.size(), limits.maximumRegionNodesPerContour,
+                    path + QStringLiteral(".nodes"),
+                    QStringLiteral("region nodes per contour"), error)) {
+        return false;
+    }
+    if (nodeCount) *nodeCount = saturatedAdd(*nodeCount, nodes.size());
+    const bool closed = contour.value(QStringLiteral("closed")).toBool(false);
+    const int segmentCount = closed ? nodes.size() : qMax(0, nodes.size() - 1);
+    qint64 contourCubics = 0;
+    for (int nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
+        if (!nodes.at(nodeIndex).isObject()) {
+            if (error) {
+                *error = QStringLiteral("Region node %1 at %2 is not an object.")
+                             .arg(nodeIndex).arg(path);
+            }
+            return false;
+        }
+    }
+    for (int segmentIndex = 0; segmentIndex < segmentCount; ++segmentIndex) {
+        if (nodes.isEmpty()) break;
+        const int endIndex = (segmentIndex + 1) % nodes.size();
+        const QJsonObject start = nodes.at(segmentIndex).toObject();
+        const QJsonObject end = nodes.at(endIndex).toObject();
+        if (start.value(QStringLiteral("hasOutgoingHandle")).toBool(false)
+            || end.value(QStringLiteral("hasIncomingHandle")).toBool(false)) {
+            ++contourCubics;
+        }
+    }
+    if (cubicSegments) *cubicSegments = saturatedAdd(*cubicSegments, contourCubics);
+    return true;
 }
 
 bool validateTextObjectResources(const QJsonObject& object,
@@ -333,6 +477,8 @@ bool validateTextObjectResources(const QJsonObject& object,
     }
 
     qint64 objectPathNodes = 0;
+    qint64 objectRegionNodes = 0;
+    qint64 objectRegionContours = 0;
     const QJsonValue pathValue = object.value(QStringLiteral("path"));
     if (!pathValue.isUndefined()) {
         if (!pathValue.isObject()) {
@@ -410,13 +556,163 @@ bool validateTextObjectResources(const QJsonObject& object,
         }
     }
 
+    const QJsonValue regionValue = object.value(QStringLiteral("region"));
+    if (!regionValue.isUndefined()) {
+        if (!regionValue.isObject()) {
+            if (error) *error = QStringLiteral("Region data at %1.region must be an object.").arg(path);
+            return false;
+        }
+        const QJsonObject serializedRegion = regionValue.toObject();
+        const QJsonValue outerValue = serializedRegion.value(QStringLiteral("outer"));
+        const QJsonValue holesValue = serializedRegion.value(QStringLiteral("holes"));
+        if (!outerValue.isObject()
+            || (!holesValue.isUndefined() && !holesValue.isArray())) {
+            if (error) *error = QStringLiteral("Region contour data at %1.region is malformed.").arg(path);
+            return false;
+        }
+        const QJsonArray serializedHoles = holesValue.isArray()
+            ? holesValue.toArray() : QJsonArray();
+        const qint64 contourCount = 1 + serializedHoles.size();
+        if (!checkLimit(contourCount, limits.maximumRegionContoursPerRegion,
+                        path + QStringLiteral(".region"),
+                        QStringLiteral("contours per region"), error)) {
+            return false;
+        }
+        qint64 preflightNodes = 0;
+        qint64 preflightCubics = 0;
+        if (!preflightRegionContour(outerValue, path + QStringLiteral(".region.outer"),
+                                    limits, &preflightNodes, &preflightCubics, error)) {
+            return false;
+        }
+        for (int holeIndex = 0; holeIndex < serializedHoles.size(); ++holeIndex) {
+            if (!preflightRegionContour(
+                    serializedHoles.at(holeIndex),
+                    path + QStringLiteral(".region.holes[%1]").arg(holeIndex),
+                    limits, &preflightNodes, &preflightCubics, error)) {
+                return false;
+            }
+        }
+        const qint64 topologyWork = saturatedMultiply(preflightNodes, preflightNodes);
+        const qint64 preflightRegionWork = saturatedAdd(
+            topologyWork,
+            saturatedMultiply(qMax<qint64>(1, preflightNodes),
+                              saturatedAdd(1, saturatedMultiply(preflightCubics, 64))));
+        if (!checkLimit(preflightRegionWork, limits.maximumRegionWork,
+                        path + QStringLiteral(".region"),
+                        QStringLiteral("region work"), error)) {
+            return false;
+        }
+        if (!checkLimit(saturatedAdd(tracker->regionNodes, preflightNodes),
+                        limits.maximumRegionNodes,
+                        path + QStringLiteral(".region"),
+                        QStringLiteral("aggregate region nodes"), error)
+            || !checkLimit(saturatedAdd(tracker->cubicSegments, preflightCubics),
+                           limits.maximumCubicSegments,
+                           path + QStringLiteral(".region"),
+                           QStringLiteral("aggregate cubic segments"), error)) {
+            return false;
+        }
+        if (!checkLimit(saturatedAdd(tracker->regionWork, preflightRegionWork),
+                        limits.maximumRegionWork,
+                        path + QStringLiteral(".region"),
+                        QStringLiteral("aggregate region work"), error)) {
+            return false;
+        }
+        if (!checkLimit(saturatedAdd(tracker->regions, 1), limits.maximumRegions,
+                        path + QStringLiteral(".region"),
+                        QStringLiteral("aggregate regions"), error)
+            || !checkLimit(saturatedAdd(tracker->regionContours, contourCount),
+                           limits.maximumRegionContours,
+                           path + QStringLiteral(".region"),
+                           QStringLiteral("aggregate region contours"), error)
+            || !checkLimit(1, limits.maximumRegionsPerObject,
+                           path + QStringLiteral(".region"),
+                           QStringLiteral("regions per object"), error)) {
+            return false;
+        }
+        tracker->regions = saturatedAdd(tracker->regions, 1);
+        TypographyRegion parsedRegion;
+        QString regionError;
+        if (!TypographyRegion::fromJson(
+                serializedRegion, &parsedRegion, &regionError,
+                WorkControl::withBudget(limits.maximumRegionWork))) {
+            if (error) *error = QStringLiteral("Invalid region at %1.region: %2")
+                .arg(path, regionError);
+            return false;
+        }
+        const qint64 parsedContourCount = 1 + parsedRegion.holes.size();
+        objectRegionContours = parsedContourCount;
+        if (!checkLimit(parsedContourCount, limits.maximumRegionContoursPerRegion,
+                        path + QStringLiteral(".region"),
+                        QStringLiteral("contours per region"), error)) {
+            return false;
+        }
+        tracker->regionContours = saturatedAdd(tracker->regionContours, contourCount);
+        if (!checkLimit(tracker->regionContours, limits.maximumRegionContours,
+                        path + QStringLiteral(".region"),
+                        QStringLiteral("aggregate region contours"), error)) {
+            return false;
+        }
+        qint64 regionNodes = parsedRegion.outer.nodes.size();
+        qint64 regionCubics = 0;
+        const auto countContour = [&](const PathGeometry& contour) {
+            for (int segment = 0; segment < contour.segmentCount(); ++segment) {
+                if (contour.isCubicSegment(segment)) ++regionCubics;
+            }
+        };
+        countContour(parsedRegion.outer);
+        for (const PathGeometry& hole : parsedRegion.holes) {
+            regionNodes = saturatedAdd(regionNodes, hole.nodes.size());
+            countContour(hole);
+        }
+        for (const PathGeometry& contour : parsedRegion.holes) {
+            if (!checkLimit(contour.nodes.size(), limits.maximumRegionNodesPerContour,
+                            path + QStringLiteral(".region.holes"),
+                            QStringLiteral("region nodes per contour"), error)) {
+                return false;
+            }
+        }
+        if (!checkLimit(parsedRegion.outer.nodes.size(), limits.maximumRegionNodesPerContour,
+                        path + QStringLiteral(".region.outer"),
+                        QStringLiteral("region nodes per contour"), error)) {
+            return false;
+        }
+        tracker->regionNodes = saturatedAdd(tracker->regionNodes, regionNodes);
+        objectRegionNodes = regionNodes;
+        if (!checkLimit(tracker->regionNodes, limits.maximumRegionNodes,
+                        path + QStringLiteral(".region"),
+                        QStringLiteral("aggregate region nodes"), error)) {
+            return false;
+        }
+        tracker->cubicSegments = saturatedAdd(tracker->cubicSegments, regionCubics);
+        if (!checkLimit(tracker->cubicSegments, limits.maximumCubicSegments,
+                        path + QStringLiteral(".region"),
+                        QStringLiteral("aggregate cubic segments"), error)) {
+            return false;
+        }
+        const qint64 validatedTopologyWork = saturatedMultiply(regionNodes, regionNodes);
+        const qint64 regionWork = saturatedAdd(
+            validatedTopologyWork,
+            saturatedMultiply(qMax<qint64>(1, regionNodes),
+                              saturatedAdd(1, saturatedMultiply(regionCubics, 64))));
+        tracker->regionWork = saturatedAdd(tracker->regionWork, regionWork);
+        if (!checkLimit(tracker->regionWork, limits.maximumRegionWork,
+                        path + QStringLiteral(".region"),
+                        QStringLiteral("aggregate region work"), error)) {
+            return false;
+        }
+    }
+
     // The expensive paths scale approximately with glyph/piece count multiplied
     // by ordered effects, mask segments, and deformation samples. This rejects
     // adversarial products whose individual child arrays all remain legal.
     const qint64 geometryUnits = qMax<qint64>(1, sourceUnits);
     const qint64 nestedUnits = saturatedAdd(
         saturatedAdd(effects.size(), objectMaskPoints),
-        saturatedAdd(objectDeformationSamples, objectPathNodes));
+        saturatedAdd(objectDeformationSamples,
+                                  saturatedAdd(objectPathNodes,
+                                  saturatedAdd(objectRegionNodes,
+                                               objectRegionContours))));
     const qint64 objectWork = ProjectSerializer::saturatedEstimatedObjectWork(
         geometryUnits, nestedUnits);
     tracker->estimatedWork = saturatedAdd(tracker->estimatedWork, objectWork);
@@ -510,9 +806,15 @@ QJsonObject serializeTextObject(const TextObject& textObject)
     object.insert(QStringLiteral("effects"), textObject.effects.toJson());
     object.insert(QStringLiteral("effectStackStrength"), textObject.effectStackStrength);
     object.insert(QStringLiteral("deformation"), textObject.deformation.toJson());
+    object.insert(QStringLiteral("layoutMode"),
+                  typographyLayoutModeToString(activeTypographyLayoutMode(textObject)));
     object.insert(QStringLiteral("pathLayout"), textObject.pathLayout.toJson());
     if (textObject.path.has_value()) {
         object.insert(QStringLiteral("path"), textObject.path->toJson());
+    }
+    object.insert(QStringLiteral("regionLayout"), textObject.regionLayout.toJson());
+    if (textObject.region.has_value()) {
+        object.insert(QStringLiteral("region"), textObject.region->toJson());
     }
     object.insert(QStringLiteral("transform"), textObject.transform.toJson());
     object.insert(QStringLiteral("visible"), textObject.visible);
@@ -590,6 +892,74 @@ bool deserializeTextObject(const QJsonObject& object,
         } else if (!result.pathLayout.pathId.isEmpty()) {
             if (error) *error = QStringLiteral("Text object path typography references a missing path.");
             return false;
+        }
+        if (formatVersion >= 8) {
+            const QJsonValue modeValue = object.value(QStringLiteral("layoutMode"));
+            TypographyLayoutMode mode = result.pathLayout.enabled
+                ? TypographyLayoutMode::Path : TypographyLayoutMode::Baseline;
+            if (!modeValue.isString()
+                || !typographyLayoutModeFromString(modeValue.toString(), &mode)) {
+                if (error) *error = QStringLiteral("Text object contains an invalid layout mode.");
+                return false;
+            }
+            const QJsonValue regionValue = object.value(QStringLiteral("region"));
+            if (!regionValue.isUndefined()) {
+                if (!regionValue.isObject()) {
+                    if (error) *error = QStringLiteral("Text object region data is not an object.");
+                    return false;
+                }
+                TypographyRegion parsedRegion;
+                QString regionError;
+                if (!TypographyRegion::fromJson(
+                        regionValue.toObject(), &parsedRegion, &regionError)) {
+                    if (error) *error = regionError;
+                    return false;
+                }
+                result.region = std::move(parsedRegion);
+            }
+            const QJsonValue regionLayoutValue = object.value(QStringLiteral("regionLayout"));
+            if (!regionLayoutValue.isUndefined()) {
+                if (!regionLayoutValue.isObject()) {
+                    if (error) *error = QStringLiteral("Text object region typography data is not an object.");
+                    return false;
+                }
+                QString regionLayoutError;
+                if (!RegionTypographyProperties::fromJson(
+                        regionLayoutValue.toObject(), &result.regionLayout, &regionLayoutError)) {
+                    if (error) *error = regionLayoutError;
+                    return false;
+                }
+            }
+            if (result.region.has_value()) {
+                if (result.regionLayout.regionId.isEmpty()) {
+                    if (error) *error = QStringLiteral("Region typography has no region reference.");
+                    return false;
+                }
+                if (result.regionLayout.regionId != result.region->id) {
+                    if (error) *error = QStringLiteral("Region typography references a different region.");
+                    return false;
+                }
+            } else if (!result.regionLayout.regionId.isEmpty()) {
+                if (error) *error = QStringLiteral("Region typography references a missing region.");
+                return false;
+            }
+            if (mode == TypographyLayoutMode::Path && !result.pathLayout.enabled) {
+                if (error) *error = QStringLiteral("Path layout mode is not enabled in path typography data.");
+                return false;
+            }
+            if (mode == TypographyLayoutMode::Region
+                && (!result.region.has_value() || result.pathLayout.enabled)) {
+                if (error) *error = QStringLiteral("Region layout mode has conflicting or missing layout data.");
+                return false;
+            }
+            if (mode == TypographyLayoutMode::Baseline && result.pathLayout.enabled) {
+                if (error) *error = QStringLiteral("Baseline layout mode has conflicting path layout data.");
+                return false;
+            }
+            result.layoutMode = mode;
+        } else {
+            result.layoutMode = result.pathLayout.enabled
+                ? TypographyLayoutMode::Path : TypographyLayoutMode::Baseline;
         }
     }
 
@@ -821,7 +1191,14 @@ bool ProjectSerializer::textObjectFromJson(const QJsonObject& json,
             json, QStringLiteral("object"), resourceLimits(), &tracker, error)) {
         return false;
     }
-    return deserializeTextObject(json, object, Document::CurrentFormatVersion, error);
+    // Clipboard entries did not carry a document-level format marker before
+    // v8. Infer the legacy object schema when the tagged Region fields are
+    // absent so v7 copy/paste remains readable.
+    const int objectVersion = json.contains(QStringLiteral("layoutMode"))
+        || json.contains(QStringLiteral("region"))
+        || json.contains(QStringLiteral("regionLayout"))
+        ? Document::CurrentFormatVersion : 7;
+    return deserializeTextObject(json, object, objectVersion, error);
 }
 
 bool ProjectSerializer::validateResourceBudget(const QJsonDocument& json,

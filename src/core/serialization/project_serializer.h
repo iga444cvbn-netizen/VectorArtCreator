@@ -36,6 +36,13 @@ struct ProjectResourceLimits {
     qint64 maximumPathNodes = 1'048'576;
     qint64 maximumCubicSegments = 1'048'576;
     qint64 maximumPathWork = 4'000'000;
+    int maximumRegionsPerObject = 1;
+    qint64 maximumRegions = 4096;
+    int maximumRegionContoursPerRegion = 1025;
+    qint64 maximumRegionContours = 1'048'576;
+    int maximumRegionNodesPerContour = 4096;
+    qint64 maximumRegionNodes = 1'048'576;
+    qint64 maximumRegionWork = 4'000'000;
     qint64 maximumEstimatedWork = 8'000'000;
 };
 

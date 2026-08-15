@@ -22,6 +22,13 @@ contracts, not just isolated helper functions. A green core suite alone does
   equality, fingerprints, hierarchy invariants, frame round trips, identity-
   corrupt project rejection, exact/one-over resource budgets, deterministic
   legacy identity migration, and deterministic workload builders.
+- `vector_typography_region_tests` (`core;region;serialization;undo;adversarial`)
+  provides independent rectangle/concave/hole/cubic scanline oracles, legal
+  cluster wrapping, between-event topology safety, real bidi/RTL shaping,
+  explicit unbreakable-word fallback, padding/alignment/Clip behavior,
+  cancellation transactionality, v8 round trips and malformed atomic rejection,
+  v7 migration, duplicate identity rejection, and controller undo/redo plus
+  duplicate freshening.
 - `vector_typography_integration_tests`
   (`integration;undo;serialization;async;export`)
   checks real-file save/open/new/failure/migration behavior, exact undo/redo
@@ -30,10 +37,14 @@ contracts, not just isolated helper functions. A green core suite alone does
   text multiplicity, descriptor refusal paths, and ten seeded 200-action
   workflows.
 - `vector_typography_ui_smoke_tests` (`ui;smoke`) drives a visible
-  `MainWindow` through real widgets.  It is the fast first-five-minutes canary.
+  `MainWindow` through real widgets, including a persisted hole add/edit/remove
+  workflow with undo/redo. It is the fast first-five-minutes canary.
 - `vector_typography_ui_tests` (`ui;regression;undo`) retains focused UI regression
   cases such as outside click/wheel routing, focused native text edit, trait
   mode and scale preservation.
+- `vector_typography_region_ui_tests` (`ui;region;smoke`) checks real
+  TypographyPanel mode, preset, padding, alignment, overflow, refresh, and
+  region-edit affordances.
 - `vector_typography_windows_tests` (`windows;export;clipboard`) validates the actual
   Windows Copy for Word clipboard boundary.
 
@@ -101,7 +112,7 @@ configure with MSVC/Qt 6.8.3, build Release, run every
 `core|integration|ui|windows` CTest label, then package and upload
 `VectorTypographyEditor-windows-x64`. A package is never produced after a build
 or test failure. The final Phase 4R evidence must come from one run whose head
-SHA exactly matches the draft PR head; all seven CTest executables must pass and
+SHA exactly matches the draft PR head; all nine CTest executables must pass and
 the complete compiler log must contain no first-party warning.
 
 ## Regression and feature policy
@@ -122,6 +133,17 @@ open/closed/degenerate overflow cases, cancellation and aggregate path limits,
 post-layout effect/deformation ordering, current-schema identity validation,
 duplicate/paste freshening, stale spatial-revision rejection, and a real-widget
 inspector/canvas handoff test.
+
+Region-typography additions additionally require independent scanline oracles
+for rectangles, concavities, cubic contours, holes, and between-event notches;
+widest-continuous-interval selection with deterministic ties;
+shaping-cluster/UTF-16-safe wrapping including real bidi/RTL text; the explicit
+unbreakable-word hard-break policy and overlong Clip termination;
+horizontal/vertical alignment and padding; latest-generation publication;
+post-layout effect ordering; mode-scoped cache invalidation; v8
+identity/migration/resource validation; cancellation without partial geometry
+or cache poisoning; controller undo/redo, hole edit/remove, and duplicate
+freshening; final SVG export; and a real-widget inspector refresh/signal test.
 
 ## Random workflow replay
 
@@ -145,8 +167,9 @@ build\vector_typography_integration_tests.exe seededValidWorkflows -vs
 ## Diagnostics and manual boundary
 
 Windows CI uploads CTest output plus `build/test-artifacts` even when tests
-fail. Smoke scenarios can save a PNG snapshot without making snapshots a
-font-sensitive pass/fail oracle. The Windows clipboard test requires complete
+fail and points offscreen Qt at the runner's Windows font directory. Smoke
+scenarios can save a PNG snapshot without making snapshots a font-sensitive
+pass/fail oracle. The Windows clipboard test requires complete
 EMF, SVG, PNG and Unicode publication on the headless Windows runner; an EMF
 creation or transfer failure is a test failure, not a skip. Manual testing
 remains responsible for subjective UX/visual quality and actual Word/
@@ -186,6 +209,8 @@ The permanent checks are intentionally mapped to the user-visible bug class:
 | Path layout spacing, clipping, degeneracy, and cluster preservation | `pathArcLengthMatchesIndependentDenseOracle`, `pathSubdivisionAndDegenerateGeometryStayBounded`, `pathLayoutClipsOpenOverflowWithoutEndpointPileup`, `pathLayoutPreservesClustersThroughEffects` |
 | Path identity, malformed persistence, stale gestures, and object-targeted undo | `pathSerializationRejectsCorruptionAndBudgets`, `pathControllerDuplicateAndStaleGestureKeepIdentitySafe`, `pathUndoTargetsExplicitObjectAndRestoresFingerprint` |
 | Real-widget path creation, tool dispatch, anchor gesture, offsets, and disable/undo | `pathTypographyControlsAndAnchorGesture` |
+| Region scanline layout, shaping-safe wrap, topology, alignment, Clip, persistence, and controller semantics | `vector_typography_region_tests` |
+| Region inspector controls and refresh synchronization | `vector_typography_region_ui_tests` |
 | Stale scene frame authorizes page-space mutation (P1-03) | `staleFrameCannotAuthorizeSpatialMutation` holds revision N, maps mask/deformation through N+1, and proves stale-transform fingerprint/undo neutrality; `transientPreviewNeverBecomesDocumentOrFrameAuthority` proves preview geometry differs without becoming document/frame/cache authority |
 | Aggregate hostile workload / noncancellable work (P1-05) | `serializedResourceBudgetsHaveExactBoundaries` including saturating overflow/composite limits, `workControlHasExactSharedTerminalBoundaries`, `evaluationCancellationDoesNotPoisonWorkerCaches`, `cooperativeWorkBudgetAndCancellationAreDeterministic`, `cancelledSvgNeverCommitsPartialOutput`, Windows `cancellationStopsBeforeClipboardPublication` |
 | Per-run UTF-16 cluster span consumes the rest of a line (P2-01) | deterministic `logicalClusterSpansUseWholeLineContext`; real `mixedUtf16ShapingUsesGlobalClusterSpans`; downstream `mixedUtf16ClustersSurviveEffectsPersistenceAndExport` |

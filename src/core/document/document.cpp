@@ -82,6 +82,9 @@ TextObject::TextObject(const TextObject& other)
     , deformation(other.deformation)
     , path(other.path)
     , pathLayout(other.pathLayout)
+    , layoutMode(other.layoutMode)
+    , region(other.region)
+    , regionLayout(other.regionLayout)
     , transform(other.transform)
     , visible(other.visible)
     , futureData(other.futureData)
@@ -103,10 +106,27 @@ TextObject& TextObject::operator=(const TextObject& other)
     deformation = other.deformation;
     path = other.path;
     pathLayout = other.pathLayout;
+    layoutMode = other.layoutMode;
+    region = other.region;
+    regionLayout = other.regionLayout;
     transform = other.transform;
     visible = other.visible;
     futureData = other.futureData;
     return *this;
+}
+
+TypographyLayoutMode activeTypographyLayoutMode(const TextObject& object)
+{
+    // Tests and v7 callers historically set pathLayout.enabled directly. It
+    // remains a compatibility input until the next explicit command or load
+    // normalizes the tagged mode.
+    if (object.layoutMode == TypographyLayoutMode::Region) {
+        return TypographyLayoutMode::Region;
+    }
+    if (object.layoutMode == TypographyLayoutMode::Path || object.pathLayout.enabled) {
+        return TypographyLayoutMode::Path;
+    }
+    return TypographyLayoutMode::Baseline;
 }
 
 Layer::Layer()

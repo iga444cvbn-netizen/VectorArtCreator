@@ -310,6 +310,26 @@ void EditorCanvas::setPathEditor(const QString& objectId,
     update();
 }
 
+void EditorCanvas::setRegionOverlay(const QString& objectId,
+                                    const TypographyRegion* region,
+                                    const ObjectFrame& frame,
+                                    quint64 spatialRevision,
+                                    bool enabled)
+{
+    if (!enabled || objectId.isEmpty() || !region) {
+        m_regionOverlayObjectId.clear();
+        m_regionOverlay = {};
+        m_regionOverlaySpatialRevision = 0;
+        update();
+        return;
+    }
+    m_regionOverlayObjectId = objectId;
+    m_regionOverlay = *region;
+    m_regionOverlayFrame = frame;
+    m_regionOverlaySpatialRevision = spatialRevision;
+    update();
+}
+
 void EditorCanvas::setNavigationSettings(const QString& mode, bool invertZoom)
 {
     m_navigationMode = mode;
@@ -525,6 +545,19 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
                 }
             }
         }
+    }
+
+    if (!m_regionOverlayObjectId.isEmpty()
+        && m_regionOverlayObjectId == m_activeObjectId
+        && m_regionOverlaySpatialRevision == m_sceneGeometry.spatialRevision
+        && m_regionOverlayFrame.spatialRevision == m_sceneGeometry.spatialRevision) {
+        const QPainterPath regionPath = m_regionOverlayFrame.localToPage.map(
+            m_regionOverlay.toPainterPath());
+        painter.setPen(QPen(QColor(88, 214, 218, 190),
+                            1.4 / qMax<qreal>(0.01, m_zoom),
+                            Qt::DashLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setBrush(QColor(88, 214, 218, 24));
+        painter.drawPath(regionPath);
     }
 
     const QRectF pageBounds = pageRect;
@@ -1016,7 +1049,8 @@ void EditorCanvas::keyPressEvent(QKeyEvent* event)
     }
     if (m_tool == EditorTool::PathEdit && event->key() == Qt::Key_Delete
         && !m_pathEditObjectId.isEmpty() && m_pathEditNodeIndex >= 0
-        && m_pathEditGeometry.nodes.size() > 2) {
+        && m_pathEditGeometry.nodes.size()
+               > (m_pathEditGeometry.closed ? 3 : 2)) {
         PathGeometry candidate = m_pathEditGeometry;
         candidate.nodes.removeAt(m_pathEditNodeIndex);
         m_pathEditGeometry = candidate;

@@ -142,6 +142,86 @@ TypographyPanel::TypographyPanel(QWidget* parent)
     m_lineSpacingSlider->setSuffix(QStringLiteral(" ×"));
     layout->addRow(QStringLiteral("Line spacing"), m_lineSpacingSlider);
 
+    m_layoutModeCombo = new QComboBox(group);
+    m_layoutModeCombo->setObjectName(QStringLiteral("typographyLayoutMode"));
+    m_layoutModeCombo->addItem(QStringLiteral("Baseline"),
+                               static_cast<int>(TypographyLayoutMode::Baseline));
+    m_layoutModeCombo->addItem(QStringLiteral("Path"),
+                               static_cast<int>(TypographyLayoutMode::Path));
+    m_layoutModeCombo->addItem(QStringLiteral("Region"),
+                               static_cast<int>(TypographyLayoutMode::Region));
+    layout->addRow(QStringLiteral("Layout mode"), m_layoutModeCombo);
+
+    auto* regionPresetButtons = new QWidget(group);
+    auto* regionPresetLayout = new QHBoxLayout(regionPresetButtons);
+    regionPresetLayout->setContentsMargins(0, 0, 0, 0);
+    m_createRegionRectangle = new QPushButton(QStringLiteral("Rectangle"), regionPresetButtons);
+    m_createRegionRectangle->setObjectName(QStringLiteral("createRegionRectangle"));
+    m_createRegionEllipse = new QPushButton(QStringLiteral("Ellipse"), regionPresetButtons);
+    m_createRegionEllipse->setObjectName(QStringLiteral("createRegionEllipse"));
+    m_createRegionCustom = new QPushButton(QStringLiteral("Custom"), regionPresetButtons);
+    m_createRegionCustom->setObjectName(QStringLiteral("createRegionCustom"));
+    regionPresetLayout->addWidget(m_createRegionRectangle);
+    regionPresetLayout->addWidget(m_createRegionEllipse);
+    regionPresetLayout->addWidget(m_createRegionCustom);
+    layout->addRow(QStringLiteral("Region preset"), regionPresetButtons);
+
+    auto makePadding = [group](const QString& name) {
+        auto* slider = new SliderSpinBox(group);
+        slider->setRange(0.0, 100000.0);
+        slider->setSingleStep(1.0);
+        slider->setDecimals(1);
+        slider->setSuffix(QStringLiteral(" px"));
+        slider->setObjectName(name);
+        return slider;
+    };
+    m_regionPaddingLeft = makePadding(QStringLiteral("regionPaddingLeft"));
+    m_regionPaddingRight = makePadding(QStringLiteral("regionPaddingRight"));
+    m_regionPaddingTop = makePadding(QStringLiteral("regionPaddingTop"));
+    m_regionPaddingBottom = makePadding(QStringLiteral("regionPaddingBottom"));
+    layout->addRow(QStringLiteral("Region padding L"), m_regionPaddingLeft);
+    layout->addRow(QStringLiteral("Region padding R"), m_regionPaddingRight);
+    layout->addRow(QStringLiteral("Region padding T"), m_regionPaddingTop);
+    layout->addRow(QStringLiteral("Region padding B"), m_regionPaddingBottom);
+
+    m_regionHorizontal = new QComboBox(group);
+    m_regionHorizontal->setObjectName(QStringLiteral("regionHorizontalAlignment"));
+    m_regionHorizontal->addItem(QStringLiteral("Left"), static_cast<int>(RegionHorizontalAlignment::Left));
+    m_regionHorizontal->addItem(QStringLiteral("Center"), static_cast<int>(RegionHorizontalAlignment::Center));
+    m_regionHorizontal->addItem(QStringLiteral("Right"), static_cast<int>(RegionHorizontalAlignment::Right));
+    m_regionHorizontal->addItem(QStringLiteral("Justified"), static_cast<int>(RegionHorizontalAlignment::Justified));
+    layout->addRow(QStringLiteral("Region horizontal"), m_regionHorizontal);
+    m_regionVertical = new QComboBox(group);
+    m_regionVertical->setObjectName(QStringLiteral("regionVerticalAlignment"));
+    m_regionVertical->addItem(QStringLiteral("Top"), static_cast<int>(RegionVerticalAlignment::Top));
+    m_regionVertical->addItem(QStringLiteral("Center"), static_cast<int>(RegionVerticalAlignment::Center));
+    m_regionVertical->addItem(QStringLiteral("Bottom"), static_cast<int>(RegionVerticalAlignment::Bottom));
+    layout->addRow(QStringLiteral("Region vertical"), m_regionVertical);
+    m_regionOverflow = new QComboBox(group);
+    m_regionOverflow->setObjectName(QStringLiteral("regionOverflow"));
+    m_regionOverflow->addItem(QStringLiteral("Clip"), static_cast<int>(RegionOverflowMode::Clip));
+    layout->addRow(QStringLiteral("Region overflow"), m_regionOverflow);
+
+    auto* regionEditButtons = new QWidget(group);
+    auto* regionEditLayout = new QHBoxLayout(regionEditButtons);
+    regionEditLayout->setContentsMargins(0, 0, 0, 0);
+    m_editRegion = new QPushButton(QStringLiteral("Edit Region"), regionEditButtons);
+    m_editRegion->setObjectName(QStringLiteral("editRegion"));
+    m_editRegionHole = new QPushButton(QStringLiteral("Edit Hole"), regionEditButtons);
+    m_editRegionHole->setObjectName(QStringLiteral("editRegionHole"));
+    m_removeRegion = new QPushButton(QStringLiteral("Remove Region"), regionEditButtons);
+    m_removeRegion->setObjectName(QStringLiteral("removeRegion"));
+    m_addRegionHole = new QPushButton(QStringLiteral("Add Hole"), regionEditButtons);
+    m_addRegionHole->setObjectName(QStringLiteral("addRegionHole"));
+    m_removeRegionHole = new QPushButton(QStringLiteral("Remove Hole"), regionEditButtons);
+    m_removeRegionHole->setObjectName(QStringLiteral("removeRegionHole"));
+    regionEditLayout->addWidget(m_editRegion);
+    regionEditLayout->addWidget(m_editRegionHole);
+    regionEditLayout->addWidget(m_removeRegion);
+    regionEditLayout->addWidget(m_addRegionHole);
+    regionEditLayout->addWidget(m_removeRegionHole);
+    layout->addRow(QString(), regionEditButtons);
+
     m_pathEnabled = new QCheckBox(QStringLiteral("Text on path"), group);
     m_pathEnabled->setObjectName(QStringLiteral("textOnPathEnabled"));
     layout->addRow(QStringLiteral("Path layout"), m_pathEnabled);
@@ -226,6 +306,54 @@ TypographyPanel::TypographyPanel(QWidget* parent)
             [this](double value) { emit trackingChanged(value); });
     connect(m_lineSpacingSlider, &SliderSpinBox::valueChanged, this,
             [this](double value) { emit lineSpacingChanged(value); });
+    connect(m_layoutModeCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (index >= 0) {
+            emit typographyLayoutModeChanged(m_layoutModeCombo->itemData(index).toInt());
+        }
+    });
+    connect(m_createRegionRectangle, &QPushButton::clicked,
+            this, &TypographyPanel::createRegionRectangleRequested);
+    connect(m_createRegionEllipse, &QPushButton::clicked,
+            this, &TypographyPanel::createRegionEllipseRequested);
+    connect(m_createRegionCustom, &QPushButton::clicked,
+            this, &TypographyPanel::createRegionCustomRequested);
+    const auto connectPadding = [this](SliderSpinBox* slider, int side) {
+        connect(slider, &SliderSpinBox::valueChanged, this,
+                [this, side](double value) { emit regionPaddingChanged(side, value); });
+        connect(slider, &SliderSpinBox::interactionStarted, this,
+                [this, side] { emit regionPaddingInteractionStarted(side); });
+        connect(slider, &SliderSpinBox::interactionFinished, this,
+                [this] { emit regionPaddingInteractionFinished(); });
+    };
+    connectPadding(m_regionPaddingLeft, static_cast<int>(RegionPaddingSide::Left));
+    connectPadding(m_regionPaddingRight, static_cast<int>(RegionPaddingSide::Right));
+    connectPadding(m_regionPaddingTop, static_cast<int>(RegionPaddingSide::Top));
+    connectPadding(m_regionPaddingBottom, static_cast<int>(RegionPaddingSide::Bottom));
+    connect(m_regionHorizontal, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (index >= 0) {
+            emit regionHorizontalAlignmentChanged(m_regionHorizontal->itemData(index).toInt());
+        }
+    });
+    connect(m_regionVertical, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (index >= 0) {
+            emit regionVerticalAlignmentChanged(m_regionVertical->itemData(index).toInt());
+        }
+    });
+    connect(m_regionOverflow, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (index >= 0) {
+            emit regionOverflowChanged(m_regionOverflow->itemData(index).toInt());
+        }
+    });
+    connect(m_editRegion, &QPushButton::clicked,
+            this, &TypographyPanel::editRegionRequested);
+    connect(m_editRegionHole, &QPushButton::clicked,
+            this, &TypographyPanel::editRegionHoleRequested);
+    connect(m_removeRegion, &QPushButton::clicked,
+            this, &TypographyPanel::removeRegionRequested);
+    connect(m_addRegionHole, &QPushButton::clicked,
+            this, &TypographyPanel::addRegionHoleRequested);
+    connect(m_removeRegionHole, &QPushButton::clicked,
+            this, &TypographyPanel::removeRegionHoleRequested);
     connect(m_pathEnabled, &QCheckBox::toggled,
             this, &TypographyPanel::pathLayoutEnabledChanged);
     connect(m_pathStartOffset, &SliderSpinBox::valueChanged, this,
@@ -318,6 +446,54 @@ void TypographyPanel::refresh(const TextObject* object)
             const QSignalBlocker blocker(m_pathClosed);
             m_pathClosed->setChecked(false);
         }
+        {
+            const QSignalBlocker blocker(m_layoutModeCombo);
+            m_layoutModeCombo->setCurrentIndex(0);
+        }
+        {
+            const QSignalBlocker blocker(m_regionPaddingLeft);
+            m_regionPaddingLeft->setValue(0.0);
+        }
+        {
+            const QSignalBlocker blocker(m_regionPaddingRight);
+            m_regionPaddingRight->setValue(0.0);
+        }
+        {
+            const QSignalBlocker blocker(m_regionPaddingTop);
+            m_regionPaddingTop->setValue(0.0);
+        }
+        {
+            const QSignalBlocker blocker(m_regionPaddingBottom);
+            m_regionPaddingBottom->setValue(0.0);
+        }
+        {
+            const QSignalBlocker blocker(m_regionHorizontal);
+            m_regionHorizontal->setCurrentIndex(0);
+        }
+        {
+            const QSignalBlocker blocker(m_regionVertical);
+            m_regionVertical->setCurrentIndex(0);
+        }
+        {
+            const QSignalBlocker blocker(m_regionOverflow);
+            m_regionOverflow->setCurrentIndex(0);
+        }
+        m_layoutModeCombo->setEnabled(false);
+        m_createRegionRectangle->setEnabled(false);
+        m_createRegionEllipse->setEnabled(false);
+        m_createRegionCustom->setEnabled(false);
+        m_regionPaddingLeft->setEnabled(false);
+        m_regionPaddingRight->setEnabled(false);
+        m_regionPaddingTop->setEnabled(false);
+        m_regionPaddingBottom->setEnabled(false);
+        m_regionHorizontal->setEnabled(false);
+        m_regionVertical->setEnabled(false);
+        m_regionOverflow->setEnabled(false);
+        m_editRegion->setEnabled(false);
+        m_editRegionHole->setEnabled(false);
+        m_removeRegion->setEnabled(false);
+        m_addRegionHole->setEnabled(false);
+        m_removeRegionHole->setEnabled(false);
         m_pathEnabled->setEnabled(false);
         m_pathStartOffset->setEnabled(false);
         m_pathBaselineOffset->setEnabled(false);
@@ -392,6 +568,65 @@ void TypographyPanel::refresh(const TextObject* object)
     const bool multiline = object->sourceText.contains(QLatin1Char('\n'));
     m_lineSpacingSlider->setEnabled(multiline);
     m_lineSpacingSlider->setToolTip(QStringLiteral("Affects spacing between multiple lines."));
+
+    const TypographyLayoutMode layoutMode = activeTypographyLayoutMode(*object);
+    const bool hasRegion = object->region.has_value();
+    const bool regionActive = layoutMode == TypographyLayoutMode::Region && hasRegion;
+    {
+        const QSignalBlocker blocker(m_layoutModeCombo);
+        const int index = m_layoutModeCombo->findData(static_cast<int>(layoutMode));
+        m_layoutModeCombo->setCurrentIndex(index >= 0 ? index : 0);
+    }
+    {
+        const QSignalBlocker blocker(m_regionPaddingLeft);
+        m_regionPaddingLeft->setValue(object->regionLayout.paddingLeft);
+    }
+    {
+        const QSignalBlocker blocker(m_regionPaddingRight);
+        m_regionPaddingRight->setValue(object->regionLayout.paddingRight);
+    }
+    {
+        const QSignalBlocker blocker(m_regionPaddingTop);
+        m_regionPaddingTop->setValue(object->regionLayout.paddingTop);
+    }
+    {
+        const QSignalBlocker blocker(m_regionPaddingBottom);
+        m_regionPaddingBottom->setValue(object->regionLayout.paddingBottom);
+    }
+    {
+        const QSignalBlocker blocker(m_regionHorizontal);
+        const int index = m_regionHorizontal->findData(
+            static_cast<int>(object->regionLayout.horizontalAlignment));
+        m_regionHorizontal->setCurrentIndex(index >= 0 ? index : 0);
+    }
+    {
+        const QSignalBlocker blocker(m_regionVertical);
+        const int index = m_regionVertical->findData(
+            static_cast<int>(object->regionLayout.verticalAlignment));
+        m_regionVertical->setCurrentIndex(index >= 0 ? index : 0);
+    }
+    {
+        const QSignalBlocker blocker(m_regionOverflow);
+        const int index = m_regionOverflow->findData(
+            static_cast<int>(object->regionLayout.overflow));
+        m_regionOverflow->setCurrentIndex(index >= 0 ? index : 0);
+    }
+    m_layoutModeCombo->setEnabled(true);
+    m_createRegionRectangle->setEnabled(true);
+    m_createRegionEllipse->setEnabled(true);
+    m_createRegionCustom->setEnabled(true);
+    m_regionPaddingLeft->setEnabled(regionActive);
+    m_regionPaddingRight->setEnabled(regionActive);
+    m_regionPaddingTop->setEnabled(regionActive);
+    m_regionPaddingBottom->setEnabled(regionActive);
+    m_regionHorizontal->setEnabled(regionActive);
+    m_regionVertical->setEnabled(regionActive);
+    m_regionOverflow->setEnabled(regionActive);
+    m_editRegion->setEnabled(regionActive);
+    m_editRegionHole->setEnabled(regionActive && !object->region->holes.isEmpty());
+    m_removeRegion->setEnabled(hasRegion);
+    m_addRegionHole->setEnabled(regionActive);
+    m_removeRegionHole->setEnabled(regionActive && !object->region->holes.isEmpty());
 
     const bool hasPath = object->path.has_value();
     const bool pathEnabled = hasPath && object->pathLayout.enabled;

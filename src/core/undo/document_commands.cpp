@@ -15,6 +15,7 @@ constexpr int DeformationStrengthCommandId = 104;
 constexpr int EffectMasterStrengthCommandId = 105;
 constexpr int EffectStackStrengthCommandId = 107;
 constexpr int PathOffsetCommandId = 108;
+constexpr int TypographyLayoutCommandId = 109;
 
 } // namespace
 
@@ -978,6 +979,90 @@ bool SetPathOffsetCommand::mergeWith(const QUndoCommand* other)
     }
     m_newValue = command->m_newValue;
     setObsolete(m_newValue == m_oldValue);
+    return true;
+}
+
+SetTypographyLayoutCommand::SetTypographyLayoutCommand(
+    Document& document,
+    QString objectId,
+    TypographyLayoutMode oldMode,
+    std::optional<PathGeometry> oldPath,
+    PathTypographyProperties oldPathLayout,
+    std::optional<TypographyRegion> oldRegion,
+    RegionTypographyProperties oldRegionLayout,
+    TypographyLayoutMode newMode,
+    std::optional<PathGeometry> newPath,
+    PathTypographyProperties newPathLayout,
+    std::optional<TypographyRegion> newRegion,
+    RegionTypographyProperties newRegionLayout,
+    DocumentChangeCallback onChanged,
+    QString description,
+    quint64 mergeToken)
+    : DocumentCommand(document, std::move(onChanged), description)
+    , m_oldMode(oldMode)
+    , m_oldPath(std::move(oldPath))
+    , m_oldPathLayout(std::move(oldPathLayout))
+    , m_oldRegion(std::move(oldRegion))
+    , m_oldRegionLayout(std::move(oldRegionLayout))
+    , m_newMode(newMode)
+    , m_newPath(std::move(newPath))
+    , m_newPathLayout(std::move(newPathLayout))
+    , m_newRegion(std::move(newRegion))
+    , m_newRegionLayout(std::move(newRegionLayout))
+    , m_mergeToken(mergeToken)
+{
+    m_objectId = std::move(objectId);
+}
+
+void SetTypographyLayoutCommand::apply(
+    TypographyLayoutMode mode,
+    const std::optional<PathGeometry>& path,
+    const PathTypographyProperties& pathLayout,
+    const std::optional<TypographyRegion>& region,
+    const RegionTypographyProperties& regionLayout)
+{
+    TextObject* object = m_document.objectById(m_objectId);
+    if (!object) return;
+    object->layoutMode = mode;
+    object->path = path;
+    object->pathLayout = pathLayout;
+    object->region = region;
+    object->regionLayout = regionLayout;
+    notifyChanged();
+}
+
+void SetTypographyLayoutCommand::undo()
+{
+    apply(m_oldMode, m_oldPath, m_oldPathLayout, m_oldRegion, m_oldRegionLayout);
+}
+
+void SetTypographyLayoutCommand::redo()
+{
+    apply(m_newMode, m_newPath, m_newPathLayout, m_newRegion, m_newRegionLayout);
+}
+
+int SetTypographyLayoutCommand::id() const
+{
+    return m_mergeToken == 0 ? -1 : TypographyLayoutCommandId;
+}
+
+bool SetTypographyLayoutCommand::mergeWith(const QUndoCommand* other)
+{
+    const auto* command = dynamic_cast<const SetTypographyLayoutCommand*>(other);
+    if (!command || m_mergeToken == 0 || command->m_mergeToken != m_mergeToken
+        || command->m_objectId != m_objectId) {
+        return false;
+    }
+    m_newMode = command->m_newMode;
+    m_newPath = command->m_newPath;
+    m_newPathLayout = command->m_newPathLayout;
+    m_newRegion = command->m_newRegion;
+    m_newRegionLayout = command->m_newRegionLayout;
+    setObsolete(m_newMode == m_oldMode
+                && m_newPath == m_oldPath
+                && m_newPathLayout == m_oldPathLayout
+                && m_newRegion == m_oldRegion
+                && m_newRegionLayout == m_oldRegionLayout);
     return true;
 }
 

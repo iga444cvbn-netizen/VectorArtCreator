@@ -13,13 +13,14 @@ EditorController + SelectionModel + QUndoStack
               |
 Document -> Page -> Layer -> TextObject -> FontDescriptor + TypographyProperties
                                                     + PathGeometry + PathTypographyProperties
+                                                    + TypographyRegion + RegionTypographyProperties
                                                     + EffectStack + ManualDeformation
               |
 immutable Page snapshot -> SceneEvaluator (QThreadPool) -> SceneGeometry
               |
 TextEngine -> ShapedText -> GlyphGeometryBuilder -> VectorGeometry
                                                        |
-                              PATH LAYOUT -> EffectStack -> ManualDeformation -> final geometry
+                    BASELINE / PATH / REGION LAYOUT -> EffectStack -> ManualDeformation -> final geometry
                                                        /                    \
                                               EditorCanvas              SvgExporter
 ```
@@ -43,6 +44,14 @@ TextEngine -> ShapedText -> GlyphGeometryBuilder -> VectorGeometry
   layout state. A path is edited in object-local coordinates; copy construction
   preserves its identity, while duplicate, paste, and page-clone workflows
   explicitly freshen the path and every node identity.
+* `TypographyRegion` and `RegionTypographyProperties` are persistent,
+  object-owned layout constraints. A region owns one closed outer cubic contour
+  and zero or more closed hole contours with stable contour/node IDs. Its
+  derived full-band scanline intervals constrain layout before effects; bounded
+  contour-event/slab probes, including one-sided limits at vertices, prove the
+  flattened topology across each line band without endpoint artifacts.
+  The region is not a post-layout clipping mask. Duplicate, paste, and page
+  clone freshen the region, contours, and nodes together.
 * `DeformationToolState` is UI interaction state, not document state. `Select` is
   an inactive canvas tool and never creates a `DeformationStroke`; brush tools are
   mapped to `BrushMode` only when a real stroke is started.
@@ -93,17 +102,28 @@ which are evaluated as nondestructive geometric attenuation and are undoable.
    bounded arc-length table. Open paths use whole-glyph clipping; closed paths
    wrap by total length. Reverse traversal, baseline offset, side flip, tangent
    following, and line metadata are applied here, before any visual effect.
-5. `EffectStack` applies enabled procedural effects in explicit user order and
+5. `RegionLayoutEngine` optionally derives ordered safe full-band intervals from
+   flattened cubic contour event/slab scanlines, subtracts holes, and selects
+   one widest continuous interval per logical line. Equal-width intervals
+   choose the leftmost span.
+   It wraps complete shaping clusters, preserves UTF-16 ownership and advances,
+   applies padding/alignment, hard-breaks unbreakable words only between whole
+   clusters, and clips an overlong single cluster as one unit. The stage is
+   bounded, cancellable, and transactional; disconnected intervals are not
+   joined within one line.
+6. `EffectStack` applies enabled procedural effects in explicit user order and
    filters text-range scopes by source-cluster metadata.
-6. `ManualDeformation` evaluates persistent strokes on the post-effect geometry.
-7. `SceneEvaluator` applies object transforms and layer visibility/lock state,
+7. `ManualDeformation` evaluates persistent strokes on the post-effect geometry.
+8. `SceneEvaluator` applies object transforms and layer visibility/lock state,
    then returns immutable scene geometry for canvas or SVG use.
 
-The authoritative order is `source text -> shaping -> glyph geometry -> path
-layout -> effects -> deformation -> transform -> scene/export`. Path previews are
-canvas-only state. A committed node edit carries the canvas spatial revision; the
-controller rejects it if the document or authoritative object frame changed while
-the gesture was active.
+The authoritative order is `source text -> shaping -> glyph geometry -> baseline
+/ path / region layout -> effects -> deformation -> transform -> scene/export`.
+Regions are layout constraints, not render masks. Region geometry is persistent;
+wrapped placement and logical effect progress are derived and published
+atomically. Path and region previews are canvas-only state. A committed contour
+edit carries the canvas spatial revision; the controller rejects it if the
+document or authoritative object frame changed while the gesture was active.
 
 `ObjectFrame` is the single object/page-space mapper.  Its legacy-compatible
 matrix is `T(position) * T(pivotLocal) * R(rotation) * S(scale) *
@@ -194,19 +214,23 @@ enabled for a useful preview.
 
 ## Serialization and migration
 
-Projects are versioned JSON. The current project format is version 7. Version 1
+Projects are versioned JSON. The current project format is version 8. Version 1
 tracking is migrated to `trackingEm`; versions 1-3 flat object arrays migrate to
 one page and one layer while preserving object order and assigning deterministic
 path-derived page/layer/object/effect IDs. Version 2/3 projects that
 have no `deformation` object receive the default enabled deformation model with
-no strokes. The next save writes version 7 with pages, layers, stable IDs, object
-transforms, active IDs, and optional object-owned path geometry. Version 6
-objects migrate with path layout disabled. Path and path-layout JSON is validated
-for finite coordinates, stable identities, bounded nodes/segments, and supported
-overflow values. Deformation JSON is validated for finite coordinates, bounded
-sample/stroke counts, and bounded radius/strength/hardness/pressure.
+no strokes. The next save writes version 8 with pages, layers, stable IDs, object
+transforms, active IDs, the explicit Baseline/Path/Region mode, and optional
+object-owned path/region geometry. Version 7 objects infer Baseline or Path
+from the legacy path flag. Path and region JSON is validated for finite
+coordinates, stable identities, bounded nodes/segments, closed topology, hole
+containment, and supported overflow values. Deformation JSON is validated for
+finite coordinates, bounded sample/stroke counts, and bounded
+radius/strength/hardness/pressure. Region contour/node counts and topology work
+have independent per-object and aggregate budgets.
 
-Current v4-v7 files must supply globally unique page/layer/object/effect/path/node IDs and
+Current v4-v8 files must supply globally unique page/layer/object/effect/path/
+region/contour/node IDs and
 hierarchically local active IDs; malformed input is rejected transactionally
 with a JSON path. The serializer validates project/clipboard bytes and aggregate
 page, layer, object, text, effect, path-node, cubic-segment, path-work,
@@ -250,8 +274,11 @@ and Ctrl+C keep their existing behavior.
 `TextEngine` caches the last shaping result by source text, font descriptor,
 font size, line spacing, and `trackingEm`. The scene evaluator receives a copied
 `Page` snapshot, evaluates visible objects as bounded per-object tasks on
-`QThreadPool` workers, and keeps shaping/base/effect/deformation stages in a
-thread-local per-object cache. Each controller request carries a generation;
+`QThreadPool` workers, and keeps shaping/base/layout/effect/deformation stages in
+a thread-local per-object cache. The layout key covers the explicit mode, the
+active mode's owned path or region contours/holes, and its settings, so an
+inactive-resource edit cannot invalidate or reuse the wrong layout stage. Each
+controller request carries a generation;
 and a spatial revision; only one page evaluation is active and only the newest
 pending snapshot is retained. A new request cancels the running shared work
 control. Stale, cancelled, and budget-exhausted results are discarded before
@@ -285,8 +312,9 @@ inside one object's ordered deformation stack.
 font fields, font size, tracking, fill, effect insertion/removal/reorder/toggle,
 effect parameters, preset application, deformation stroke insertion, deformation
 clear, deformation enabled state, deformation overall strength, object moves,
-object insertion/removal/duplication, page/layer operations, and selection of the
-current page are all represented by relevant old/new values or affected objects
+object insertion/removal/duplication, page/layer operations, typography
+mode/region edits, and selection of the current page are all represented by
+relevant old/new values or affected objects
 only. No ordinary edit serializes the complete `Document` merely to detect a
 change.
 
@@ -297,7 +325,9 @@ that held interaction. Selection changes and successful save end the token;
 subsequent values cannot merge across object ownership or the clean index. A
 completed canvas drag is one
 `AddDeformationStrokeCommand`, regardless of the number of pointer events used to
-construct its resampled samples.
+construct its resampled samples. Region mode, contour replacement, alignment,
+hole insertion, and padding use one atomic typography-layout command; one
+physical padding gesture merges only within its captured object/side token.
 
 `QUndoStack::isClean()` is the modified-state source of truth. Successful save calls
 `setClean()`, and new/open reset and clean the stack. Undoing to the saved command

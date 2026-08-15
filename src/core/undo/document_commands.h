@@ -528,4 +528,50 @@ private:
     quint64 m_mergeToken = 0;
 };
 
+// One value command owns the complete typography-layout state so mode changes,
+// inactive resources, and undo/redo remain atomic. A nonzero merge token is
+// used only for one physical Region padding slider gesture.
+class SetTypographyLayoutCommand final : public DocumentCommand {
+public:
+    SetTypographyLayoutCommand(Document& document,
+                               QString objectId,
+                               TypographyLayoutMode oldMode,
+                               std::optional<PathGeometry> oldPath,
+                               PathTypographyProperties oldPathLayout,
+                               std::optional<TypographyRegion> oldRegion,
+                               RegionTypographyProperties oldRegionLayout,
+                               TypographyLayoutMode newMode,
+                               std::optional<PathGeometry> newPath,
+                               PathTypographyProperties newPathLayout,
+                               std::optional<TypographyRegion> newRegion,
+                               RegionTypographyProperties newRegionLayout,
+                               DocumentChangeCallback onChanged,
+                               QString description,
+                               quint64 mergeToken = 0);
+
+    void undo() override;
+    void redo() override;
+    [[nodiscard]] int id() const override;
+    bool mergeWith(const QUndoCommand* other) override;
+
+private:
+    void apply(TypographyLayoutMode mode,
+               const std::optional<PathGeometry>& path,
+               const PathTypographyProperties& pathLayout,
+               const std::optional<TypographyRegion>& region,
+               const RegionTypographyProperties& regionLayout);
+
+    TypographyLayoutMode m_oldMode = TypographyLayoutMode::Baseline;
+    std::optional<PathGeometry> m_oldPath;
+    PathTypographyProperties m_oldPathLayout;
+    std::optional<TypographyRegion> m_oldRegion;
+    RegionTypographyProperties m_oldRegionLayout;
+    TypographyLayoutMode m_newMode = TypographyLayoutMode::Baseline;
+    std::optional<PathGeometry> m_newPath;
+    PathTypographyProperties m_newPathLayout;
+    std::optional<TypographyRegion> m_newRegion;
+    RegionTypographyProperties m_newRegionLayout;
+    quint64 m_mergeToken = 0;
+};
+
 } // namespace vt

@@ -34,6 +34,8 @@ set(CORE_SOURCES
     src/core/document/document.cpp
     src/core/path/path_geometry.cpp
     src/core/path/path_layout.cpp
+    src/core/region/typography_region.cpp
+    src/core/region/region_layout.cpp
     src/core/scene/scene_geometry.cpp
     src/core/scene/object_frame.cpp
     src/core/scene/scene_evaluator.cpp
@@ -218,6 +220,28 @@ vt_enable_first_party_warnings(vector_typography_integration_tests)
 add_test(NAME vector_typography_integration_tests COMMAND vector_typography_integration_tests)
 set_tests_properties(vector_typography_integration_tests PROPERTIES LABELS "integration;undo;serialization;async;export")
 
+add_executable(vector_typography_region_tests
+    tests/integration/region_typography_tests.cpp
+    ${CONTROLLER_TEST_SOURCES}
+)
+target_include_directories(vector_typography_region_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(vector_typography_region_tests PRIVATE
+    vector_typography_test_support
+    vector_typography_core
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Test
+    Qt6::Concurrent
+)
+vt_enable_first_party_warnings(vector_typography_region_tests)
+add_test(NAME vector_typography_region_tests COMMAND vector_typography_region_tests)
+set_tests_properties(vector_typography_region_tests PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    LABELS "core;region;serialization;undo;adversarial")
+
 add_executable(vector_typography_ui_smoke_tests
     tests/ui/smoke_workflow_tests.cpp
     tests/support/ui_test_driver.cpp
@@ -246,6 +270,29 @@ target_link_libraries(vector_typography_ui_tests PRIVATE
 vt_enable_first_party_warnings(vector_typography_ui_tests)
 add_test(NAME vector_typography_ui_tests COMMAND vector_typography_ui_tests)
 set_tests_properties(vector_typography_ui_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "ui;regression;undo")
+
+add_executable(vector_typography_region_ui_tests
+    tests/ui/region_typography_ui_tests.cpp
+    src/ui/slider_spin_box.h
+    src/ui/slider_spin_box.cpp
+    src/ui/typography_panel.h
+    src/ui/typography_panel.cpp
+)
+target_include_directories(vector_typography_region_ui_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(vector_typography_region_ui_tests PRIVATE
+    vector_typography_core
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Test
+)
+vt_enable_first_party_warnings(vector_typography_region_ui_tests)
+add_test(NAME vector_typography_region_ui_tests COMMAND vector_typography_region_ui_tests)
+set_tests_properties(vector_typography_region_ui_tests PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    LABELS "ui;region;smoke")
 
 add_executable(vector_typography_windows_tests tests/platform/windows/clipboard_tests.cpp)
 target_include_directories(vector_typography_windows_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
