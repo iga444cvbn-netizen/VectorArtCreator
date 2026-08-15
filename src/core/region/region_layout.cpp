@@ -1,6 +1,7 @@
 #include "core/region/region_layout.h"
 
 #include <QHash>
+#include <QDebug>
 #include <QSet>
 #include <QTextBoundaryFinder>
 #include <QTransform>
@@ -255,6 +256,11 @@ QVector<RegionInterval> safeIntervalsForBand(const FlattenedTypographyRegion& fl
 {
     if (!std::isfinite(top) || !std::isfinite(bottom) || bottom <= top) return {};
     const QRectF outerBounds = boundsOfPoints(flattenedRegion.outer);
+    const bool debugWideRegion = outerBounds.width() > 900.0
+        && outerBounds.height() > 100.0 && outerBounds.height() < 200.0;
+    if (debugWideRegion) {
+        qWarning() << "wide region band" << top << bottom << outerBounds;
+    }
     const qreal contentTop = outerBounds.top() + settings.paddingTop;
     const qreal contentBottom = outerBounds.bottom() - settings.paddingBottom;
     if (top < contentTop - LayoutEpsilon || bottom > contentBottom + LayoutEpsilon) return {};
@@ -309,6 +315,12 @@ QVector<RegionInterval> safeIntervalsForBand(const FlattenedTypographyRegion& fl
     for (const qreal y : probes) {
         if (!work.consume()) return {};
         QVector<RegionInterval> current = regionIntervalsAtY(flattenedRegion, y, work);
+        if (debugWideRegion) {
+            qWarning() << "wide region probe" << y << current.size();
+            for (const RegionInterval& interval : current) {
+                qWarning() << "wide region interval" << interval.left << interval.right;
+            }
+        }
         for (RegionInterval& interval : current) {
             interval.left += settings.paddingLeft;
             interval.right -= settings.paddingRight;
@@ -318,6 +330,7 @@ QVector<RegionInterval> safeIntervalsForBand(const FlattenedTypographyRegion& fl
         }), current.end());
         if (current.isEmpty()) return {};
         common = common.isEmpty() ? current : intersectIntervals(common, current);
+        if (debugWideRegion) qWarning() << "wide region common" << common.size();
         if (common.isEmpty()) return {};
     }
     std::sort(common.begin(), common.end(), [](const RegionInterval& left,
@@ -542,6 +555,10 @@ bool RegionLayoutEngine::apply(VectorGeometry* geometry,
         }
         allClusters.push_back(buildClusters(*geometry, sourceText, lineIndex));
         bands.push_back(sourceBand(*geometry, shaped, lineIndex));
+        if (bands.back().width() > 900.0) {
+            qWarning() << "wide region source band" << lineIndex << bands.back()
+                       << "clusters" << allClusters.back().size();
+        }
     }
 
     const qreal contentTop = regionBounds.top() + settings.paddingTop;
@@ -601,6 +618,11 @@ bool RegionLayoutEngine::apply(VectorGeometry* geometry,
         }
         const qreal nextOrigin = verticalOrigin(contentTop, contentHeight,
                                                 pass.blockHeight, settings.verticalAlignment);
+        if (regionBounds.width() > 900.0 && regionBounds.height() > 100.0
+            && regionBounds.height() < 200.0) {
+            qWarning() << "wide region pass" << origin << pass.lines.size()
+                       << pass.blockHeight << pass.clipped << nextOrigin;
+        }
         candidates.push_back(pass);
         candidateOrigins.push_back(origin);
         QByteArray state = QByteArray::number(nextOrigin, 'g', 14);
