@@ -168,6 +168,7 @@ private slots:
     void regionLayoutWrapsWithoutSplittingClusters();
     void regionLayoutHonorsAlignmentPaddingAndClip();
     void regionVerticalReflowIsDeterministic();
+    void regionLayoutRetainsLongestClippedPrefixDuringVerticalReflow();
     void regionLayoutUsesLogicalJustificationAndCancellation();
     void regionLayoutJustifiesWhitespaceWithIndependentGeometryOracle();
     void regionLayoutRejectsBetweenSampleBandConcavityAndHole();
@@ -448,6 +449,34 @@ void RegionTypographyTests::regionVerticalReflowIsDeterministic()
             QVERIFY(piece.hasEffectReferenceAnchor);
         }
     }
+}
+
+void RegionTypographyTests::regionLayoutRetainsLongestClippedPrefixDuringVerticalReflow()
+{
+    TypographyRegion region = rectangleRegion(
+        QStringLiteral("clipped-prefix-region"), QRectF(0.0, 0.0, 100.0, 14.0));
+    region.holes.push_back(rectangleContour(
+        QStringLiteral("clipped-prefix-hole"), QRectF(5.0, 10.5, 90.0, 1.0)));
+    RegionTypographyProperties settings = regionSettings(region);
+    settings.paddingLeft = 10.0;
+    settings.paddingRight = 10.0;
+    settings.verticalAlignment = RegionVerticalAlignment::Bottom;
+
+    // The first line is safe at the initial origin and can place two
+    // clusters. Moving the block to the bottom makes that same line cross a
+    // fully padded-out hole, producing an empty fixed-point candidate. Clip
+    // must retain the longest valid prefix instead of choosing that empty
+    // candidate.
+    VectorGeometry geometry = glyphGeometry({0, 1, 2, 3}, {1, 1, 1, 1},
+                                             {30.0, 30.0, 30.0, 30.0}, 20.0);
+    QString error;
+    QVERIFY2(RegionLayoutEngine::apply(&geometry, oneLineShape(120.0),
+                                       QStringLiteral("abcd"), region, settings,
+                                       1.0, &error), qPrintable(error));
+    QVERIFY(!geometry.pieces.at(0).path.isEmpty());
+    QVERIFY(!geometry.pieces.at(1).path.isEmpty());
+    QVERIFY(geometry.pieces.at(2).path.isEmpty());
+    QVERIFY(geometry.pieces.at(3).path.isEmpty());
 }
 
 void RegionTypographyTests::regionLayoutUsesLogicalJustificationAndCancellation()

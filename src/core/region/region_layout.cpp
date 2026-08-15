@@ -585,25 +585,46 @@ bool RegionLayoutEngine::apply(VectorGeometry* geometry,
     // authoritative resource limit.
     const qint64 maximumCandidates = qMin(complexityBound,
                                           qMax<qint64>(1, work.maximumUnits()));
+    const auto candidateCoverage = [](const LayoutPass& candidate) {
+        qint64 coverage = 0;
+        for (const PlannedLine& line : candidate.lines) {
+            coverage += qMax(0, line.clusterEnd - line.clusterBegin);
+        }
+        return coverage;
+    };
     auto chooseBestCandidate = [&]() {
         int bestIndex = 0;
+        qint64 bestCoverage = -1;
+        bool bestComplete = false;
         qreal bestResidual = std::numeric_limits<qreal>::max();
         for (int index = 0; index < candidates.size(); ++index) {
             const qreal next = verticalOrigin(contentTop, contentHeight,
                                                candidates.at(index).blockHeight,
                                                settings.verticalAlignment);
             const qreal residual = std::abs(next - candidateOrigins.at(index));
+            const qint64 coverage = candidateCoverage(candidates.at(index));
+            const bool complete = !candidates.at(index).clipped;
+            const bool moreCoverage = coverage > bestCoverage;
+            const bool sameCoverage = coverage == bestCoverage;
+            const bool sameCompletion = complete == bestComplete;
             const bool fewerLines = candidates.at(index).lines.size()
                 < candidates.at(bestIndex).lines.size();
             const bool sameLineCount = candidates.at(index).lines.size()
                 == candidates.at(bestIndex).lines.size();
             const bool earlierOrigin = candidateOrigins.at(index)
                 < candidateOrigins.at(bestIndex);
-            const bool better = residual < bestResidual - LayoutEpsilon
-                || (std::abs(residual - bestResidual) <= LayoutEpsilon
-                    && (fewerLines || (sameLineCount && earlierOrigin)));
+            const bool better = moreCoverage
+                || (sameCoverage
+                    && ((!sameCompletion && complete)
+                        || (sameCompletion
+                            && (residual < bestResidual - LayoutEpsilon
+                                || (std::abs(residual - bestResidual) <= LayoutEpsilon
+                                    && (fewerLines
+                                        || (sameLineCount && earlierOrigin)))))));
             if (better) {
                 bestIndex = index;
+                bestCoverage = coverage;
+                bestComplete = complete;
                 bestResidual = residual;
             }
         }
