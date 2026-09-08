@@ -197,6 +197,10 @@ InvariantReport checkInvariants(const Document& document, const SceneGeometry* s
             || pageForObject.value(activeObjectId) != document.currentPageId)) {
         report.failures << QStringLiteral("stale or nonlocal active object %1").arg(activeObjectId);
     }
+    if (!activeObjectId.isEmpty() && !selectedObjectIds.contains(activeObjectId)) {
+        report.failures << QStringLiteral("active object is not in the selected set %1")
+                               .arg(activeObjectId);
+    }
     if (!editingObjectId.isEmpty()
         && (!objects.contains(editingObjectId)
             || pageForObject.value(editingObjectId) != document.currentPageId)) {
@@ -241,6 +245,19 @@ InvariantReport checkInvariants(const Document& document, const SceneGeometry* s
                 || !finiteTransform(object.frame.localToPage)
                 || !finiteTransform(object.frame.pageToLocal)) {
                 report.failures << QStringLiteral("invalid object frame for %1").arg(object.objectId);
+            }
+        }
+        // A complete scene must include every visible object on the current
+        // page. Partial/cancelled evaluation deliberately has no such promise.
+        if (scene->evaluationStatus == EvaluationStatus::Complete && currentPage) {
+            for (const auto& layer : currentPage->layers) {
+                if (!layer || !layer->visible) continue;
+                for (const auto& object : layer->objects) {
+                    if (object && object->visible && !sceneObjectIds.contains(object->id)) {
+                        report.failures << QStringLiteral("visible document object missing from complete scene %1")
+                                               .arg(object->id);
+                    }
+                }
             }
         }
     }

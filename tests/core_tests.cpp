@@ -88,6 +88,8 @@ QByteArray geometrySignature(const VectorGeometry& geometry)
     for (const GeometryPiece& piece : geometry.pieces) {
         signature.append(QByteArray::number(piece.sourceGlyphIndex));
         signature.append('|');
+        signature.append(QByteArray::number(static_cast<int>(piece.path.fillRule())));
+        signature.append('|');
         signature.append(QByteArray::number(piece.anchor.x(), 'f', 8));
         signature.append(',');
         signature.append(QByteArray::number(piece.anchor.y(), 'f', 8));
@@ -203,6 +205,7 @@ private slots:
     void closedContourStaysClosed();
     void mixedContourClosureSurvivesReconstruction();
     void shapeDeformationPreservesOpenContours();
+    void zeroInfluenceShapeStrokePreservesEveryPathExactly();
     void cyrillicShapeDeformationProducesGeometry();
     void selectToolIsNotADeformationStroke();
     void smoothToolForcesShapeAndRestoresTarget();
@@ -1232,6 +1235,42 @@ void CoreTests::shapeDeformationPreservesOpenContours()
         geometry.pieces.first().path, 0.1);
     QCOMPARE(contours.size(), 1);
     QVERIFY(!contours.first().closed);
+}
+
+void CoreTests::zeroInfluenceShapeStrokePreservesEveryPathExactly()
+{
+    VectorGeometry original;
+    GeometryPiece curved;
+    curved.path.moveTo(0.0, 0.0);
+    curved.path.cubicTo(15.0, -20.0, 35.0, 25.0, 50.0, 0.0);
+    curved.path.setFillRule(Qt::WindingFill);
+    curved.anchor = QPointF(25.0, 0.0);
+    curved.originalAnchor = curved.anchor;
+    original.pieces.push_back(curved);
+    GeometryPiece untouched;
+    untouched.path.addEllipse(QRectF(200.0, 100.0, 40.0, 20.0));
+    untouched.path.setFillRule(Qt::OddEvenFill);
+    untouched.anchor = QPointF(220.0, 110.0);
+    untouched.originalAnchor = untouched.anchor;
+    untouched.generatorEffectId = QStringLiteral("must-not-be-rebuilt");
+    original.pieces.push_back(untouched);
+    original.setReferenceBounds(QRectF(0.0, -20.0, 240.0, 140.0));
+    original.recomputeBounds();
+
+    DeformationStroke stroke = pushStroke(BrushTarget::Shape);
+    stroke.samples = {{QPointF(20.0, 0.0), QPointF(10.0, 5.0), 0.0}};
+    stroke.radius = 40.0;
+    stroke.strength = 1.0;
+    stroke.coordinateSpace = DeformationCoordinateSpace::ObjectLocal;
+    ManualDeformation deformation;
+    deformation.strokes = {stroke};
+
+    VectorGeometry actual = original;
+    deformation.apply(actual);
+    QString difference;
+    QVERIFY2(test::compareGeometry(test::geometrySignature(original),
+                                   test::geometrySignature(actual), &difference),
+             qPrintable(difference));
 }
 
 void CoreTests::selectToolIsNotADeformationStroke()

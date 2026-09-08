@@ -51,6 +51,7 @@ struct GeometryPieceSignature {
     qint64 opacity = 0;
     int generationDepth = 0;
     QString generatorEffectId;
+    int fillRule = 0;
     QVector<PathElementSignature> path;
     friend bool operator==(const GeometryPieceSignature&, const GeometryPieceSignature&) = default;
 };

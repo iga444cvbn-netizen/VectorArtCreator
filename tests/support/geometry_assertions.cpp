@@ -70,25 +70,25 @@ bool editorOverlayAttached(const QGraphicsProxyWidget* proxy,
     }
     const QRectF local = object.frame.baseLocalBounds.isEmpty()
         ? QRectF(0.0, 0.0, 120.0, 36.0) : object.frame.baseLocalBounds;
-    QTransform localOffset;
-    localOffset.translate(local.x(), local.y());
-    const QTransform expectedTransform = documentToView * object.frame.localToPage * localOffset;
     const QTransform actualTransform = proxy->transform();
-    if (!isFinite(actualTransform) || !isFinite(expectedTransform)) {
+    if (!isFinite(actualTransform)) {
         if (error) *error = QStringLiteral("editor or expected overlay transform is non-finite");
         return false;
     }
-    const QPointF actualOrigin = actualTransform.map(QPointF());
-    const QPointF expectedOrigin = expectedTransform.map(QPointF());
-    if (!approximatelyEqual(actualOrigin, expectedOrigin, tolerance)
-        || !approximatelyEqual(actualTransform.map(QPointF(1.0, 0.0)),
-                               expectedTransform.map(QPointF(1.0, 0.0)), tolerance)
-        || !approximatelyEqual(actualTransform.map(QPointF(0.0, 1.0)),
-                               expectedTransform.map(QPointF(0.0, 1.0)), tolerance)) {
+    // Do not reproduce EditorCanvas's QTransform multiplication. Map three
+    // non-collinear editor points through the semantic coordinate conversions.
+    const QVector<QPointF> editorPoints = {
+        QPointF(0.0, 0.0), QPointF(1.0, 0.0), QPointF(0.0, 1.0)};
+    for (const QPointF& editorPoint : editorPoints) {
+        const QPointF pagePoint = object.frame.localPointToPage(editorPoint + local.topLeft());
+        const QPointF expectedPoint = documentToView.map(pagePoint);
+        const QPointF actualPoint = actualTransform.map(editorPoint);
+        if (approximatelyEqual(actualPoint, expectedPoint, tolerance)) continue;
         if (error) {
-            *error = QStringLiteral("editor detached: expected origin (%1,%2), actual (%3,%4)")
-                .arg(expectedOrigin.x()).arg(expectedOrigin.y())
-                .arg(actualOrigin.x()).arg(actualOrigin.y());
+            *error = QStringLiteral("editor detached at local point (%1,%2): expected (%3,%4), actual (%5,%6)")
+                .arg(editorPoint.x()).arg(editorPoint.y())
+                .arg(expectedPoint.x()).arg(expectedPoint.y())
+                .arg(actualPoint.x()).arg(actualPoint.y());
         }
         return false;
     }

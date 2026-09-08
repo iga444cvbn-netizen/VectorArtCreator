@@ -1,7 +1,5 @@
 #include "tests/support/state_fingerprint.h"
 
-#include "core/serialization/project_serializer.h"
-
 #include <QJsonArray>
 #include <QJsonDocument>
 
@@ -10,13 +8,94 @@ namespace {
 
 QJsonObject semanticJson(const Document& document)
 {
-    QJsonObject json = ProjectSerializer::toJson(document).object();
-    json.remove(QStringLiteral("activeObjectId"));
-    QJsonObject metadata = json.value(QStringLiteral("metadata")).toObject();
-    metadata.remove(QStringLiteral("createdAt"));
-    metadata.remove(QStringLiteral("modifiedAt"));
-    json.insert(QStringLiteral("metadata"), metadata);
-    return json;
+    // Do not call ProjectSerializer here. A serializer omission would otherwise
+    // make before/after fingerprints agree while losing persistent document data.
+    QJsonArray pages;
+    for (const auto& page : document.pages) {
+        if (!page) {
+            pages.append(QJsonValue::Null);
+            continue;
+        }
+        QJsonArray layers;
+        for (const auto& layer : page->layers) {
+            if (!layer) {
+                layers.append(QJsonValue::Null);
+                continue;
+            }
+            QJsonArray objects;
+            for (const auto& object : layer->objects) {
+                if (!object) {
+                    objects.append(QJsonValue::Null);
+                    continue;
+                }
+                QJsonArray effects;
+                for (int index = 0; index < object->effects.size(); ++index) {
+                    const Effect* effect = object->effects.at(index);
+                    if (!effect) {
+                        effects.append(QJsonValue::Null);
+                        continue;
+                    }
+                    QJsonArray masks;
+                    for (const EffectMaskStroke& mask : effect->maskStrokes) {
+                        QJsonArray points;
+                        for (const QPointF& point : mask.points) {
+                            points.append(QJsonArray{point.x(), point.y()});
+                        }
+                        masks.append(QJsonObject{{QStringLiteral("points"), points},
+                                                  {QStringLiteral("radius"), mask.radius},
+                                                  {QStringLiteral("opacity"), mask.opacity},
+                                                  {QStringLiteral("hardness"), mask.hardness},
+                                                  {QStringLiteral("restore"), mask.restore}});
+                    }
+                    effects.append(QJsonObject{{QStringLiteral("typeId"), effect->typeId()},
+                                               {QStringLiteral("instanceId"), effect->instanceId},
+                                               {QStringLiteral("enabled"), effect->enabled},
+                                               {QStringLiteral("masterStrength"), effect->masterStrength},
+                                               {QStringLiteral("scopeKind"), static_cast<int>(effect->scope.kind)},
+                                               {QStringLiteral("scopeStart"), effect->scope.start},
+                                               {QStringLiteral("scopeEnd"), effect->scope.end},
+                                               {QStringLiteral("mask"), masks},
+                                               {QStringLiteral("maskInverted"), effect->maskInverted},
+                                               {QStringLiteral("parameters"), effect->parametersToJson()}});
+                }
+                objects.append(QJsonObject{{QStringLiteral("id"), object->id},
+                                           {QStringLiteral("sourceText"), object->sourceText},
+                                           {QStringLiteral("font"), object->font.toJson()},
+                                           {QStringLiteral("typography"), object->typography.toJson(object->fill)},
+                                           {QStringLiteral("effects"), effects},
+                                           {QStringLiteral("effectStackStrength"), object->effectStackStrength},
+                                           {QStringLiteral("deformation"), object->deformation.toJson()},
+                                           {QStringLiteral("transform"), object->transform.toJson()},
+                                           {QStringLiteral("visible"), object->visible},
+                                           {QStringLiteral("futureData"), object->futureData}});
+            }
+            layers.append(QJsonObject{{QStringLiteral("id"), layer->id},
+                                      {QStringLiteral("name"), layer->name},
+                                      {QStringLiteral("visible"), layer->visible},
+                                      {QStringLiteral("locked"), layer->locked},
+                                      {QStringLiteral("objects"), objects}});
+        }
+        pages.append(QJsonObject{{QStringLiteral("id"), page->id},
+                                 {QStringLiteral("name"), page->name},
+                                 {QStringLiteral("width"), page->size.width()},
+                                 {QStringLiteral("height"), page->size.height()},
+                                 {QStringLiteral("background"), page->background.name(QColor::HexArgb)},
+                                 {QStringLiteral("layers"), layers}});
+    }
+    QJsonObject persistentMetadata = document.metadata;
+    // ProjectSerializer materializes these derived/transient values into its
+    // metadata object on load. Model them once here instead of treating that
+    // round-trip representation detail as document semantics.
+    persistentMetadata.remove(QStringLiteral("title"));
+    persistentMetadata.remove(QStringLiteral("createdAt"));
+    persistentMetadata.remove(QStringLiteral("modifiedAt"));
+    return QJsonObject{{QStringLiteral("formatVersion"), document.formatVersion},
+                       {QStringLiteral("title"), document.title},
+                       {QStringLiteral("pages"), pages},
+                       {QStringLiteral("currentPageId"), document.currentPageId},
+                       {QStringLiteral("activeLayerId"), document.activeLayerId},
+                       {QStringLiteral("metadata"), persistentMetadata},
+                       {QStringLiteral("resources"), document.resources}};
 }
 
 QString compactValue(const QJsonValue& value)
@@ -107,9 +186,8 @@ bool firstJsonDifference(const QJsonValue& expected, const QJsonValue& actual,
 QString semanticFingerprint(const Document& document)
 {
     const QJsonObject json = semanticJson(document);
-    // Serializer writes page/layer/effect ordering in semantic order, so a
-    // compact JSON document is a stable comparison without byte-comparing a
-    // persisted project file or transient metadata.
+    // The hand-built representation preserves page/layer/effect ordering and
+    // omits only declared transient state (timestamps and active object).
     return QString::fromUtf8(QJsonDocument(json).toJson(QJsonDocument::Compact));
 }
 

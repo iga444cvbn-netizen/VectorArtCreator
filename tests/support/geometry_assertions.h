@@ -16,9 +16,9 @@ namespace vt::test {
 [[nodiscard]] bool approximatelyEqual(const QPointF& actual, const QPointF& expected,
                                       qreal tolerance = 1.0);
 
-// Verifies the native editing proxy against the same ObjectFrame-to-view
-// contract used by EditorCanvas.  It intentionally permits editor padding,
-// but catches detached overlays separated by hundreds of pixels.
+// Verifies the native editing proxy by independently mapping non-collinear
+// points through ObjectFrame and view coordinates. It intentionally permits
+// editor padding, but catches detached overlays separated by hundreds of pixels.
 [[nodiscard]] bool editorOverlayAttached(const QGraphicsProxyWidget* proxy,
                                          const SceneObjectGeometry& object,
                                          const QTransform& documentToView,

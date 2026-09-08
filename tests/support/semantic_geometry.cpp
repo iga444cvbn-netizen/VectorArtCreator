@@ -145,6 +145,7 @@ GeometrySignature geometrySignature(const VectorGeometry& geometry, qreal quantu
         item.opacity = quantize(piece.opacityMultiplier, quantum);
         item.generationDepth = piece.generationDepth;
         item.generatorEffectId = piece.generatorEffectId;
+        item.fillRule = static_cast<int>(piece.path.fillRule());
         item.path.reserve(piece.path.elementCount());
         for (int index = 0; index < piece.path.elementCount(); ++index) {
             const QPainterPath::Element element = piece.path.elementAt(index);
@@ -217,6 +218,8 @@ bool compareGeometry(const GeometrySignature& expected, const GeometrySignature&
                           prefix + QStringLiteral(".generationDepth"), difference)) return false;
         if (!compareValue(left.generatorEffectId, right.generatorEffectId,
                           prefix + QStringLiteral(".generatorEffectId"), difference)) return false;
+        if (!compareValue(left.fillRule, right.fillRule,
+                          prefix + QStringLiteral(".fillRule"), difference)) return false;
         if (mismatch(left.path.size() != right.path.size(), prefix + QStringLiteral(".pathElementCount"),
                      QString::number(left.path.size()), QString::number(right.path.size()), difference)) return false;
         for (int elementIndex = 0; elementIndex < left.path.size(); ++elementIndex) {
@@ -290,7 +293,8 @@ QByteArray geometryDigest(const GeometrySignature& signature)
         stream << piece.sourceGlyphIndex << piece.sourceClusterStart << piece.sourceClusterLength
                << piece.sourceLineIndex << piece.anchor.x << piece.anchor.y
                << piece.originalAnchor.x << piece.originalAnchor.y << piece.opacity
-               << piece.generationDepth << piece.generatorEffectId << qint32(piece.path.size());
+               << piece.generationDepth << piece.generatorEffectId << piece.fillRule
+               << qint32(piece.path.size());
         for (const auto& element : piece.path) {
             stream << element.type << element.position.x << element.position.y;
         }

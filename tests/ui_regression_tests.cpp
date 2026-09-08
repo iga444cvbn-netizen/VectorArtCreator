@@ -31,6 +31,7 @@
 #include <QTest>
 #include <QTemporaryDir>
 #include <QToolButton>
+#include <QTransform>
 #include <QTreeWidget>
 #include <QWheelEvent>
 
@@ -47,7 +48,9 @@ private slots:
     void spinBoxArrowHitRegionsIncrementAndDecrement();
     void selectingAnotherLayerObjectEndsNativeEditorSession();
     void nativeEditorViewportRoutesOutsideCanvasInput();
+    void nativeTextUndoRestoresEffectScope();
     void addTextStartsFocusedAndAlignedBeforeAndAfterScenePublication();
+    void nativeEditorOverlayUsesSequentialLocalPageViewMapping();
     void textToolStartsFocusedAtCurrentZoom();
     void traitModeIsShownAfterBoldAndItalic();
     void scaleControlsPreserveSmallAndMirroredValues();
@@ -310,6 +313,74 @@ void EffectsPanelUiTests::addTextStartsFocusedAndAlignedBeforeAndAfterScenePubli
     QCoreApplication::processEvents();
 }
 
+void EffectsPanelUiTests::nativeEditorOverlayUsesSequentialLocalPageViewMapping()
+{
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    auto* controller = window.findChild<EditorController*>();
+    auto* canvas = window.findChild<EditorCanvas*>();
+    QVERIFY(controller);
+    QVERIFY(canvas);
+    const QString objectId = controller->createTextObject(QPointF(160.0, 120.0), QStringLiteral("overlay"));
+    QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(objectId) != nullptr, 5000);
+    ObjectTransform transform = controller->document().objectById(objectId)->transform;
+    transform.rotation = 31.0;
+    transform.scale = QPointF(-0.75, 1.4);
+    transform.pivotLocal = QPointF(17.0, -9.0);
+    transform.hasPivot = true;
+    controller->setObjectTransform(objectId, transform);
+    QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(objectId) != nullptr
+                                 && controller->sceneGeometry().spatialRevision == controller->spatialRevision(),
+                             5000);
+    beginNativeEdit(canvas, controller, objectId);
+    auto* editorView = canvas->findChild<QGraphicsView*>();
+    QVERIFY(editorView && editorView->scene());
+    auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(editorView->scene()->focusItem());
+    if (!proxy) {
+        for (QGraphicsItem* item : editorView->scene()->items()) {
+            if (auto* candidate = qgraphicsitem_cast<QGraphicsProxyWidget*>(item)) {
+                proxy = candidate;
+                break;
+            }
+        }
+    }
+    QVERIFY(proxy);
+
+    for (const bool zoomIn : {false, true}) {
+        canvas->zoom100();
+        for (int step = 0; step < 4; ++step) {
+            if (zoomIn) {
+                canvas->zoomIn();
+            } else {
+                canvas->zoomOut();
+            }
+        }
+        const qreal zoom = canvas->zoom();
+        QCoreApplication::processEvents();
+        const SceneObjectGeometry* sceneObject = controller->sceneGeometry().objectById(objectId);
+        QVERIFY(sceneObject);
+        const QRectF localBounds = sceneObject->frame.baseLocalBounds;
+        QVERIFY(!localBounds.isEmpty());
+        const QPointF origin = canvas->mapDocumentToViewport(QPointF());
+        const QPointF x = canvas->mapDocumentToViewport(QPointF(1.0, 0.0)) - origin;
+        const QPointF y = canvas->mapDocumentToViewport(QPointF(0.0, 1.0)) - origin;
+        const QTransform documentToView(x.x(), x.y(), 0.0, y.x(), y.y(), 0.0,
+                                        origin.x(), origin.y(), 1.0);
+        for (const QPointF& localPoint : {QPointF(0.0, 0.0), QPointF(19.0, 7.0), QPointF(-4.0, 23.0)}) {
+            const QPointF expected = documentToView.map(
+                sceneObject->frame.localToPage.map(localPoint + localBounds.topLeft()));
+            const QPointF actual = proxy->transform().map(localPoint);
+            QVERIFY2(QLineF(expected, actual).length() < 1.0e-6,
+                     qPrintable(QStringLiteral("zoom=%1 local=(%2,%3) expected=(%4,%5) actual=(%6,%7)")
+                                    .arg(zoom).arg(localPoint.x()).arg(localPoint.y())
+                                    .arg(expected.x()).arg(expected.y())
+                                    .arg(actual.x()).arg(actual.y())));
+        }
+    }
+}
+
 void EffectsPanelUiTests::textToolStartsFocusedAtCurrentZoom()
 {
     if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
@@ -342,6 +413,62 @@ void EffectsPanelUiTests::textToolStartsFocusedAtCurrentZoom()
     QTRY_VERIFY(controller->sceneGeometry().objectById(objectId)->geometry.hasVisibleGeometry());
     canvas->finishTextEditing();
     QCoreApplication::processEvents();
+}
+
+void EffectsPanelUiTests::nativeTextUndoRestoresEffectScope()
+{
+    MainWindow window;
+    window.show();
+    QCoreApplication::processEvents();
+    auto* controller = window.findChild<EditorController*>();
+    auto* canvas = window.findChild<EditorCanvas*>();
+    QVERIFY(controller);
+    QVERIFY(canvas);
+    const QString objectId = controller->createTextObject(QPointF(80.0, 80.0), QStringLiteral("AB"));
+    QTRY_VERIFY_WITH_TIMEOUT(controller->sceneGeometry().objectById(objectId) != nullptr, 5000);
+    controller->addEffect(QStringLiteral("wave"));
+    controller->setEffectScope(0, {EffectScopeKind::TextRange, 0, 1});
+    const QString effectId = controller->document().objectById(objectId)->effects.at(0)->instanceId;
+    controller->undoStack()->setClean();
+
+    beginNativeEdit(canvas, controller, objectId);
+    auto* editorView = canvas->findChild<QGraphicsView*>();
+    auto* editor = nativeTextEditor(editorView);
+    QVERIFY(editor);
+    editor->setFocus(Qt::OtherFocusReason);
+    QTextCursor cursor = editor->textCursor();
+    cursor.movePosition(QTextCursor::Start);
+    editor->setTextCursor(cursor);
+    QTest::keyClick(editor, Qt::Key_Delete);
+    QTRY_COMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("B"));
+    QVERIFY(controller->isModified());
+
+    QTest::keyClick(editor, Qt::Key_Z, Qt::ControlModifier);
+    QTRY_COMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("AB"));
+    const Effect* restoredEffect = controller->document().objectById(objectId)->effects.byInstanceId(effectId);
+    QVERIFY(restoredEffect);
+    QCOMPARE(restoredEffect->scope.kind, EffectScopeKind::TextRange);
+    QCOMPARE(restoredEffect->scope.start, 0);
+    QCOMPARE(restoredEffect->scope.end, 1);
+    QVERIFY(controller->isModified());
+
+    QTest::keyClick(editor, Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
+    QTRY_COMPARE(controller->document().objectById(objectId)->sourceText, QStringLiteral("B"));
+    const Effect* redoneEffect = controller->document().objectById(objectId)->effects.byInstanceId(effectId);
+    QVERIFY(redoneEffect);
+    QCOMPARE(redoneEffect->scope.kind, EffectScopeKind::TextRange);
+    QCOMPARE(redoneEffect->scope.start, 0);
+    QCOMPARE(redoneEffect->scope.end, 0);
+
+    Document restored;
+    QString error;
+    QVERIFY2(ProjectSerializer::fromJson(ProjectSerializer::toJson(controller->document()),
+                                          &restored, &error), qPrintable(error));
+    const Effect* persistedEffect = restored.objectById(objectId)->effects.byInstanceId(effectId);
+    QVERIFY(persistedEffect);
+    QCOMPARE(persistedEffect->scope.kind, redoneEffect->scope.kind);
+    QCOMPARE(persistedEffect->scope.start, redoneEffect->scope.start);
+    QCOMPARE(persistedEffect->scope.end, redoneEffect->scope.end);
 }
 
 void EffectsPanelUiTests::nativeEditorViewportRoutesOutsideCanvasInput()

@@ -43,6 +43,7 @@ private slots:
     void latestAsyncSemanticSnapshotWins();
     void mixedRapidMutationsPublishOnlyFinalSemanticScene();
     void staleFrameCannotAuthorizeSpatialMutation();
+    void staleSceneCannotAuthorizeSelectionBeforeNewPublication();
     void transientPreviewNeverBecomesDocumentOrFrameAuthority();
     void cooperativeWorkBudgetAndCancellationAreDeterministic();
     void cancelledSvgNeverCommitsPartialOutput();
@@ -60,6 +61,10 @@ private slots:
     void effectReorderDeleteUndoRestoresSemanticOrder();
     void legacyV1V2V3MigrationSurvivesSaveReloadAndUndoRedo();
     void malformedOrOversizedClipboardPasteIsTransactional();
+    void failedCopyMakesCutTransactionallyNoOp();
+    void duplicateAndPastePreserveLayerOrderIndependentOfLexicalIds();
+    void multiSelectionSurvivesRepeatedNudgeAndNeverRetainsDeletedIds();
+    void controllerRejectsTextThatCannotBePersisted();
     void seededValidWorkflows_data();
     void seededValidWorkflows();
 };
@@ -1113,6 +1118,186 @@ void WorkflowIntegrationTests::malformedOrOversizedClipboardPasteIsTransactional
     installEditorClipboard(QByteArray(static_cast<qsizetype>(oversizedBytes), 'x'));
     controller.pasteObjects();
     assertUnchanged();
+}
+
+void WorkflowIntegrationTests::failedCopyMakesCutTransactionallyNoOp()
+{
+    EditorController controller;
+    const QString id = controller.createTextObject(QPointF(40.0, 40.0), QStringLiteral("cut sentinel"));
+    QVERIFY(!id.isEmpty());
+
+    // Controller currently admits text larger than its clipboard contract. It
+    // gives this test a deterministic Copy failure without mocking QClipboard.
+    const qint64 clipboardLimit = ProjectSerializer::resourceLimits().maximumClipboardInputBytes;
+    controller.setText(QString(static_cast<qsizetype>(clipboardLimit), QLatin1Char('x')));
+    QCOMPARE(controller.document().objectById(id)->sourceText.size(), static_cast<qsizetype>(clipboardLimit));
+    controller.undoStack()->setClean();
+
+    auto* sentinel = new QMimeData;
+    sentinel->setText(QStringLiteral("clipboard must survive failed cut"));
+    QGuiApplication::clipboard()->setMimeData(sentinel);
+
+    const QString before = test::semanticFingerprint(controller.document());
+    const QStringList selectionBefore = controller.selectedObjectIds();
+    const int undoCount = controller.undoStack()->count();
+    const int undoIndex = controller.undoStack()->index();
+    controller.cutSelectedObjects();
+
+    QCOMPARE(test::semanticFingerprint(controller.document()), before);
+    QCOMPARE(controller.selectedObjectIds(), selectionBefore);
+    QCOMPARE(controller.undoStack()->count(), undoCount);
+    QCOMPARE(controller.undoStack()->index(), undoIndex);
+    QVERIFY(controller.undoStack()->isClean());
+    QCOMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("clipboard must survive failed cut"));
+}
+
+void WorkflowIntegrationTests::duplicateAndPastePreserveLayerOrderIndependentOfLexicalIds()
+{
+    EditorController controller;
+    const QString lowerId = controller.createTextObject(QPointF(20.0, 20.0), QStringLiteral("lower"));
+    const QString upperId = controller.createTextObject(QPointF(30.0, 30.0), QStringLiteral("upper"));
+    Layer* layer = controller.document().activeLayer();
+    QVERIFY(layer && layer->objects.size() == 2);
+
+    // Stable IDs are intentionally lexical-opposite to paint order. The test
+    // selection is set through the model so setup does not rely on hit testing.
+    layer->objectById(lowerId)->id = QStringLiteral("text-z-lower");
+    layer->objectById(upperId)->id = QStringLiteral("text-a-upper");
+    controller.selectionModel()->setSelectedObjectIds(
+        {QStringLiteral("text-z-lower"), QStringLiteral("text-a-upper")},
+        QStringLiteral("text-a-upper"));
+    controller.document().activeObjectId = QStringLiteral("text-a-upper");
+
+    auto sourceOrder = [layer] {
+        QStringList order;
+        for (const auto& object : layer->objects) order.push_back(object->sourceText);
+        return order;
+    };
+    const QStringList expected{QStringLiteral("lower"), QStringLiteral("upper"),
+                               QStringLiteral("lower"), QStringLiteral("upper")};
+
+    controller.duplicateSelectedObjects();
+    QCOMPARE(sourceOrder(), expected);
+    controller.undoStack()->undo();
+    QCOMPARE(sourceOrder(), QStringList({QStringLiteral("lower"), QStringLiteral("upper")}));
+    controller.undoStack()->redo();
+    QCOMPARE(sourceOrder(), expected);
+
+    controller.undoStack()->undo();
+    controller.selectionModel()->setSelectedObjectIds(
+        {QStringLiteral("text-z-lower"), QStringLiteral("text-a-upper")},
+        QStringLiteral("text-a-upper"));
+    controller.document().activeObjectId = QStringLiteral("text-a-upper");
+    controller.copySelectedObjects();
+    controller.pasteObjects();
+    QCOMPARE(sourceOrder(), expected);
+    controller.undoStack()->undo();
+    QCOMPARE(sourceOrder(), QStringList({QStringLiteral("lower"), QStringLiteral("upper")}));
+    controller.undoStack()->redo();
+    QCOMPARE(sourceOrder(), expected);
+
+    Document reloaded;
+    QString error;
+    QVERIFY2(ProjectSerializer::fromJson(ProjectSerializer::toJson(controller.document()), &reloaded, &error),
+             qPrintable(error));
+    QStringList reloadedOrder;
+    for (const auto& object : reloaded.currentPage()->layers.front()->objects) {
+        reloadedOrder.push_back(object->sourceText);
+    }
+    QCOMPARE(reloadedOrder, expected);
+}
+
+void WorkflowIntegrationTests::multiSelectionSurvivesRepeatedNudgeAndNeverRetainsDeletedIds()
+{
+    EditorController controller;
+    const QString first = controller.createTextObject(QPointF(20.0, 20.0), QStringLiteral("first"));
+    const QString second = controller.createTextObject(QPointF(80.0, 50.0), QStringLiteral("second"));
+    QTRY_VERIFY_WITH_TIMEOUT(controller.sceneGeometry().objectById(first)
+                                 && controller.sceneGeometry().objectById(second), 5000);
+    controller.selectObject(first);
+    controller.selectObject(second, true);
+    const QSet<QString> expectedSelection{first, second};
+    auto selectionSet = [&controller] {
+        const QStringList ids = controller.selectedObjectIds();
+        return QSet<QString>(ids.cbegin(), ids.cend());
+    };
+    QVERIFY(selectionSet() == expectedSelection);
+
+    const QPointF firstStart = controller.document().objectById(first)->transform.position;
+    const QPointF secondStart = controller.document().objectById(second)->transform.position;
+    controller.nudgeSelectedObjects(QPointF(3.0, 0.0));
+    QCOMPARE(controller.document().objectById(first)->transform.position, firstStart + QPointF(3.0, 0.0));
+    QCOMPARE(controller.document().objectById(second)->transform.position, secondStart + QPointF(3.0, 0.0));
+    // onCommandChanged must not collapse a multi-selection to activeObjectId
+    // before the next keyboard nudge is routed.
+    QVERIFY(selectionSet() == expectedSelection);
+    controller.nudgeSelectedObjects(QPointF(0.0, -2.0));
+    QCOMPARE(controller.document().objectById(first)->transform.position, firstStart + QPointF(3.0, -2.0));
+    QCOMPARE(controller.document().objectById(second)->transform.position, secondStart + QPointF(3.0, -2.0));
+    QVERIFY(selectionSet() == expectedSelection);
+
+    const QString afterNudge = test::semanticFingerprint(controller.document());
+    controller.undoStack()->undo();
+    QVERIFY(test::semanticFingerprint(controller.document()) != afterNudge);
+    controller.undoStack()->redo();
+    QCOMPARE(test::semanticFingerprint(controller.document()), afterNudge);
+
+    controller.selectObject(first);
+    controller.deleteSelectedObjects();
+    QVERIFY(!controller.document().objectById(first));
+    QVERIFY(!controller.selectedObjectIds().contains(first));
+    QVERIFY(controller.document().objectById(second));
+}
+
+void WorkflowIntegrationTests::staleSceneCannotAuthorizeSelectionBeforeNewPublication()
+{
+    EditorController controller;
+    const QString pageA = controller.document().currentPageId;
+    const QString objectA = controller.createTextObject(QPointF(40.0, 40.0), QStringLiteral("page A"));
+    QTRY_VERIFY_WITH_TIMEOUT(controller.sceneGeometry().objectById(objectA) != nullptr, 5000);
+    QCOMPARE(controller.sceneGeometry().pageId, pageA);
+    const quint64 sceneRevisionA = controller.sceneGeometry().spatialRevision;
+
+    test::AsyncEvaluationGate gate;
+    QVERIFY2(gate.waitUntilHolding(), "Could not hold evaluation B behind the deterministic gate");
+    controller.addPage();
+    const QString pageB = controller.document().currentPageId;
+    QVERIFY(pageB != pageA);
+    QCOMPARE(controller.sceneGeometry().pageId, pageA);
+    QCOMPARE(controller.sceneGeometry().spatialRevision, sceneRevisionA);
+    QVERIFY(controller.spatialRevision() > sceneRevisionA);
+
+    // This is deliberately before releasing B. A stale visual object must not
+    // be accepted as model authority merely because it is still painted.
+    controller.selectObject(objectA);
+    QVERIFY(controller.selectionModel()->selectedObjectIds().isEmpty());
+    QVERIFY(controller.selectionModel()->activeObjectId().isEmpty());
+    QVERIFY(controller.document().activeObjectId.isEmpty());
+    QVERIFY(controller.document().activeLayerId == controller.document().currentPage()->layers.front()->id);
+
+    gate.release();
+    QTRY_COMPARE_WITH_TIMEOUT(controller.sceneGeometry().pageId, pageB, 8000);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.sceneGeometry().spatialRevision,
+                              controller.spatialRevision(), 8000);
+    QVERIFY(controller.selectionModel()->selectedObjectIds().isEmpty());
+    QVERIFY(controller.document().activeObjectId.isEmpty());
+}
+
+void WorkflowIntegrationTests::controllerRejectsTextThatCannotBePersisted()
+{
+    EditorController controller;
+    const QString id = controller.createTextObject(QPointF(10.0, 10.0), QStringLiteral("within limit"));
+    const QString original = controller.document().objectById(id)->sourceText;
+    const int undoCount = controller.undoStack()->count();
+    const int oneOverLimit = ProjectSerializer::resourceLimits().maximumSourceUtf16PerObject + 1;
+
+    controller.setText(QString(oneOverLimit, QLatin1Char('x')));
+    QCOMPARE(controller.document().objectById(id)->sourceText, original);
+    QCOMPARE(controller.undoStack()->count(), undoCount);
+    QString error;
+    Document restored;
+    QVERIFY2(ProjectSerializer::fromJson(ProjectSerializer::toJson(controller.document()),
+                                          &restored, &error), qPrintable(error));
 }
 
 void WorkflowIntegrationTests::seededValidWorkflows_data()

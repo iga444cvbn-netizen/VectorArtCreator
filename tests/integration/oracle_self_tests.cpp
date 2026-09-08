@@ -18,6 +18,7 @@
 #include <QSet>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTransform>
 
 #include <limits>
 #include <memory>
@@ -238,11 +239,15 @@ class OracleSelfTests final : public QObject {
 
 private slots:
     void geometrySignatureRejectsMeaningfulDifferences();
+    void qTransformProductOrderIsNotSequentialEditorToViewOrder();
     void sceneSignatureIncludesFrameAndPivot();
     void semanticCopyContractCoversPersistentInventory();
     void semanticFingerprintExcludesOnlyDeclaredTransientState();
     void invariantCheckerRejectsSyntheticCorruption();
+    void invariantCheckerRequiresCompleteVisibleSceneAndCoherentSelection();
     void currentSchemaLoaderRejectsIdentityCorruption();
+    void currentSchemaLoaderRejectsMalformedMaskPointsTransactionally();
+    void currentSchemaLoaderRejectsInvalidNumericDomainsTransactionally();
     void historicalIdentityMigrationIsDeterministic();
     void serializedResourceBudgetsHaveExactBoundaries();
     void frameRoundTripIsStableForStaticSnapshots();
@@ -273,6 +278,12 @@ void OracleSelfTests::geometrySignatureRejectsMeaningfulDifferences()
     std::swap(reordered.pieces[0], reordered.pieces[1]);
     QVERIFY(!test::compareGeometry(expected, test::geometrySignature(reordered), &difference));
     QVERIFY2(difference.contains(QStringLiteral("piece[0]")), qPrintable(difference));
+
+    VectorGeometry windingChanged = source;
+    windingChanged.pieces[0].path.setFillRule(Qt::WindingFill);
+    QVERIFY(!test::compareGeometry(expected, test::geometrySignature(windingChanged), &difference));
+    QVERIFY2(difference.contains(QStringLiteral("piece[0].fillRule")), qPrintable(difference));
+    QVERIFY(test::geometryDigest(expected) != test::geometryDigest(test::geometrySignature(windingChanged)));
 }
 
 void OracleSelfTests::sceneSignatureIncludesFrameAndPivot()
@@ -332,6 +343,34 @@ void OracleSelfTests::semanticFingerprintExcludesOnlyDeclaredTransientState()
     Document persistentChanged(original);
     persistentChanged.pages.front()->layers.front()->objects.front()->effectStackStrength = 0.25;
     QVERIFY(test::semanticFingerprint(original) != test::semanticFingerprint(persistentChanged));
+
+    persistentChanged = original;
+    persistentChanged.pages.front()->layers.front()->objects.front()->futureData.insert(
+        QStringLiteral("fingerprint-only-guard"), QStringLiteral("must remain visible"));
+    QVERIFY(test::semanticFingerprint(original) != test::semanticFingerprint(persistentChanged));
+}
+
+void OracleSelfTests::qTransformProductOrderIsNotSequentialEditorToViewOrder()
+{
+    QTransform localOffset;
+    localOffset.translate(10.0, 0.0);
+    QTransform objectLocalToPage;
+    objectLocalToPage.translate(100.0, 0.0);
+    QTransform documentToView;
+    documentToView.scale(2.0, 2.0);
+    const QPointF localPoint(0.0, 0.0);
+
+    const QPointF expected = documentToView.map(
+        objectLocalToPage.map(localOffset.map(localPoint)));
+    QCOMPARE(expected, QPointF(220.0, 0.0));
+
+    // QTransform operates on row vectors: A * B maps by A and then B.
+    // This deliberately mirrors the production product only to establish Qt's
+    // multiplication semantics; the expected value above is sequential maps.
+    const QPointF productionOrder =
+        (documentToView * objectLocalToPage * localOffset).map(localPoint);
+    QCOMPARE(productionOrder, QPointF(110.0, 0.0));
+    QVERIFY(productionOrder != expected);
 }
 
 void OracleSelfTests::invariantCheckerRejectsSyntheticCorruption()
@@ -378,6 +417,36 @@ void OracleSelfTests::invariantCheckerRejectsSyntheticCorruption()
     QVERIFY(!capabilityReport.ok());
     QVERIFY2(capabilityReport.summary().contains(QStringLiteral("unsupported effect mask")),
              qPrintable(capabilityReport.summary()));
+}
+
+void OracleSelfTests::invariantCheckerRequiresCompleteVisibleSceneAndCoherentSelection()
+{
+    Document document = semanticDocumentFixture();
+    Layer* layer = document.currentPage()->layers.front().get();
+    TextObject* object = layer->objects.front().get();
+    layer->visible = true;
+    layer->locked = false;
+    object->visible = true;
+
+    const SceneGeometry complete = SceneEvaluator::evaluate(*document.currentPage(), 0);
+    QVERIFY(complete.evaluationStatus == EvaluationStatus::Complete);
+    const QStringList selection{object->id};
+    QVERIFY2(test::checkInvariants(document, &complete, selection, object->id).ok(),
+             qPrintable(test::checkInvariants(document, &complete, selection, object->id).summary()));
+
+    SceneGeometry incomplete = complete;
+    incomplete.objects.clear();
+    incomplete.recomputeBounds();
+    const auto incompleteReport = test::checkInvariants(document, &incomplete, selection, object->id);
+    QVERIFY(!incompleteReport.ok());
+    QVERIFY2(incompleteReport.summary().contains(
+                 QStringLiteral("visible document object missing from complete scene")),
+             qPrintable(incompleteReport.summary()));
+
+    const auto selectionReport = test::checkInvariants(document, &complete, {}, object->id);
+    QVERIFY(!selectionReport.ok());
+    QVERIFY2(selectionReport.summary().contains(QStringLiteral("active object is not in the selected set")),
+             qPrintable(selectionReport.summary()));
 }
 
 void OracleSelfTests::currentSchemaLoaderRejectsIdentityCorruption()
@@ -563,6 +632,92 @@ void OracleSelfTests::currentSchemaLoaderRejectsIdentityCorruption()
     QFile unchanged(savePath);
     QVERIFY(unchanged.open(QIODevice::ReadOnly));
     QCOMPARE(unchanged.readAll(), sentinel);
+}
+
+void OracleSelfTests::currentSchemaLoaderRejectsMalformedMaskPointsTransactionally()
+{
+    const QJsonObject valid = ProjectSerializer::toJson(semanticDocumentFixture()).object();
+    auto withMaskStroke = [&valid](const QJsonValue& malformedStroke) {
+        QJsonObject root = valid;
+        QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+        QJsonObject page = pages.at(0).toObject();
+        QJsonArray layers = page.value(QStringLiteral("layers")).toArray();
+        QJsonObject layer = layers.at(0).toObject();
+        QJsonArray objects = layer.value(QStringLiteral("objects")).toArray();
+        QJsonObject object = objects.at(0).toObject();
+        QJsonArray effects = object.value(QStringLiteral("effects")).toArray();
+        QJsonObject effect = effects.at(0).toObject();
+        effect.insert(QStringLiteral("mask"), QJsonArray{malformedStroke});
+        effects.replace(0, effect);
+        object.insert(QStringLiteral("effects"), effects);
+        objects.replace(0, object);
+        layer.insert(QStringLiteral("objects"), objects);
+        layers.replace(0, layer);
+        page.insert(QStringLiteral("layers"), layers);
+        pages.replace(0, page);
+        root.insert(QStringLiteral("pages"), pages);
+        return root;
+    };
+
+    const QVector<QPair<QString, QJsonValue>> malformed = {
+        {QStringLiteral("null point"), QJsonObject{{QStringLiteral("points"), QJsonArray{QJsonValue::Null}}}},
+        {QStringLiteral("string point"), QJsonObject{{QStringLiteral("points"), QJsonArray{QStringLiteral("point")}}}},
+        {QStringLiteral("missing y"), QJsonObject{{QStringLiteral("points"), QJsonArray{QJsonObject{{QStringLiteral("x"), 1}}}}}},
+        {QStringLiteral("wrong point types"), QJsonObject{{QStringLiteral("points"), QJsonArray{QJsonObject{{QStringLiteral("x"), QStringLiteral("x")}, {QStringLiteral("y"), true}}}}}},
+        {QStringLiteral("non-object stroke"), QJsonValue::Null},
+    };
+    for (const auto& [label, malformedStroke] : malformed) {
+        Document destination = semanticDocumentFixture();
+        const QString before = test::semanticFingerprint(destination);
+        QString error;
+        const bool accepted = ProjectSerializer::fromJson(
+            QJsonDocument(withMaskStroke(malformedStroke)), &destination, &error);
+        QVERIFY2(!accepted, qPrintable(QStringLiteral("loader accepted %1").arg(label)));
+        QCOMPARE(test::semanticFingerprint(destination), before);
+    }
+}
+
+void OracleSelfTests::currentSchemaLoaderRejectsInvalidNumericDomainsTransactionally()
+{
+    const QJsonObject valid = ProjectSerializer::toJson(semanticDocumentFixture()).object();
+    const QVector<QPair<QString, qreal>> invalid = {
+        {QStringLiteral("page width zero"), 0.0},
+        {QStringLiteral("page width negative"), -1.0},
+        {QStringLiteral("page height zero"), 0.0},
+        {QStringLiteral("page height negative"), -1.0},
+        {QStringLiteral("font size zero"), 0.0},
+        {QStringLiteral("font size negative"), -1.0},
+    };
+    for (const auto& [label, value] : invalid) {
+        QJsonObject root = valid;
+        QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+        QJsonObject page = pages.at(0).toObject();
+        if (label.startsWith(QStringLiteral("page width"))) {
+            page.insert(QStringLiteral("width"), value);
+        } else if (label.startsWith(QStringLiteral("page height"))) {
+            page.insert(QStringLiteral("height"), value);
+        } else {
+            QJsonArray layers = page.value(QStringLiteral("layers")).toArray();
+            QJsonObject layer = layers.at(0).toObject();
+            QJsonArray objects = layer.value(QStringLiteral("objects")).toArray();
+            QJsonObject object = objects.at(0).toObject();
+            QJsonObject typography = object.value(QStringLiteral("typography")).toObject();
+            typography.insert(QStringLiteral("fontSize"), value);
+            object.insert(QStringLiteral("typography"), typography);
+            objects.replace(0, object);
+            layer.insert(QStringLiteral("objects"), objects);
+            layers.replace(0, layer);
+            page.insert(QStringLiteral("layers"), layers);
+        }
+        pages.replace(0, page);
+        root.insert(QStringLiteral("pages"), pages);
+        Document destination = semanticDocumentFixture();
+        const QString before = test::semanticFingerprint(destination);
+        QString error;
+        const bool accepted = ProjectSerializer::fromJson(QJsonDocument(root), &destination, &error);
+        QVERIFY2(!accepted, qPrintable(QStringLiteral("loader accepted %1").arg(label)));
+        QCOMPARE(test::semanticFingerprint(destination), before);
+    }
 }
 
 void OracleSelfTests::historicalIdentityMigrationIsDeterministic()
